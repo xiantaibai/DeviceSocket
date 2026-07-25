@@ -1,0 +1,157 @@
+{
+  "version": 1,
+  "name": "Q/GDW 376.1-2012",
+  "protocol": "QGdw3761",
+  "defaultPort": 5001,
+  "groups": [
+    {
+      "name": "链路接口检测",
+      "commands": [
+        {
+          "id": "qgdw3761.login",
+          "name": "登录",
+          "description": "生成 AFN=02H、F1 的终端登录上行报文。",
+          "mode": "codec",
+          "encoder": "qgdw3761.link",
+          "fixedValues": {
+            "linkKind": "Login"
+          },
+          "inputs": [
+            {
+              "key": "administrativeDivision",
+              "label": "行政区划码",
+              "type": "text",
+              "default": "0000",
+              "description": "4 位 BCD，例如 0000。"
+            },
+            {
+              "key": "terminalAddress",
+              "label": "终端地址",
+              "type": "number",
+              "default": "0",
+              "description": "十进制 0-65535。"
+            },
+            {
+              "key": "sequence",
+              "label": "帧序号",
+              "type": "number",
+              "default": "1",
+              "description": "低 4 位序号，范围 0-15。"
+            }
+          ],
+          "response": {
+            "decoder": "qgdw3761",
+            "timeoutMs": 5000
+          }
+        },
+        {
+          "id": "qgdw3761.heartbeat",
+          "name": "心跳",
+          "description": "生成 AFN=02H、F3 的心跳上行报文；时间留空时使用本机当前时间。",
+          "mode": "codec",
+          "encoder": "qgdw3761.link",
+          "fixedValues": {
+            "linkKind": "Heartbeat"
+          },
+          "inputs": [
+            {
+              "key": "administrativeDivision",
+              "label": "行政区划码",
+              "type": "text",
+              "default": "0000",
+              "description": "4 位 BCD，例如 0000。"
+            },
+            {
+              "key": "terminalAddress",
+              "label": "终端地址",
+              "type": "number",
+              "default": "0",
+              "description": "十进制 0-65535。"
+            },
+            {
+              "key": "sequence",
+              "label": "帧序号",
+              "type": "number",
+              "default": "2",
+              "description": "低 4 位序号，范围 0-15。"
+            },
+            {
+              "key": "heartbeatTime",
+              "label": "心跳时间",
+              "type": "datetime",
+              "default": "",
+              "required": false,
+              "description": "yyyy-MM-dd HH:mm:ss；留空使用当前时间。"
+            }
+          ],
+          "response": {
+            "decoder": "qgdw3761",
+            "timeoutMs": 5000
+          }
+        },
+        {
+          "id": "qgdw3761.logout",
+          "name": "退出登录",
+          "description": "生成 AFN=02H、F2 的退出登录上行报文。",
+          "mode": "codec",
+          "encoder": "qgdw3761.link",
+          "fixedValues": {
+            "linkKind": "Logout"
+          },
+          "inputs": [
+            {
+              "key": "administrativeDivision",
+              "label": "行政区划码",
+              "type": "text",
+              "default": "0000",
+              "description": "4 位 BCD，例如 0000。"
+            },
+            {
+              "key": "terminalAddress",
+              "label": "终端地址",
+              "type": "number",
+              "default": "0",
+              "description": "十进制 0-65535。"
+            },
+            {
+              "key": "sequence",
+              "label": "帧序号",
+              "type": "number",
+              "default": "3",
+              "description": "低 4 位序号，范围 0-15。"
+            }
+          ],
+          "response": {
+            "decoder": "qgdw3761",
+            "timeoutMs": 5000
+          }
+        }
+      ]
+    },
+    {
+      "name": "原始报文",
+      "commands": [
+        {
+          "id": "qgdw3761.raw",
+          "name": "发送自定义 HEX",
+          "description": "不重新计算长度和校验和，直接发送输入的原始报文，用于复现现场数据。",
+          "mode": "raw",
+          "rawHex": "{{hex}}",
+          "inputs": [
+            {
+              "key": "hex",
+              "label": "原始 HEX",
+              "type": "hex",
+              "default": "68 32 00 32 00 68 C9 00 00 00 00 00 02 61 00 00 01 00 2D 16",
+              "description": "允许空格、短横线或冒号分隔。"
+            }
+          ],
+          "response": {
+            "decoder": "qgdw3761",
+            "timeoutMs": 5000
+          }
+        }
+      ]
+    }
+  ]
+}

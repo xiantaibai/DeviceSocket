@@ -19,6 +19,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DeviceSocket.Tests", "tests
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DeviceSocket.Infrastructure.Memory", "src\DeviceSocket.Infrastructure.Memory\DeviceSocket.Infrastructure.Memory.csproj", "{91FC04CD-B37D-417C-88B5-FCBD8FFEFC15}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DeviceSocket.Debugger.Core", "tools\DeviceSocket.Debugger.Core\DeviceSocket.Debugger.Core.csproj", "{8CA6B0DB-EEF6-40F6-BFD9-3DFA79677EF9}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DeviceSocket.Debugger", "tools\DeviceSocket.Debugger\DeviceSocket.Debugger.csproj", "{65E37C10-ADEF-4D28-BF50-1922A3678E08}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -48,6 +52,14 @@ Global
 		{91FC04CD-B37D-417C-88B5-FCBD8FFEFC15}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{91FC04CD-B37D-417C-88B5-FCBD8FFEFC15}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{91FC04CD-B37D-417C-88B5-FCBD8FFEFC15}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8CA6B0DB-EEF6-40F6-BFD9-3DFA79677EF9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8CA6B0DB-EEF6-40F6-BFD9-3DFA79677EF9}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8CA6B0DB-EEF6-40F6-BFD9-3DFA79677EF9}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8CA6B0DB-EEF6-40F6-BFD9-3DFA79677EF9}.Release|Any CPU.Build.0 = Release|Any CPU
+		{65E37C10-ADEF-4D28-BF50-1922A3678E08}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{65E37C10-ADEF-4D28-BF50-1922A3678E08}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{65E37C10-ADEF-4D28-BF50-1922A3678E08}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{65E37C10-ADEF-4D28-BF50-1922A3678E08}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{0BFF56CC-776F-4A88-9D90-E6F372E39042} = {0E1FC279-A7D5-45B3-9CB7-9CD8BCA61494}
@@ -55,5 +67,7 @@ Global
 		{4C3A7D45-50C7-4C66-906F-753766EA5F44} = {03DBDD49-68BE-4CE2-939B-16CA631B611E}
 		{87B6A474-FC00-4648-B390-037B25BF4832} = {B3D01656-47B2-4C4F-B769-1DC8595D8A85}
 		{91FC04CD-B37D-417C-88B5-FCBD8FFEFC15} = {0E1FC279-A7D5-45B3-9CB7-9CD8BCA61494}
+		{8CA6B0DB-EEF6-40F6-BFD9-3DFA79677EF9} = {03DBDD49-68BE-4CE2-939B-16CA631B611E}
+		{65E37C10-ADEF-4D28-BF50-1922A3678E08} = {03DBDD49-68BE-4CE2-939B-16CA631B611E}
 	EndGlobalSection
 EndGlobal

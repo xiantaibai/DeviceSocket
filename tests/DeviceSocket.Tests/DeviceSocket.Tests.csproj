@@ -23,6 +23,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\DeviceSocket.Core\DeviceSocket.Core.csproj" />
     <ProjectReference Include="..\..\src\DeviceSocket.Infrastructure.Memory\DeviceSocket.Infrastructure.Memory.csproj" />
+    <ProjectReference Include="..\..\tools\DeviceSocket.Debugger.Core\DeviceSocket.Debugger.Core.csproj" />
   </ItemGroup>
 
 </Project>

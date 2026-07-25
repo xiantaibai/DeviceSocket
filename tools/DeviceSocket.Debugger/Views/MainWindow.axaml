@@ -1,0 +1,294 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:DeviceSocket.Debugger.ViewModels"
+        x:Class="DeviceSocket.Debugger.Views.MainWindow"
+        x:DataType="vm:MainViewModel"
+        Width="1320"
+        Height="820"
+        MinWidth="1000"
+        MinHeight="650"
+        WindowStartupLocation="CenterScreen"
+        Icon="/Assets/avalonia-logo.ico"
+        Title="DeviceSocket 协议调试工具">
+
+  <Window.Styles>
+    <Style Selector="Window">
+      <Setter Property="Background" Value="#F4F7FB" />
+      <Setter Property="FontFamily" Value="Inter, Microsoft YaHei UI" />
+    </Style>
+    <Style Selector="Border.card">
+      <Setter Property="Background" Value="White" />
+      <Setter Property="BorderBrush" Value="#DDE4EE" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="8" />
+    </Style>
+    <Style Selector="Button">
+      <Setter Property="Padding" Value="14,7" />
+      <Setter Property="CornerRadius" Value="5" />
+    </Style>
+    <Style Selector="Button.primary">
+      <Setter Property="Background" Value="#1769E0" />
+      <Setter Property="Foreground" Value="White" />
+    </Style>
+    <Style Selector="Button.success">
+      <Setter Property="Background" Value="#138A5B" />
+      <Setter Property="Foreground" Value="White" />
+    </Style>
+    <Style Selector="TextBox">
+      <Setter Property="CornerRadius" Value="5" />
+    </Style>
+    <Style Selector="ComboBox">
+      <Setter Property="CornerRadius" Value="5" />
+    </Style>
+  </Window.Styles>
+
+  <Grid RowDefinitions="Auto,*,Auto">
+    <Border Grid.Row="0"
+            Background="#102A43"
+            Padding="18,14">
+      <Grid ColumnDefinitions="Auto,150,Auto,170,Auto,90,Auto,Auto,*,Auto"
+            ColumnSpacing="10">
+        <TextBlock Grid.Column="0"
+                   VerticalAlignment="Center"
+                   Foreground="#CFDCEB"
+                   Text="协议" />
+        <ComboBox Grid.Column="1"
+                  ItemsSource="{Binding ProtocolOptions}"
+                  SelectedItem="{Binding SelectedProtocolName}" />
+        <TextBlock Grid.Column="2"
+                   VerticalAlignment="Center"
+                   Foreground="#CFDCEB"
+                   Text="服务器" />
+        <TextBox Grid.Column="3"
+                 Text="{Binding Host}"
+                 Watermark="127.0.0.1" />
+        <TextBlock Grid.Column="4"
+                   VerticalAlignment="Center"
+                   Foreground="#CFDCEB"
+                   Text="端口" />
+        <TextBox Grid.Column="5"
+                 Text="{Binding Port}"
+                 Watermark="5001" />
+        <Button Grid.Column="6"
+                Classes="success"
+                Command="{Binding ConnectCommand}"
+                Content="连接" />
+        <Button Grid.Column="7"
+                Command="{Binding DisconnectCommand}"
+                Content="断开" />
+        <StackPanel Grid.Column="9"
+                    VerticalAlignment="Center"
+                    Orientation="Horizontal"
+                    Spacing="8">
+          <Ellipse Width="9" Height="9" Fill="#48C78E" />
+          <TextBlock Foreground="White"
+                     FontWeight="SemiBold"
+                     Text="{Binding ConnectionStatus}" />
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <Grid Grid.Row="1"
+          Margin="14"
+          ColumnDefinitions="3*,8,1.25*">
+      <Border Grid.Column="0"
+              Classes="card"
+              Padding="16">
+        <Grid RowDefinitions="Auto,Auto,Auto,*"
+              RowSpacing="12">
+          <StackPanel Grid.Row="0" Spacing="4">
+            <TextBlock FontSize="20"
+                       FontWeight="Bold"
+                       Foreground="#102A43"
+                       Text="{Binding SelectedCommandTitle}" />
+            <TextBlock Foreground="#627D98"
+                       TextWrapping="Wrap"
+                       Text="{Binding SelectedCommandDescription}" />
+          </StackPanel>
+
+          <Border Grid.Row="1"
+                  Background="#F8FAFD"
+                  BorderBrush="#E5EAF1"
+                  BorderThickness="1"
+                  CornerRadius="6"
+                  Padding="12">
+            <ScrollViewer MaxHeight="215"
+                          VerticalScrollBarVisibility="Auto">
+              <ItemsControl ItemsSource="{Binding Inputs}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:CommandInputViewModel">
+                    <Grid Margin="0,4"
+                          ColumnDefinitions="150,*"
+                          ColumnSpacing="10">
+                      <StackPanel Grid.Column="0"
+                                  VerticalAlignment="Center"
+                                  Spacing="2">
+                        <TextBlock FontWeight="SemiBold"
+                                   Text="{Binding Label}" />
+                        <TextBlock FontSize="11"
+                                   Foreground="#829AB1"
+                                   TextWrapping="Wrap"
+                                   Text="{Binding Description}" />
+                      </StackPanel>
+                      <TextBox Grid.Column="1"
+                               IsVisible="{Binding IsTextInput}"
+                               Text="{Binding Value, Mode=TwoWay}" />
+                      <ComboBox Grid.Column="1"
+                                IsVisible="{Binding IsSelect}"
+                                ItemsSource="{Binding Options}"
+                                SelectedItem="{Binding Value, Mode=TwoWay}" />
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </ScrollViewer>
+          </Border>
+
+          <Grid Grid.Row="2"
+                ColumnDefinitions="Auto,Auto,Auto,*"
+                ColumnSpacing="8">
+            <Button Grid.Column="0"
+                    Command="{Binding GenerateCommand}"
+                    Content="生成报文" />
+            <Button Grid.Column="1"
+                    Classes="primary"
+                    Command="{Binding SendCommand}"
+                    Content="发送指令" />
+            <TextBlock Grid.Column="3"
+                       HorizontalAlignment="Right"
+                       VerticalAlignment="Center"
+                       Foreground="#829AB1"
+                       Text="发送成功后自动切换到接收页" />
+          </Grid>
+
+          <TabControl Grid.Row="3"
+                      SelectedIndex="{Binding SelectedTabIndex}">
+            <TabItem Header="发送数据">
+              <Grid Margin="0,10,0,0"
+                    RowDefinitions="Auto,Auto,*"
+                    RowSpacing="8">
+                <Grid Grid.Row="0" ColumnDefinitions="Auto,*">
+                  <TextBlock VerticalAlignment="Center"
+                             FontWeight="SemiBold"
+                             Text="生成的原始报文" />
+                  <Button Grid.Column="1"
+                          HorizontalAlignment="Right"
+                          Command="{Binding ClearSendCommand}"
+                          Content="清空数据" />
+                </Grid>
+                <TextBox Grid.Row="1"
+                         MinHeight="62"
+                         AcceptsReturn="True"
+                         FontFamily="Cascadia Mono, Consolas"
+                         TextWrapping="Wrap"
+                         Text="{Binding GeneratedHex}" />
+                <TextBox Grid.Row="2"
+                         AcceptsReturn="True"
+                         IsReadOnly="True"
+                         FontFamily="Cascadia Mono, Consolas"
+                         FontSize="13"
+                         TextWrapping="Wrap"
+                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                         ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                         Text="{Binding SentText}" />
+              </Grid>
+            </TabItem>
+
+            <TabItem Header="接收数据">
+              <Grid Margin="0,10,0,0"
+                    RowDefinitions="Auto,*"
+                    RowSpacing="8">
+                <Button Grid.Row="0"
+                        HorizontalAlignment="Right"
+                        Command="{Binding ClearReceiveCommand}"
+                        Content="清空数据" />
+                <TextBox Grid.Row="1"
+                         AcceptsReturn="True"
+                         IsReadOnly="True"
+                         FontFamily="Cascadia Mono, Consolas"
+                         FontSize="13"
+                         TextWrapping="Wrap"
+                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                         ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                         Text="{Binding ReceivedText}" />
+              </Grid>
+            </TabItem>
+          </TabControl>
+        </Grid>
+      </Border>
+
+      <GridSplitter Grid.Column="1"
+                    Width="8"
+                    Background="Transparent"
+                    ResizeDirection="Columns" />
+
+      <Border Grid.Column="2"
+              Classes="card">
+        <Grid RowDefinitions="Auto,*,Auto">
+          <Border Grid.Row="0"
+                  Background="#EAF2FC"
+                  CornerRadius="8,8,0,0"
+                  Padding="12">
+            <Grid ColumnDefinitions="*,Auto,Auto"
+                  ColumnSpacing="8">
+              <StackPanel>
+                <TextBlock FontSize="16"
+                           FontWeight="Bold"
+                           Foreground="#102A43"
+                           Text="协议指令管理器" />
+                <TextBlock FontSize="11"
+                           Foreground="#627D98"
+                           Text="{Binding CommandSetStatus}"
+                           TextWrapping="Wrap" />
+              </StackPanel>
+              <Button Grid.Column="1"
+                      Command="{Binding OpenCommandSetCommand}"
+                      Content="打开 JSON" />
+              <Button Grid.Column="2"
+                      Command="{Binding ReloadCommandSetsCommand}"
+                      Content="重新加载" />
+            </Grid>
+          </Border>
+
+          <TreeView Grid.Row="1"
+                    Margin="8"
+                    ItemsSource="{Binding CommandTree}"
+                    SelectedItem="{Binding SelectedNode, Mode=TwoWay}">
+            <TreeView.ItemTemplate>
+              <TreeDataTemplate x:DataType="vm:CommandTreeNodeViewModel"
+                                ItemsSource="{Binding Children}">
+                <TextBlock Padding="4,3"
+                           Text="{Binding Name}" />
+              </TreeDataTemplate>
+            </TreeView.ItemTemplate>
+          </TreeView>
+
+          <Border Grid.Row="2"
+                  Background="#F8FAFD"
+                  BorderBrush="#E5EAF1"
+                  BorderThickness="0,1,0,0"
+                  Padding="10">
+            <StackPanel Spacing="3">
+              <TextBlock FontSize="11"
+                         Foreground="#627D98"
+                         Text="报文日志目录" />
+              <TextBlock FontSize="11"
+                         Foreground="#334E68"
+                         TextWrapping="Wrap"
+                         Text="{Binding LogDirectory}" />
+            </StackPanel>
+          </Border>
+        </Grid>
+      </Border>
+    </Grid>
+
+    <Border Grid.Row="2"
+            Background="#EAF0F6"
+            BorderBrush="#D7E0EA"
+            BorderThickness="0,1,0,0"
+            Padding="14,7">
+      <TextBlock Foreground="#486581"
+                 Text="JSON 驱动 · 376.1 / 645 编解码 · 半包粘包处理 · 收发日志落盘" />
+    </Border>
+  </Grid>
+</Window>

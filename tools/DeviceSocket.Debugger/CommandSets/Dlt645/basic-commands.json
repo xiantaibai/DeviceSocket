@@ -1,0 +1,186 @@
+{
+  "version": 1,
+  "name": "DL/T 645-2007",
+  "protocol": "Dlt6452007",
+  "defaultPort": 5002,
+  "groups": [
+    {
+      "name": "基本命令",
+      "commands": [
+        {
+          "id": "dlt645.read-address",
+          "name": "读取通信地址",
+          "description": "生成控制码 13H 的读通信地址请求，默认使用 AAH 通配地址。",
+          "mode": "codec",
+          "encoder": "dlt645.frame",
+          "fixedValues": {
+            "control": "0x13",
+            "dataHex": "",
+            "preambleLength": "4"
+          },
+          "inputs": [
+            {
+              "key": "address",
+              "label": "通信地址",
+              "type": "text",
+              "default": "AAAAAAAAAAAA",
+              "description": "12 位 BCD，读取地址时可使用 AAAAAAAAAAAA。"
+            }
+          ],
+          "response": {
+            "decoder": "dlt645",
+            "timeoutMs": 5000
+          }
+        },
+        {
+          "id": "dlt645.read-data",
+          "name": "读取数据",
+          "description": "生成控制码 11H 的读数据请求；数据标识按线路发送顺序填写。",
+          "mode": "layout",
+          "layout": {
+            "fields": [
+              {
+                "name": "preamble",
+                "source": "fixed",
+                "value": "FE FE FE FE"
+              },
+              {
+                "name": "start",
+                "source": "fixed",
+                "value": "68"
+              },
+              {
+                "name": "address",
+                "source": "input",
+                "inputKey": "address",
+                "encoding": "bcdReverse"
+              },
+              {
+                "name": "secondStart",
+                "source": "fixed",
+                "value": "68"
+              },
+              {
+                "name": "control",
+                "source": "fixed",
+                "value": "11"
+              },
+              {
+                "name": "dataLength",
+                "source": "computed",
+                "algorithm": "byteLength",
+                "fromField": "data",
+                "size": 1
+              },
+              {
+                "name": "data",
+                "source": "input",
+                "inputKey": "dataHex",
+                "encoding": "hexAdd33"
+              },
+              {
+                "name": "checksum",
+                "source": "computed",
+                "algorithm": "sum8",
+                "fromField": "start",
+                "toField": "data",
+                "size": 1
+              },
+              {
+                "name": "end",
+                "source": "fixed",
+                "value": "16"
+              }
+            ]
+          },
+          "inputs": [
+            {
+              "key": "address",
+              "label": "通信地址",
+              "type": "text",
+              "default": "123456789012",
+              "description": "12 位 BCD 表地址。"
+            },
+            {
+              "key": "dataHex",
+              "label": "数据标识 DI",
+              "type": "hex",
+              "default": "00 00 01 00",
+              "description": "还原后的字节顺序；编码器会逐字节加 33H。"
+            }
+          ],
+          "response": {
+            "decoder": "dlt645",
+            "timeoutMs": 5000
+          }
+        }
+      ]
+    },
+    {
+      "name": "自定义命令",
+      "commands": [
+        {
+          "id": "dlt645.custom-frame",
+          "name": "自定义 645 帧",
+          "description": "按地址、控制码和还原数据域自动完成地址倒序、加 33H、长度和校验和计算。",
+          "mode": "codec",
+          "encoder": "dlt645.frame",
+          "inputs": [
+            {
+              "key": "address",
+              "label": "通信地址",
+              "type": "text",
+              "default": "123456789012",
+              "description": "12 位 BCD 表地址。"
+            },
+            {
+              "key": "control",
+              "label": "控制码",
+              "type": "text",
+              "default": "0x11",
+              "description": "支持 0x11、11H 等十六进制写法。"
+            },
+            {
+              "key": "dataHex",
+              "label": "还原数据域",
+              "type": "hex",
+              "default": "00 00 01 00",
+              "description": "编码前数据，工具会自动逐字节加 33H。"
+            },
+            {
+              "key": "preambleLength",
+              "label": "FE 前导数量",
+              "type": "number",
+              "default": "4",
+              "description": "范围 0-4。"
+            }
+          ],
+          "response": {
+            "decoder": "dlt645",
+            "timeoutMs": 5000
+          }
+        },
+        {
+          "id": "dlt645.raw",
+          "name": "发送自定义 HEX",
+          "description": "直接发送完整原始报文，不自动修改数据。",
+          "mode": "raw",
+          "rawHex": "{{hex}}",
+          "inputs": [
+            {
+              "key": "hex",
+              "label": "原始 HEX",
+              "type": "hex",
+              "default": "FE FE FE FE 68 12 90 78 56 34 12 68 11 04 33 33 34 33 68 16",
+              "description": "必须包含完整帧头、校验和和 16H。"
+            }
+          ],
+          "response": {
+            "decoder": "dlt645",
+            "timeoutMs": 5000
+          }
+        }
+      ]
+    }
+  ]
+}
