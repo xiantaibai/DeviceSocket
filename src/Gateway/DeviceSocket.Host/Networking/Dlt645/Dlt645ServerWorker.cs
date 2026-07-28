@@ -15,6 +15,7 @@ namespace DeviceSocket.Host.Networking.Dlt645;
 public sealed class Dlt645ServerWorker(
     ProtocolMessagePipeline<Dlt645Frame> pipeline,
     DeviceSessionLifecycleHandler sessionLifecycle,
+    DeviceConnectionLimiter connectionLimiter,
     IConfiguration configuration,
     Serilog.ILogger serilogLogger,
     ILogger<Dlt645ServerWorker> logger) : BackgroundService
@@ -30,6 +31,7 @@ public sealed class Dlt645ServerWorker(
         var backlog = configuration.GetValue<int?>("DeviceSocket:BackLog") ?? 8192;
 
         _server = SuperSocketHostBuilder.Create<Dlt645Frame, Dlt645PipelineFilter>()
+            .UseMiddleware<DeviceConnectionLimitMiddleware>()
             .UsePackageHandler(pipeline.HandleAsync)
             .UseSessionHandler(
                 session => sessionLifecycle.SessionOpenedAsync(session, DeviceProtocol.Dlt6452007),
@@ -49,7 +51,11 @@ public sealed class Dlt645ServerWorker(
                     }
                 ];
             })
-            .ConfigureServices(services => services.AddSingleton<IHostLifetime, NestedHostLifetime>())
+            .ConfigureServices(services =>
+            {
+                services.AddSingleton(connectionLimiter);
+                services.AddSingleton<IHostLifetime, NestedHostLifetime>();
+            })
             .ConfigureLogging(logging =>
             {
                 logging.ClearProviders();

@@ -12,7 +12,7 @@ public sealed class DeviceSessionLifecycleHandler(
     RuntimeMetrics metrics,
     ILogger<DeviceSessionLifecycleHandler> logger)
 {
-    /// <summary>记录 Session 建立并更新对应协议连接指标。</summary>
+    /// <summary>记录通过中间件容量检查的 Session，并更新对应协议连接指标。</summary>
     public ValueTask SessionOpenedAsync(IAppSession session, DeviceProtocol protocol)
     {
         metrics.ConnectionOpened(protocol);
@@ -24,7 +24,7 @@ public sealed class DeviceSessionLifecycleHandler(
         return ValueTask.CompletedTask;
     }
 
-    /// <summary>条件清理 Session 设备绑定，并更新对应协议连接指标。</summary>
+    /// <summary>清理 Session 设备绑定，并更新对应协议连接指标。</summary>
     public ValueTask SessionClosedAsync(IAppSession session, DeviceProtocol protocol, string? reason)
     {
         connectionCoordinator.Disconnect(session, DateTimeOffset.UtcNow);

@@ -15,6 +15,7 @@ namespace DeviceSocket.Host.Networking.QGdw3761;
 public sealed class QGdw3761ServerWorker(
     ProtocolMessagePipeline<QGdw3761Frame> pipeline,
     DeviceSessionLifecycleHandler sessionLifecycle,
+    DeviceConnectionLimiter connectionLimiter,
     IConfiguration configuration,
     Serilog.ILogger serilogLogger,
     ILogger<QGdw3761ServerWorker> logger) : BackgroundService
@@ -30,6 +31,7 @@ public sealed class QGdw3761ServerWorker(
         var backlog = configuration.GetValue<int?>("DeviceSocket:BackLog") ?? 8192;
 
         _server = SuperSocketHostBuilder.Create<QGdw3761Frame, QGdw3761PipelineFilter>()
+            .UseMiddleware<DeviceConnectionLimitMiddleware>()
             .UsePackageHandler(pipeline.HandleAsync)
             .UseSessionHandler(
                 session => sessionLifecycle.SessionOpenedAsync(session, DeviceProtocol.QGdw3761),
@@ -49,7 +51,11 @@ public sealed class QGdw3761ServerWorker(
                     }
                 ];
             })
-            .ConfigureServices(services => services.AddSingleton<IHostLifetime, NestedHostLifetime>())
+            .ConfigureServices(services =>
+            {
+                services.AddSingleton(connectionLimiter);
+                services.AddSingleton<IHostLifetime, NestedHostLifetime>();
+            })
             .ConfigureLogging(logging =>
             {
                 logging.ClearProviders();

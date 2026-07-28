@@ -124,6 +124,12 @@ Gateway 通过 Serilog 将日志分为两类：程序日志写入 `logs/app/app-
 
 日志级别、路径、滚动保留和异步缓冲配置集中在 `src/Gateway/DeviceSocket.Host/Configuration/Logging/serilog.json`。详细字段和异常策略参见 `docs/architecture/logging.md`。
 
+## 连接容量限制
+
+Gateway 对 376.1 和 DL/T 645 使用同一个进程级连接配额，默认最大连接数为 70,000。配置位置为 `DeviceSocket:ConnectionLimit:MaxConnections`；容量检查通过 SuperSocket `MiddlewareBase.RegisterSession` 执行，达到上限时返回 `false`，由 SuperSocket 2.1.0 立即以 `Rejected` 原因关闭，不会进入登录、协议解析和设备注册流程。
+
+当前连接数继续通过原有 `GET /api/status/connections` 查询。拒绝洪峰只记录前十次和每一千次告警，避免恶意或异常重连产生过量磁盘日志。
+
 ## 当前 Demo 边界
 
 - Orleans 使用本机单 Silo、内存 Grain Storage 和内存 Reminder，进程重启后状态会丢失，仅用于开发验证。

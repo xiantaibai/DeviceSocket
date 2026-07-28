@@ -3,6 +3,7 @@ using DeviceSocket.Core.Runtime.Messages;
 using DeviceSocket.Core.Runtime.Metrics;
 using DeviceSocket.Host.Api;
 using DeviceSocket.Host.Configuration.Logging;
+using DeviceSocket.Host.Networking.Common;
 using DeviceSocket.Host.Networking.Dlt645;
 using DeviceSocket.Host.Networking.Cluster;
 using DeviceSocket.Host.Networking.Processing;
@@ -31,6 +32,7 @@ builder.Services.AddSingleton<IOnlineDeviceRegistry, MemoryOnlineDeviceRegistry>
 builder.Services.AddSingleton<IRecentStore<ReceivedDeviceMessage>>(_ => new MemoryRecentStore<ReceivedDeviceMessage>(10_000));
 builder.Services.AddSingleton<IRecentStore<DeviceErrorEvent>>(_ => new MemoryRecentStore<DeviceErrorEvent>(1_000));
 builder.Services.AddSingleton<RuntimeMetrics>();
+builder.Services.AddSingleton<DeviceConnectionLimiter>();
 builder.Services.AddSingleton<IDeviceTrafficSink, SerilogDeviceTrafficSink>();
 builder.Services.AddDeviceProtocolProcessing();
 builder.Services.Configure<GatewayNodeOptions>(builder.Configuration.GetSection(GatewayNodeOptions.SectionName));
