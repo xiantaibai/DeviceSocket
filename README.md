@@ -137,3 +137,5 @@ Gateway 对 376.1 和 DL/T 645 使用同一个进程级连接配额，默认最�
 - 真实 Socket 只存在 Gateway 本机内存中，Orleans 只保存可序列化的路由元数据。
 - 上报业务异步分发、Kafka/Outbox 和各协议的响应匹配规则属于下一阶段；当前已建立 `MsgId`、SessionEpoch、节点租约、Gateway 幂等、可靠消息状态机和自动重试基础。
 - 6 万连接需要在独立 8 核 16 GB 环境分阶段压测，本地开发阶段以业务链路通畅和异常隔离为目标。
+
+生产化的分阶段改造内容、测试矩阵和上线门槛参见 `docs/architecture/production-readiness-plan.md`。
