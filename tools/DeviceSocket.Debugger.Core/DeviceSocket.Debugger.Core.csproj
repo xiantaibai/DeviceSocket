@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\DeviceSocket.Core\DeviceSocket.Core.csproj" />
+    <ProjectReference Include="..\..\src\Shared\DeviceSocket.Core\DeviceSocket.Core.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

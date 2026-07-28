@@ -1,0 +1,11 @@
+{
+  "solution": {
+    "path": "DeviceSocket.sln",
+    "projects": [
+      "src/Shared/DeviceSocket.Core/DeviceSocket.Core.csproj",
+      "tools/DeviceSocket.Debugger.Core/DeviceSocket.Debugger.Core.csproj",
+      "tools/DeviceSocket.Debugger/DeviceSocket.Debugger.csproj",
+      "tools/DeviceSocket.Simulator/DeviceSocket.Simulator.csproj"
+    ]
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "Serilog": {
+    "MinimumLevel": {
+      "Default": "Information",
+      "Override": {
+        "Microsoft.AspNetCore": "Warning",
+        "Microsoft.Hosting.Lifetime": "Information",
+        "Orleans": "Warning",
+        "SuperSocket": "Warning"
+      }
+    }
+  },
+  "DeviceLogging": {
+    "ApplicationPath": "logs/app/app-.jsonl",
+    "CommandPath": "logs/command/command-.jsonl",
+    "FileSizeLimitBytes": 268435456,
+    "RetainedFileCount": 31,
+    "RetainedDays": 30,
+    "ApplicationBufferSize": 10000,
+    "CommandBufferSize": 100000,
+    "FlushIntervalSeconds": 1,
+    "MonitorIntervalSeconds": 10
+  }
+}

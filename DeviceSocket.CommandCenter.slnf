@@ -1,0 +1,11 @@
+{
+  "solution": {
+    "path": "DeviceSocket.sln",
+    "projects": [
+      "src/Shared/DeviceSocket.Core/DeviceSocket.Core.csproj",
+      "src/Shared/DeviceSocket.Rpc.Contracts/DeviceSocket.Rpc.Contracts.csproj",
+      "src/Cluster/DeviceSocket.Cluster.Contracts/DeviceSocket.Cluster.Contracts.csproj",
+      "src/CommandCenter/DeviceSocket.CommandCenter.Host/DeviceSocket.CommandCenter.Host.csproj"
+    ]
+  }
+}

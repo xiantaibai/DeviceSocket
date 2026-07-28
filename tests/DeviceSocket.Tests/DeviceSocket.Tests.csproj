@@ -21,8 +21,10 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\DeviceSocket.Core\DeviceSocket.Core.csproj" />
-    <ProjectReference Include="..\..\src\DeviceSocket.Infrastructure.Memory\DeviceSocket.Infrastructure.Memory.csproj" />
+    <ProjectReference Include="..\..\src\Cluster\DeviceSocket.Cluster.Contracts\DeviceSocket.Cluster.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\Gateway\DeviceSocket.Host\DeviceSocket.Host.csproj" />
+    <ProjectReference Include="..\..\src\Shared\DeviceSocket.Core\DeviceSocket.Core.csproj" />
+    <ProjectReference Include="..\..\src\Infrastructure\DeviceSocket.Infrastructure.Memory\DeviceSocket.Infrastructure.Memory.csproj" />
     <ProjectReference Include="..\..\tools\DeviceSocket.Debugger.Core\DeviceSocket.Debugger.Core.csproj" />
   </ItemGroup>
 

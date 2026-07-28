@@ -1,162 +1,133 @@
 # DeviceSocket Demo
 
-基于 .NET 8 和 SuperSocket 2.1 的 Q/GDW 376.1-2012、DL/T 645-2007 协议验证服务。
+基于 .NET 8、SuperSocket、Orleans 和 MagicOnion 的设备通信验证项目，当前支持 Q/GDW 376.1-2012 与 DL/T 645-2007。
 
-协议实现依据当前目录中的：
+协议实现依据仓库根目录中的两份协议文档：
 
-- `376.1主站通信协议2013.pdf`（正文版本 Q/GDW 376.1-2012）
+- `376.1主站通信协议2013.pdf`
 - `DLT645_2007国网智能电能表通信协议0929 (1).pdf`
 
-## 功能
+## 当前能力
 
-- TCP 5001：376.1 登录、退出登录、心跳、普通消息解析以及链路确认。
-- TCP 5002：645 报文解析；第一条合法帧使用表地址完成在线绑定。
-- HTTP 5080：在线数量、设备列表、最近消息、最近错误、协议解码和指定设备下发。
-- Swagger UI：`http://127.0.0.1:5080/swagger`，可查看并在线调用全部 HTTP API。
-- 内存在线注册表和有界消息/错误存储，可通过接口替换 Redis 或数据库。
-- 错误长度、校验和、帧头和结束符不会中断服务。
+- TCP 5001：376.1 登录、退出登录、心跳、普通消息解析和链路确认。
+- TCP 5002：645 报文解析，首个合法地址帧完成在线绑定。
+- HTTP 5080：网关状态、在线设备、最近消息、最近错误、协议解码和本节点直接下发。
+- HTTP/2 7001：网关内部 MagicOnion Unary 下发服务。
+- Orleans：设备路由、SessionEpoch、网关节点租约，以及重要消息的持久化、重试、到期和确认状态。
+- 内存实现：当前 Demo 的在线表、近期消息和 Orleans 状态；后续可以替换 Redis 或数据库。
+- 每条合法上报与下发均记录 `Direction`、`MsgId`、设备、Session、协议和原始报文日志。
+- 协议指令通过统一泛型 Handler 接口和强类型指令键分发，新 Handler 由 Gateway 启动扫描自动注册。
 
 ## 项目结构
 
 ```text
 src/
-├─ DeviceSocket.Core/
-│  ├─ Protocols/Common/       协议公共帧模型、错误模型和 Hex 工具
-│  ├─ Protocols/QGdw3761/     376.1 帧模型及编解码器
-│  ├─ Protocols/Dlt645/       645 帧模型及编解码器
-│  └─ Runtime/                连接、消息存储和运行指标抽象
-├─ DeviceSocket.Host/
-│  ├─ Api/                    HTTP 端点与请求模型
-│  └─ Networking/             公共网络能力、业务处理器及协议 TCP 服务
-└─ DeviceSocket.Infrastructure.Memory/
-   ├─ Connections/            内存在线设备注册表
-   └─ Messages/               内存最近消息和错误存储
+├─ Shared/
+│  ├─ DeviceSocket.Core/                  协议编解码、连接及消息抽象
+│  └─ DeviceSocket.Rpc.Contracts/         MagicOnion 接口和 MessagePack DTO
+├─ Gateway/
+│  └─ DeviceSocket.Host/                  SuperSocket 网关、Swagger、MagicOnion 服务
+├─ Cluster/
+│  ├─ DeviceSocket.Cluster.Contracts/     Orleans Grain 接口和传输模型
+│  ├─ DeviceSocket.Cluster.Grains/        设备、可靠消息与网关 Grain 实现
+│  └─ DeviceSocket.Cluster.Silo/          独立 Orleans Silo 宿主
+└─ Infrastructure/
+   └─ DeviceSocket.Infrastructure.Memory/ 内存连接表和近期消息存储
+
+tools/
+├─ DeviceSocket.Debugger/                 Windows 协议调试 UI
+├─ DeviceSocket.Debugger.Core/            指令集、编解码和 TCP 调试能力
+└─ DeviceSocket.Simulator/                376.1 / 645 设备模拟器
 ```
 
-HTTP 路由集中在 `DeviceApiEndpoints`，`Program.cs` 只负责宿主启动和依赖注入。协议专属代码分别位于 `QGdw3761`、`Dlt645` 目录，新增协议时按相同结构扩展。
+仓库保留总解决方案 `DeviceSocket.sln`，并提供 Gateway、Cluster、Tools 三个 `.slnf`，便于只加载当前服务及其依赖。
 
-## 启动
+## 构建
 
 ```powershell
 dotnet restore DeviceSocket.sln
-dotnet build DeviceSocket.sln --no-restore
-dotnet run --project src\DeviceSocket.Host\DeviceSocket.Host.csproj --no-build
+dotnet build DeviceSocket.sln -c Release --no-restore
+dotnet test tests\DeviceSocket.Tests\DeviceSocket.Tests.csproj -c Release --no-build --no-restore
 ```
 
-默认监听：
+## 本机启动顺序
+
+分别打开两个终端，按以下顺序启动：
+
+```powershell
+dotnet run --project src\Cluster\DeviceSocket.Cluster.Silo\DeviceSocket.Cluster.Silo.csproj
+```
+
+```powershell
+dotnet run --project src\Gateway\DeviceSocket.Host\DeviceSocket.Host.csproj
+```
+
+访问地址：
 
 ```text
-376.1 TCP :5001
-645    TCP :5002
-HTTP        :5080
+网关 Swagger：http://127.0.0.1:5080/swagger
 ```
 
-可在 `src/DeviceSocket.Host/appsettings.json` 修改端口。
+如果只验证协议解析、不启动 Orleans，可以将网关 `appsettings.json` 中的 `Orleans:Enabled` 改为 `false`。
 
-## 模拟设备
+## 模拟设备登录
 
-另开终端模拟 376.1 设备：
+376.1：
 
 ```powershell
-dotnet run --project tools\DeviceSocket.Simulator\DeviceSocket.Simulator.csproj --no-build -- 3761 127.0.0.1 5001 3301 1
+dotnet run --project tools\DeviceSocket.Simulator\DeviceSocket.Simulator.csproj -- 3761 127.0.0.1 5001 3301 1
 ```
 
-设备 ID 为 `3761:3301-00001`。模拟器会发送登录和心跳，并验证服务端的 `AFN=00/F3` 确认。
+设备 ID 为 `3761:3301-00001`。
 
-模拟 645 设备：
+645：
 
 ```powershell
-dotnet run --project tools\DeviceSocket.Simulator\DeviceSocket.Simulator.csproj --no-build -- 645 127.0.0.1 5002 123456789012
+dotnet run --project tools\DeviceSocket.Simulator\DeviceSocket.Simulator.csproj -- 645 127.0.0.1 5002 123456789012
 ```
 
-设备 ID 为 `645:123456789012`。模拟器发送一条带 4 个 `FEH` 前导字节的读数据正常应答，然后等待服务端下发。
+设备 ID 为 `645:123456789012`。
 
-## 查询状态
+## 业务服务下发
 
-```powershell
-Invoke-RestMethod http://127.0.0.1:5080/api/status/connections
-Invoke-RestMethod http://127.0.0.1:5080/api/devices
-Invoke-RestMethod http://127.0.0.1:5080/api/messages/recent
-Invoke-RestMethod http://127.0.0.1:5080/api/errors/recent
+业务服务引用 `DeviceSocket.Cluster.Contracts` 和 `Microsoft.Orleans.Client`，连接 Orleans 后直接取得设备 Grain。统一使用两个以 `Send` 开头的入口：
+
+```csharp
+var deviceGrain = clusterClient.GetGrain<IDeviceGrain>("3761:3301-00001");
+
+var normalResult = await deviceGrain.SendBestEffortMessageAsync(
+    new BestEffortDeviceMessage
+    {
+        Protocol = "376.1",
+        Payload = Convert.FromHexString("684A004A00680001330100000061000004000200000100009D16"),
+        TraceId = traceId
+    });
+
+var importantResult = await deviceGrain.SendReliableMessageAsync(
+    new ReliableDeviceMessage
+    {
+        MsgId = msgId,
+        Protocol = "376.1",
+        Payload = Convert.FromHexString("684A004A00680001330100000061000004000200000100009D16"),
+        TraceId = traceId
+    });
 ```
 
-## Swagger UI
+- `SendBestEffortMessageAsync`：普通消息，不持久化、不自动重试，离线或失败时允许丢弃。
+- `SendReliableMessageAsync`：重要消息，先持久化，再下发；默认五分钟到期，并根据确定失败、结果不确定和协议确认状态安排重试。
 
-服务启动后访问：
+调用方重试重要消息时必须复用原 `MsgId`。同一 `MsgId` 如果更换设备、协议或报文会被拒绝。`Completed` 只表示已写入设备 Socket；只有要求并收到协议层确认时才会进入 `Confirmed`。
 
-```text
-http://127.0.0.1:5080/swagger
-```
+## 日志
 
-OpenAPI JSON 地址为：
+Gateway 通过 Serilog 将日志分为两类：程序日志写入 `logs/app/app-.jsonl`，设备上报和下发 Command 日志写入 `logs/command/command-.jsonl`。两者均按行保存结构化 JSON；Command 日志可通过 `Direction`、`MsgId`、`TraceId`、设备、协议和发送次数检索。
 
-```text
-http://127.0.0.1:5080/swagger/v1/swagger.json
-```
+日志级别、路径、滚动保留和异步缓冲配置集中在 `src/Gateway/DeviceSocket.Host/Configuration/Logging/serilog.json`。详细字段和异常策略参见 `docs/architecture/logging.md`。
 
-## 给指定设备下发
+## 当前 Demo 边界
 
-376.1 示例：
-
-```powershell
-$body = @{
-  protocol = '376.1'
-  hex = '684A004A00680001330100000061000004000200000100009D16'
-} | ConvertTo-Json
-
-Invoke-RestMethod `
-  -Method Post `
-  -Uri 'http://127.0.0.1:5080/api/devices/3761%3A3301-00001/messages' `
-  -ContentType 'application/json' `
-  -Body $body
-```
-
-645 读当前正向有功总电能示例：
-
-```powershell
-$body = @{
-  protocol = '645'
-  hex = '68129078563412681104333334336816'
-} | ConvertTo-Json
-
-Invoke-RestMethod `
-  -Method Post `
-  -Uri 'http://127.0.0.1:5080/api/devices/645%3A123456789012/messages' `
-  -ContentType 'application/json' `
-  -Body $body
-```
-
-下发接口只接受一个完整、校验正确且帧内地址与目标设备一致的报文。发送失败不会自动重试，避免控制命令重复执行。
-
-## 独立解码
-
-```powershell
-$body = @{
-  protocol = '645'
-  hex = '68129078563412681104333334336816'
-} | ConvertTo-Json
-
-Invoke-RestMethod `
-  -Method Post `
-  -Uri 'http://127.0.0.1:5080/api/tools/decode' `
-  -ContentType 'application/json' `
-  -Body $body
-```
-
-## 测试
-
-```powershell
-dotnet test tests\DeviceSocket.Tests\DeviceSocket.Tests.csproj --no-build --no-restore
-```
-
-目前测试覆盖协议长度、地址字节序、376.1 登录/心跳/确认、645 数据域 `±33H`、FEH 前导、半包、垃圾前导、校验和异常及重复登录 Session 清理。
-
-## 存储替换说明
-
-`IOnlineDeviceRegistry`、`IRecentStore<ReceivedDeviceMessage>` 和 `IRecentStore<DeviceErrorEvent>` 是存储边界。
-
-Redis 或数据库只能保存设备在线元数据和消息记录，不能保存 SuperSocket 的实际 Session。多节点部署时仍需保留节点本地 `SessionId -> IAppSession` 映射，并通过 Redis/MQ 把下发请求路由到持有连接的节点。
-
-## 6 万连接
-
-本 Demo 不在开发机执行 6 万连接压测。部署到独立 8 核 16 GB 环境后，再使用多个压测源 IP 或多台压测机完成 1 万、3 万、6.5 万阶梯验证。业务代码没有为每个连接创建独立线程、定时器或无界队列。
+- Orleans 使用本机单 Silo、内存 Grain Storage 和内存 Reminder，进程重启后状态会丢失，仅用于开发验证。
+- 生产部署需要把 Orleans 集群发现、`DeviceStore`、`GatewayStore`、`CommandStore` 和 Reminder 存储替换为 Redis、数据库或其他持久化实现。
+- 真实 Socket 只存在 Gateway 本机内存中，Orleans 只保存可序列化的路由元数据。
+- 上报业务异步分发、Kafka/Outbox 和各协议的响应匹配规则属于下一阶段；当前已建立 `MsgId`、SessionEpoch、节点租约、Gateway 幂等、可靠消息状态机和自动重试基础。
+- 6 万连接需要在独立 8 核 16 GB 环境分阶段压测，本地开发阶段以业务链路通畅和异常隔离为目标。

@@ -30,6 +30,59 @@ public sealed class MemoryOnlineDeviceRegistryTests
     }
 
     /// <summary>
+    /// 验证同一 Session 的重复合法报文只刷新活动时间，不会被识别为设备重连。
+    /// </summary>
+    [Fact]
+    public void SameSessionRegister_OnlyTouchesExistingConnection()
+    {
+        var registry = new MemoryOnlineDeviceRegistry();
+        var connectedAt = DateTimeOffset.UtcNow.AddMinutes(-1);
+        var seenAt = DateTimeOffset.UtcNow;
+        var connection = new FakeConnection("same-session");
+
+        var first = registry.Register("3761:1234-00001", connection, connectedAt);
+        var second = registry.Register("3761:1234-00001", connection, seenAt);
+
+        Assert.True(first.IsNewSession);
+        Assert.False(second.IsNewSession);
+        Assert.Equal(connectedAt, second.Current.ConnectedAt);
+        Assert.Equal(seenAt, second.Current.LastSeenAt);
+    }
+
+    /// <summary>
+    /// 验证 Orleans 返回的世代号只能写入仍然匹配的 Session，旧登录迟到不会污染新连接。
+    /// </summary>
+    [Fact]
+    public void SessionEpochUpdate_RequiresCurrentSession()
+    {
+        var registry = new MemoryOnlineDeviceRegistry();
+        registry.Register("3761:1234-00001", new FakeConnection("first"), DateTimeOffset.UtcNow);
+        registry.Register("3761:1234-00001", new FakeConnection("second"), DateTimeOffset.UtcNow);
+
+        Assert.False(registry.TryUpdateSessionEpoch("3761:1234-00001", "first", 1));
+        Assert.True(registry.TryUpdateSessionEpoch("3761:1234-00001", "second", 2));
+        Assert.True(registry.TryGetSnapshot("3761:1234-00001", out var snapshot));
+        Assert.Equal(2, snapshot!.SessionEpoch);
+    }
+
+    /// <summary>
+    /// 验证连接删除会返回被删除快照，供网关向 Orleans 发布精确断开事件。
+    /// </summary>
+    [Fact]
+    public void RemoveSession_ReturnsRemovedSnapshot()
+    {
+        var registry = new MemoryOnlineDeviceRegistry();
+        registry.Register("645:123456789012", new FakeConnection("session"), DateTimeOffset.UtcNow);
+
+        var removed = registry.RemoveSession("session", out var snapshot);
+
+        Assert.True(removed);
+        Assert.Equal("645:123456789012", snapshot!.DeviceId);
+        Assert.Equal("session", snapshot.SessionId);
+        Assert.Equal(0, registry.Count);
+    }
+
+    /// <summary>
     /// 为注册表测试提供不执行真实网络写入的设备连接。
     /// </summary>
     private sealed class FakeConnection(string sessionId) : IDeviceConnection

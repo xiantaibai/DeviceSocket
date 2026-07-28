@@ -3,6 +3,7 @@
 .vs/
 .idea/
 TestResults/
+**/logs/
 /artifacts/
 *.user
 *.suo

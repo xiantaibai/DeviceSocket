@@ -22,6 +22,16 @@
 4. 目录结构与命名空间必须保持一致；移动文件时同步更新命名空间、依赖注入、测试和说明文档。
 5. HTTP API 统一通过 `DeviceApiEndpoints` 维护；`Program.cs` 只负责宿主配置、依赖注入、中间件和端点注册。
 6. 新增存储实现时按能力分目录，例如 `Connections` 和 `Messages`，并继续依赖 Core 中的抽象接口。
+7. `src` 下按部署边界使用 `Shared`、`Gateway`、`Cluster` 和 `Infrastructure` 分组；新增服务不得重新堆放到 `src` 根目录。
+8. MagicOnion 接口与 MessagePack DTO 只能放在 `DeviceSocket.Rpc.Contracts`，Orleans Grain 接口与传输模型只能放在 `DeviceSocket.Cluster.Contracts`；契约项目不得引用 Host、Grain 实现或具体存储。
+9. 关键跨服务调用必须传递同一个 `MsgId` 和 `TraceId`；上报与下发使用 `Direction` 区分，不因方向额外创建 `ParentMsgId`。
+10. 各服务的 `Program.cs` 只负责宿主、依赖注入、中间件和端点映射；HTTP API、MagicOnion 服务和后台同步逻辑分别放入独立目录和类。
+11. 设备下发统一通过 `IDeviceGrain` 暴露，普通消息方法命名为 `SendBestEffortMessageAsync`，可靠消息方法命名为 `SendReliableMessageAsync`；同类公开操作必须使用一致的 `Send` 前缀，禁止重新引入含义不明确的 `Submit`、`Push` 或 `Publish` 命名。
+12. 普通消息不得创建可靠消息状态或自动重试；可靠消息必须先由 `IDeviceCommandGrain` 按 `MsgId` 持久化，再执行 Gateway 下发，并显式处理到期、重试和设备确认。
+13. Gateway 协议指令 Handler 统一实现 `IProtocolInstructionHandler<TFrame, TInstructionKey>` 并放入对应协议的 `Processing/Handlers` 目录；Handler 由启动扫描自动注册，禁止重新在公共处理器中堆叠协议指令 `switch/case`。
+14. 协议 Handler 运行时必须通过强类型指令键字典分发；反射扫描只允许在启动注册阶段执行，不得在单条设备消息处理路径中逐个遍历 Handler。
+15. 程序运行、连接、协议异常和框架日志统一通过 `ILogger<T>` 写入；设备上报与下发原始指令统一通过 `IDeviceTrafficSink` 写入 Command 日志，禁止在程序日志中重复记录完整原始报文。
+16. Gateway 的 Serilog 配置、强类型选项、Sink 注册和缓冲健康监控统一放在 `Configuration/Logging` 目录；修改日志路径、级别、滚动、保留或缓冲策略时必须同步更新 `docs/architecture/logging.md`。
 
 ## 验证要求
 

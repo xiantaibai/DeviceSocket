@@ -1,0 +1,10 @@
+{
+  "solution": {
+    "path": "DeviceSocket.sln",
+    "projects": [
+      "src/Cluster/DeviceSocket.Cluster.Contracts/DeviceSocket.Cluster.Contracts.csproj",
+      "src/Cluster/DeviceSocket.Cluster.Grains/DeviceSocket.Cluster.Grains.csproj",
+      "src/Cluster/DeviceSocket.Cluster.Silo/DeviceSocket.Cluster.Silo.csproj"
+    ]
+  }
+}
