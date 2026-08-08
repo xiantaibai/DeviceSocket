@@ -2,10 +2,12 @@
   "solution": {
     "path": "DeviceSocket.sln",
     "projects": [
-      "src/Shared/DeviceSocket.Core/DeviceSocket.Core.csproj",
-      "tools/DeviceSocket.Debugger.Core/DeviceSocket.Debugger.Core.csproj",
-      "tools/DeviceSocket.Debugger/DeviceSocket.Debugger.csproj",
-      "tools/DeviceSocket.Simulator/DeviceSocket.Simulator.csproj"
+      "src\\Shared\\DeviceSocket.Core\\DeviceSocket.Core.csproj",
+      "tools\\DeviceSocket.Debugger.Core\\DeviceSocket.Debugger.Core.csproj",
+      "tools\\DeviceSocket.Debugger\\DeviceSocket.Debugger.csproj",
+      "tools\\DeviceSocket.Simulator\\DeviceSocket.Simulator.csproj",
+      "tools\\DeviceSocket.LoadTester\\DeviceSocket.LoadTester.csproj",
+      "tests\\DeviceSocket.LoadTester.Tests\\DeviceSocket.LoadTester.Tests.csproj"
     ]
   }
 }

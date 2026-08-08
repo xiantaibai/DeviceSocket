@@ -1,0 +1,108 @@
+{
+  "target": {
+    "host": "127.0.0.1",
+    "port": 5001,
+    "protocol": "qGdw3761"
+  },
+  "devices": {
+    "count": 100,
+    "addressStart": 2001,
+    "administrativeDivision": "3301"
+  },
+  "connection": {
+    "startMode": "ramp",
+    "connectionsPerSecond": 100,
+    "maxConcurrentConnecting": 50,
+    "connectTimeoutSeconds": 3,
+    "loginTimeoutSeconds": 3,
+    "writeTimeoutSeconds": 3
+  },
+  "heartbeat": {
+    "enabled": true,
+    "intervalSeconds": 3,
+    "jitterSeconds": 0,
+    "responseTimeoutSeconds": 2
+  },
+  "reconnect": {
+    "mode": "exponentialJitter",
+    "initialDelayMilliseconds": 200,
+    "maximumDelaySeconds": 5,
+    "multiplier": 2,
+    "jitterRatio": 0.2,
+    "maximumAttempts": 0
+  },
+  "scenario": {
+    "name": "protocol-chaos-3761",
+    "durationSeconds": 1,
+    "phases": [
+      {
+        "name": "stable",
+        "kind": "warmup",
+        "durationSeconds": 10,
+        "targetDevicePercentage": 100
+      },
+      {
+        "name": "fragment-delay-corrupt",
+        "kind": "fault",
+        "durationSeconds": 15,
+        "targetDevicePercentage": 100,
+        "faults": {
+          "networkLatencyMilliseconds": 50,
+          "outboundPacketLossRate": 0.02,
+          "inboundPacketLossRate": 0.02,
+          "corruptChecksumRate": 0.05,
+          "duplicateFrameRate": 0.05,
+          "fragmentSizeBytes": 5,
+          "fragmentDelayMilliseconds": 10,
+          "disconnectPercentage": 20,
+          "disconnectBatchSize": 5,
+          "disconnectIntervalMilliseconds": 500
+        }
+      },
+      {
+        "name": "network-blackhole",
+        "kind": "fault",
+        "durationSeconds": 8,
+        "targetDevicePercentage": 100,
+        "faults": {
+          "outboundPacketLossRate": 1,
+          "inboundPacketLossRate": 1
+        }
+      },
+      {
+        "name": "recovery",
+        "kind": "recovery",
+        "durationSeconds": 20,
+        "targetDevicePercentage": 100
+      },
+      {
+        "name": "cooldown",
+        "kind": "cooldown",
+        "durationSeconds": 2,
+        "targetDevicePercentage": 0
+      }
+    ]
+  },
+  "reporting": {
+    "outputDirectory": "load-test-results",
+    "sampleIntervalSeconds": 1,
+    "writeConsoleSummary": true
+  },
+  "serverObservation": {
+    "enabled": true,
+    "statusUrl": "http://127.0.0.1:5080/api/status/connections",
+    "timeoutSeconds": 2
+  },
+  "acceptance": {
+    "minimumFinalOnlineRate": 0.99,
+    "maximumProtocolErrorRate": 0.1,
+    "maximumRecoverySeconds": 20,
+    "minimumReconnects": 1,
+    "minimumObservedAuthenticatedDevices": 99
+  },
+  "distributed": {
+    "runId": "protocol-chaos-local",
+    "shardIndex": 0,
+    "shardCount": 1
+  }
+}

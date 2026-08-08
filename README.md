@@ -37,7 +37,8 @@ src/
 tools/
 ├─ DeviceSocket.Debugger/                 Windows 协议调试 UI
 ├─ DeviceSocket.Debugger.Core/            指令集、编解码和 TCP 调试能力
-└─ DeviceSocket.Simulator/                376.1 / 645 设备模拟器
+├─ DeviceSocket.Simulator/                376.1 / 645 单设备联调模拟器
+└─ DeviceSocket.LoadTester/               并发、重连、长稳和多机负载测试器
 ```
 
 仓库保留总解决方案 `DeviceSocket.sln`，并提供 Gateway、Cluster、Tools 三个 `.slnf`，便于只加载当前服务及其依赖。
@@ -48,6 +49,7 @@ tools/
 dotnet restore DeviceSocket.sln
 dotnet build DeviceSocket.sln -c Release --no-restore
 dotnet test tests\DeviceSocket.Tests\DeviceSocket.Tests.csproj -c Release --no-build --no-restore
+dotnet test tests\DeviceSocket.LoadTester.Tests\DeviceSocket.LoadTester.Tests.csproj -c Release --no-build --no-restore
 ```
 
 ## 本机启动顺序
@@ -87,6 +89,18 @@ dotnet run --project tools\DeviceSocket.Simulator\DeviceSocket.Simulator.csproj 
 ```
 
 设备 ID 为 `645:123456789012`。
+
+## 并发与稳定性测试
+
+`DeviceSocket.LoadTester` 是独立的无界面负载测试项目，不改变单设备 Simulator。它支持两套协议、批量登录、连接风暴、自动重连、Gateway 重启恢复、长稳、多机分片及报告合并：
+
+```powershell
+dotnet run --project tools\DeviceSocket.LoadTester\DeviceSocket.LoadTester.csproj -- `
+  run --config tools\DeviceSocket.LoadTester\Scenarios\smoke-3761.json `
+  --run-id smoke-001
+```
+
+多机部署、场景字段、退出码和报告说明参见 `tools/DeviceSocket.LoadTester/README.md`。
 
 ## 业务服务下发
 
