@@ -20,7 +20,7 @@
   },
   "heartbeat": {
     "enabled": true,
-    "intervalSeconds": 60,
+    "intervalSeconds": 120,
     "jitterSeconds": 15,
     "responseTimeoutSeconds": 5
   },

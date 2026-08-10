@@ -18,13 +18,28 @@ public sealed class GatewayObservationAccumulatorTests
         {
             Available = true,
             TcpConnections = 7,
-            AuthenticatedDevices = 5
+            AuthenticatedDevices = 5,
+            ApplicationLogDropped = 2,
+            UpstreamLogDropped = 3,
+            DownstreamLogDropped = 4,
+            HeartbeatLogSuppressed = 100
         });
         accumulator.Record(new GatewayStatusSnapshot
         {
             Available = true,
             TcpConnections = 107,
-            AuthenticatedDevices = 85
+            AuthenticatedDevices = 85,
+            ApplicationLogDropped = 3,
+            UpstreamLogDropped = 8,
+            DownstreamLogDropped = 6,
+            HeartbeatLogSuppressed = 1_100,
+            ProcessCpuPercent = 72.5,
+            ProcessWorkingSetBytes = 1_024,
+            ManagedHeapBytes = 512,
+            ThreadPoolPendingWorkItems = 9,
+            PeakPendingSendMessages = 12,
+            PeakPendingSendBytes = 4_096,
+            MaximumSessionScanDurationMilliseconds = 25
         });
 
         var result = accumulator.Snapshot();
@@ -35,6 +50,17 @@ public sealed class GatewayObservationAccumulatorTests
         Assert.Equal(85, result.MaximumAuthenticatedDevices);
         Assert.Equal(100, result.MaximumAdditionalTcpConnections);
         Assert.Equal(80, result.MaximumAdditionalAuthenticatedDevices);
+        Assert.Equal(72.5, result.MaximumProcessCpuPercent);
+        Assert.Equal(1_024, result.MaximumProcessWorkingSetBytes);
+        Assert.Equal(512, result.MaximumManagedHeapBytes);
+        Assert.Equal(9, result.MaximumThreadPoolPendingWorkItems);
+        Assert.Equal(12, result.MaximumPeakPendingSendMessages);
+        Assert.Equal(4_096, result.MaximumPeakPendingSendBytes);
+        Assert.Equal(25, result.MaximumSessionScanDurationMilliseconds);
+        Assert.Equal(1, result.AdditionalApplicationLogDropped);
+        Assert.Equal(5, result.AdditionalUpstreamLogDropped);
+        Assert.Equal(2, result.AdditionalDownstreamLogDropped);
+        Assert.Equal(1_000, result.AdditionalHeartbeatLogSuppressed);
     }
 
     /// <summary>

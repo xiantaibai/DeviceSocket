@@ -16,4 +16,5 @@ public sealed record DeviceTrafficRecord(
     string RawHex,
     string? TraceId = null,
     string? Source = null,
-    int? AttemptNo = null);
+    int? AttemptNo = null,
+    ProtocolTrafficKind TrafficKind = ProtocolTrafficKind.Business);

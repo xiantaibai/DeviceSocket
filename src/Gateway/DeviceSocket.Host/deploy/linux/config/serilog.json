@@ -1,0 +1,28 @@
+{
+  "Serilog": {
+    "MinimumLevel": {
+      "Default": "Information",
+      "Override": {
+        "Microsoft.AspNetCore": "Warning",
+        "Microsoft.Hosting.Lifetime": "Information",
+        "Orleans": "Warning",
+        "SuperSocket": "Warning"
+      }
+    }
+  },
+  "DeviceLogging": {
+    "ApplicationPath": "logs/app/app-.jsonl",
+    "UpstreamPath": "logs/device/upstream-.jsonl",
+    "DownstreamPath": "logs/device/downstream-.jsonl",
+    "FileSizeLimitBytes": 268435456,
+    "RetainedFileCount": 31,
+    "RetainedDays": 30,
+    "ApplicationBufferSize": 10000,
+    "UpstreamBufferSize": 50000,
+    "DownstreamBufferSize": 50000,
+    "FlushIntervalSeconds": 1,
+    "MonitorIntervalSeconds": 10,
+    "HeartbeatSampleRate": 0,
+    "HeartbeatEnabledDeviceIds": []
+  }
+}

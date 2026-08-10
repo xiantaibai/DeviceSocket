@@ -54,6 +54,53 @@ public sealed class DeviceConnectionLimiterTests
         Assert.Equal(0, countAfterDuplicateClose);
     }
 
+    /// <summary>
+    /// 未认证容量达到上限时拒绝新连接，已有 Session 完成认证后应立即释放一个未认证名额。
+    /// </summary>
+    [Fact]
+    public void MarkAuthenticated_ShouldReleaseUnauthenticatedCapacity()
+    {
+        var limiter = new DeviceConnectionLimiter(new DeviceConnectionOptions
+        {
+            MaxConnections = 10,
+            MaxUnauthenticatedConnections = 1,
+            MaxConnectionsPerSecond = 0
+        });
+        var now = DateTimeOffset.UtcNow;
+
+        Assert.True(limiter.TryAcquire("first", "10.0.0.1", now, out _, out _, out _));
+        Assert.False(limiter.TryAcquire("second", "10.0.0.2", now, out _, out _, out var rejection));
+        Assert.Equal(DeviceConnectionRejectionReason.UnauthenticatedCapacity, rejection);
+
+        Assert.True(limiter.MarkAuthenticated("first"));
+        Assert.True(limiter.TryAcquire("second", "10.0.0.2", now, out _, out _, out _));
+        Assert.Equal(1, limiter.UnauthenticatedConnectionCount);
+    }
+
+    /// <summary>
+    /// 单 IP 并发限制和每秒速率限制应返回可区分的拒绝原因，并允许下一秒继续接入。
+    /// </summary>
+    [Fact]
+    public void TryAcquire_ShouldEnforcePerIpAndRateLimits()
+    {
+        var limiter = new DeviceConnectionLimiter(new DeviceConnectionOptions
+        {
+            MaxConnections = 10,
+            MaxUnauthenticatedConnections = 10,
+            MaxConnectionsPerIp = 1,
+            MaxConnectionsPerSecond = 2
+        });
+        var now = DateTimeOffset.FromUnixTimeSeconds(1_000);
+
+        Assert.True(limiter.TryAcquire("first", "10.0.0.1", now, out _, out _, out _));
+        Assert.False(limiter.TryAcquire("same-ip", "10.0.0.1", now, out _, out _, out var perIp));
+        Assert.Equal(DeviceConnectionRejectionReason.PerIpCapacity, perIp);
+        Assert.True(limiter.TryAcquire("second", "10.0.0.2", now, out _, out _, out _));
+        Assert.False(limiter.TryAcquire("rate-limited", "10.0.0.3", now, out _, out _, out var rate));
+        Assert.Equal(DeviceConnectionRejectionReason.RateLimit, rate);
+        Assert.True(limiter.TryAcquire("next-second", "10.0.0.3", now.AddSeconds(1), out _, out _, out _));
+    }
+
     private static DeviceConnectionLimiter CreateLimiter(int maximum) =>
         new(maximum);
 }

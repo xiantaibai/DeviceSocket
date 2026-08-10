@@ -13,7 +13,7 @@
 - 重复设备身份、集中/分批主动断线和容量上限场景。
 - 可按阶段注入网络时延、上下行丢包/黑洞、非法校验和、半包与粘包。
 - 对需要确认的376.1下行帧和645读请求自动生成协议应答。
-- 可选轮询 Gateway 状态 API，按测试前基线核对本轮新增 TCP 与认证设备峰值。
+- 可选轮询 Gateway 状态 API，按测试前基线核对本轮新增 TCP 与认证设备峰值，并记录 CPU、内存、线程池、发送积压、Session 扫描和三条日志流丢弃。
 - 多机 `RunId + ShardIndex + ShardCount` 地址分片。
 - 每秒 JSONL 时间序列、节点 JSON/CSV/Markdown 报告。
 - 可合并延迟直方图及多节点汇总报告。
@@ -65,6 +65,7 @@ dotnet run --project tools\DeviceSocket.LoadTester\DeviceSocket.LoadTester.cspro
 | `duplicate-login.json` | 100 条连接复用 80 个设备身份，验证 Session 替换和在线表去重 |
 | `capacity-limit-645.json` | 1,000 台设备冲击配置为 500 的服务端连接上限 |
 | `soak-60000.json` | 60,000 台设备的多机爬升和六小时长稳测试 |
+| `soak-80000.json` | 80,000 台设备的多机爬升和六小时上限长稳测试 |
 
 ## 多负载机运行
 
@@ -94,6 +95,7 @@ DeviceSocket.LoadTester report merge --input collected\soak-001 --output collect
 
 - `target`：协议、Gateway 主机和端口。
 - `devices`：全局设备总数、起始地址、376.1 行政区划。
+- `devices.spanAdministrativeDivisions`：376.1 设备超过单区划 65,535 个终端地址时，递增行政区划并从终端地址 1 继续；默认关闭，8 万场景显式开启。
 - `connection`：Ramp/Burst、连接速率、并发度和超时。
 - `heartbeat`：心跳间隔、抖动和确认超时。
 - `workload`：额外周期上报；376.1 当前使用协议心跳，645 支持读数上报。
@@ -131,6 +133,8 @@ DeviceSocket.LoadTester report merge --input collected\soak-001 --output collect
 ```
 
 默认只输出聚合信息，不逐设备保存原始报文。调试协议内容应继续使用 `DeviceSocket.Simulator` 或 Debugger。
+
+8 核 16 GiB Linux Gateway 的文件描述符、分阶段容量、采集命令和验收口径见 `docs/operations/linux-single-node-load-test.md`。
 
 ## 发布
 

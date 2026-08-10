@@ -128,5 +128,7 @@ public sealed class ProtocolInstructionDispatcherTests
         public byte[] Raw => [];
 
         public string Summary => Instruction;
+
+        public ProtocolTrafficKind TrafficKind => ProtocolTrafficKind.Business;
     }
 }

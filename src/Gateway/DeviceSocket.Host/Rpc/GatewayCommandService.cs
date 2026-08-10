@@ -2,6 +2,7 @@ using DeviceSocket.Core.Protocols.Common;
 using DeviceSocket.Core.Runtime.Connections;
 using DeviceSocket.Core.Runtime.Messages;
 using DeviceSocket.Core.Runtime.Metrics;
+using DeviceSocket.Host.Configuration.Logging.Messages;
 using DeviceSocket.Host.Networking.Cluster;
 using DeviceSocket.Host.Networking.Common;
 using DeviceSocket.Rpc.Contracts.Gateway;
@@ -80,7 +81,12 @@ public sealed class GatewayCommandService(
                 snapshot.RemoteEndPoint,
                 ToTruncatedHex(request.Payload),
                 request.TraceId));
-            logger.LogWarning(exception, "MagicOnion 下发失败: {MsgId} {DeviceId} {SessionId}", request.MsgId, request.DeviceId, request.SessionId);
+            ClusterLogMessages.MagicOnionSendFailed(
+                logger,
+                request.MsgId,
+                request.DeviceId,
+                request.SessionId,
+                exception);
             return Response(request.MsgId, GatewayDispatchStatus.SendFailed, "写入设备 Socket 失败，请使用同一 MsgId 查询或重试。");
         }
     }

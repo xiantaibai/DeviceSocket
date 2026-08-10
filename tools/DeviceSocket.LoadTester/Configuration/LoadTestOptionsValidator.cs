@@ -10,6 +10,8 @@ public static class LoadTestOptionsValidator
     /// <summary>
     /// 校验完整配置；发现错误时一次性返回全部可定位的问题。
     /// </summary>
+    /// <param name="options">待校验的完整负载配置。</param>
+    /// <returns>全部配置错误；空集合表示配置有效。</returns>
     public static IReadOnlyList<string> Validate(LoadTestOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -39,10 +41,23 @@ public static class LoadTestOptionsValidator
                 errors.Add("devices.administrativeDivision: 376.1 行政区划必须是 4 位十进制数字。");
             }
 
-            if (options.Devices.AddressStart > ushort.MaxValue ||
-                requiredAddressOffset > ushort.MaxValue - options.Devices.AddressStart)
+            if (options.Devices.AddressStart > ushort.MaxValue)
             {
-                errors.Add("devices: 376.1 终端地址范围不能超过 65535。");
+                errors.Add("devices.addressStart: 376.1 起始终端地址不能超过 65535。");
+            }
+            else if (!options.Devices.SpanAdministrativeDivisions &&
+                     requiredAddressOffset > ushort.MaxValue - options.Devices.AddressStart)
+            {
+                errors.Add("devices: 376.1 终端地址范围不能超过 65535；需要跨区划压测时启用 spanAdministrativeDivisions。");
+            }
+            else if (options.Devices.SpanAdministrativeDivisions &&
+                     int.TryParse(options.Devices.AdministrativeDivision, out var startingDivision))
+            {
+                // 每个行政区划使用终端地址 1～65535；跨区划时要确保四位 BCD 区划码不会超过 9999。
+                var lastLinearAddress = options.Devices.AddressStart - 1 + requiredAddressOffset;
+                var requiredDivisionOffset = lastLinearAddress / ushort.MaxValue;
+                if (requiredDivisionOffset > 9_999 - startingDivision)
+                    errors.Add("devices: 376.1 跨行政区划后的区划码不能超过 9999。");
             }
         }
         else if (options.Devices.AddressStart > MaximumDlt645Address ||
@@ -167,6 +182,8 @@ public static class LoadTestOptionsValidator
     /// <summary>
     /// 校验完整配置，在存在任意错误时抛出包含全部原因的异常。
     /// </summary>
+    /// <param name="options">待校验的完整负载配置。</param>
+    /// <exception cref="ConfigurationValidationException">一个或多个配置项无效。</exception>
     public static void ValidateAndThrow(LoadTestOptions options)
     {
         var errors = Validate(options);
@@ -174,18 +191,35 @@ public static class LoadTestOptionsValidator
             throw new ConfigurationValidationException(errors);
     }
 
+    /// <summary>
+    /// 校验以秒为单位且必须大于零的配置值。
+    /// </summary>
+    /// <param name="value">配置值。</param>
+    /// <param name="path">用于错误定位的配置路径。</param>
+    /// <param name="errors">接收校验错误的集合。</param>
     private static void ValidatePositiveSeconds(int value, string path, ICollection<string> errors)
     {
         if (value <= 0)
             errors.Add($"{path}: 必须大于 0。");
     }
 
+    /// <summary>
+    /// 校验可选比例位于零到一之间。
+    /// </summary>
+    /// <param name="value">待校验比例。</param>
+    /// <param name="path">用于错误定位的配置路径。</param>
+    /// <param name="errors">接收校验错误的集合。</param>
     private static void ValidateRate(double? value, string path, ICollection<string> errors)
     {
         if (value is < 0 or > 1)
             errors.Add($"{path}: 必须在 0-1 之间。");
     }
 
+    /// <summary>
+    /// 校验单个阶段的网络故障注入参数。
+    /// </summary>
+    /// <param name="phase">场景阶段配置。</param>
+    /// <param name="errors">接收校验错误的集合。</param>
     private static void ValidateFaults(ScenarioPhaseOptions phase, ICollection<string> errors)
     {
         var path = $"scenario.phases[{phase.Name}].faults";

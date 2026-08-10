@@ -59,4 +59,23 @@ public sealed class DeviceAddressAllocatorTests
         Assert.Equal(10, devices.Select(item => item.GlobalOrdinal).Distinct().Count());
         Assert.Equal(8, devices.Select(item => item.DeviceId).Distinct(StringComparer.Ordinal).Count());
     }
+
+    /// <summary>
+    /// 验证 8 万设备显式跨行政区划时，边界两侧设备地址连续且身份保持唯一。
+    /// </summary>
+    [Fact]
+    public void QGdwLargeAddressSpace_SpansAdministrativeDivisions()
+    {
+        var options = TestOptionsFactory.Create();
+        options.Devices.Count = 80_000;
+        options.Devices.AdministrativeDivision = "3301";
+        options.Devices.SpanAdministrativeDivisions = true;
+
+        var devices = DeviceAddressAllocator.Allocate(options);
+
+        Assert.Equal(80_000, devices.Count);
+        Assert.Equal("3761:3301-65535", devices[65_534].DeviceId);
+        Assert.Equal("3761:3302-00001", devices[65_535].DeviceId);
+        Assert.Equal(80_000, devices.Select(item => item.DeviceId).Distinct(StringComparer.Ordinal).Count());
+    }
 }

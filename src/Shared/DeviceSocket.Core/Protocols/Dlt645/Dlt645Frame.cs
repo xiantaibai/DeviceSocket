@@ -7,10 +7,15 @@ namespace DeviceSocket.Core.Protocols.Dlt645;
 /// </summary>
 public sealed record Dlt645Frame : IProtocolFrame
 {
+    /// <inheritdoc />
     public DeviceProtocol Protocol => DeviceProtocol.Dlt6452007;
+    /// <inheritdoc />
     public required bool IsValid { get; init; }
+    /// <inheritdoc />
     public ProtocolError? Error { get; init; }
+    /// <inheritdoc />
     public required byte[] Raw { get; init; }
+    /// <inheritdoc />
     public string? DeviceId { get; init; }
     public int PreambleLength { get; init; }
     public string? Address { get; init; }
@@ -23,6 +28,10 @@ public sealed record Dlt645Frame : IProtocolFrame
     public byte[] Data { get; init; } = [];
     public uint? DataIdentifier { get; init; }
 
+    /// <inheritdoc />
+    public ProtocolTrafficKind TrafficKind => ProtocolTrafficKind.Business;
+
+    /// <inheritdoc />
     public string Summary
     {
         get

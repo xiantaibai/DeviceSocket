@@ -4,8 +4,17 @@ using DeviceSocket.LoadTester.Configuration;
 
 namespace DeviceSocket.LoadTester.Reporting;
 
+/// <summary>
+/// 把单个负载分片的明细、错误统计和验收结果写入报告目录。
+/// </summary>
 internal static class NodeReportWriter
 {
+    /// <summary>
+    /// 将节点 JSON、错误 CSV 和 Markdown 报告写入指定目录。
+    /// </summary>
+    /// <param name="report">单节点执行报告。</param>
+    /// <param name="outputDirectory">报告输出目录。</param>
+    /// <param name="cancellationToken">取消写入操作的令牌。</param>
     internal static async Task WriteAsync(NodeReport report, string outputDirectory, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(outputDirectory);
@@ -27,6 +36,11 @@ internal static class NodeReportWriter
             cancellationToken);
     }
 
+    /// <summary>
+    /// 按出现次数降序生成错误码 CSV。
+    /// </summary>
+    /// <param name="report">单节点执行报告。</param>
+    /// <returns>错误码及数量 CSV 文本。</returns>
     private static string BuildErrorsCsv(NodeReport report)
     {
         var builder = new StringBuilder("errorCode,count\n");
@@ -35,6 +49,11 @@ internal static class NodeReportWriter
         return builder.ToString();
     }
 
+    /// <summary>
+    /// 生成包含客户端指标和 Gateway 观测值的节点 Markdown 报告。
+    /// </summary>
+    /// <param name="report">单节点执行报告。</param>
+    /// <returns>完整 Markdown 文本。</returns>
     private static string BuildMarkdown(NodeReport report)
     {
         var metrics = report.Metrics;
@@ -64,6 +83,12 @@ internal static class NodeReportWriter
             builder.AppendLine($"| Gateway 测试前基线 TCP/认证设备 | {gateway.BaselineTcpConnections?.ToString("N0") ?? "不可用"}/{gateway.BaselineAuthenticatedDevices?.ToString("N0") ?? "不可用"} |");
             builder.AppendLine($"| Gateway 本轮峰值增量 TCP/认证设备 | {gateway.MaximumAdditionalTcpConnections:N0}/{gateway.MaximumAdditionalAuthenticatedDevices:N0} |");
             builder.AppendLine($"| Gateway 峰值 TCP/认证设备 | {gateway.MaximumTcpConnections:N0}/{gateway.MaximumAuthenticatedDevices:N0} |");
+            builder.AppendLine($"| Gateway CPU/工作集/托管堆峰值 | {gateway.MaximumProcessCpuPercent:F2}%/{FormatBytes(gateway.MaximumProcessWorkingSetBytes)}/{FormatBytes(gateway.MaximumManagedHeapBytes)} |");
+            builder.AppendLine($"| Gateway 线程池最大排队 | {gateway.MaximumThreadPoolPendingWorkItems:N0} |");
+            builder.AppendLine($"| Gateway 发送积压消息/字节历史峰值 | {gateway.MaximumPeakPendingSendMessages:N0}/{FormatBytes(gateway.MaximumPeakPendingSendBytes)} |");
+            builder.AppendLine($"| Gateway Session 扫描最大耗时 | {gateway.MaximumSessionScanDurationMilliseconds:N0} ms |");
+            builder.AppendLine($"| Gateway 新增程序/上行/下发日志丢弃 | {gateway.AdditionalApplicationLogDropped:N0}/{gateway.AdditionalUpstreamLogDropped:N0}/{gateway.AdditionalDownstreamLogDropped:N0} |");
+            builder.AppendLine($"| Gateway 默认过滤心跳日志 | {gateway.AdditionalHeartbeatLogSuppressed:N0} |");
             builder.AppendLine($"| Gateway 不可用采样 | {gateway.UnavailableSamples:N0}/{gateway.Samples:N0} |");
         }
         builder.AppendLine($"| 收/发字节 | {metrics.BytesReceived:N0}/{metrics.BytesSent:N0} |");
@@ -85,4 +110,11 @@ internal static class NodeReportWriter
 
         return builder.ToString();
     }
+
+    /// <summary>
+    /// 把字节数格式化为便于压测报告阅读的 MiB 文本。
+    /// </summary>
+    /// <param name="bytes">字节数。</param>
+    /// <returns>保留两位小数的 MiB 文本。</returns>
+    private static string FormatBytes(long bytes) => $"{bytes / 1024d / 1024d:F2} MiB";
 }

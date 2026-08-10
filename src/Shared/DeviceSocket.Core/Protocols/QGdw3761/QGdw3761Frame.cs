@@ -7,10 +7,15 @@ namespace DeviceSocket.Core.Protocols.QGdw3761;
 /// </summary>
 public sealed record QGdw3761Frame : IProtocolFrame
 {
+    /// <inheritdoc />
     public DeviceProtocol Protocol => DeviceProtocol.QGdw3761;
+    /// <inheritdoc />
     public required bool IsValid { get; init; }
+    /// <inheritdoc />
     public ProtocolError? Error { get; init; }
+    /// <inheritdoc />
     public required byte[] Raw { get; init; }
+    /// <inheritdoc />
     public string? DeviceId { get; init; }
     public int UserDataLength { get; init; }
     public byte Control { get; init; }
@@ -37,6 +42,15 @@ public sealed record QGdw3761Frame : IProtocolFrame
     public byte[] DataUnitPayload { get; init; } = [];
     public QGdw3761LinkMessageKind LinkMessageKind { get; init; }
 
+    /// <inheritdoc />
+    public ProtocolTrafficKind TrafficKind => LinkMessageKind switch
+    {
+        QGdw3761LinkMessageKind.Heartbeat => ProtocolTrafficKind.Heartbeat,
+        QGdw3761LinkMessageKind.Login or QGdw3761LinkMessageKind.Logout => ProtocolTrafficKind.LinkManagement,
+        _ => ProtocolTrafficKind.Business
+    };
+
+    /// <inheritdoc />
     public string Summary => IsValid
         ? $"376.1 {DeviceId} AFN={Afn:X2} Fn={string.Join(',', Functions.Select(x => $"F{x}"))} {LinkMessageKind}"
         : $"376.1 error {Error?.Code}: {Error?.Message}";

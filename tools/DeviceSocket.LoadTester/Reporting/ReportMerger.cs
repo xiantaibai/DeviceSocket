@@ -3,8 +3,18 @@ using DeviceSocket.LoadTester.Configuration;
 
 namespace DeviceSocket.LoadTester.Reporting;
 
+/// <summary>
+/// 校验并合并同一轮测试的全部负载分片报告。
+/// </summary>
 internal static class ReportMerger
 {
+    /// <summary>
+    /// 读取、校验并合并指定目录中的全部节点报告。
+    /// </summary>
+    /// <param name="inputDirectory">包含各分片 `node-summary.json` 的目录。</param>
+    /// <param name="outputDirectory">汇总报告输出目录。</param>
+    /// <param name="cancellationToken">取消读取或写入的令牌。</param>
+    /// <returns>完成验收计算的汇总报告。</returns>
     internal static async Task<AggregateReport> MergeAsync(
         string inputDirectory,
         string outputDirectory,
@@ -53,6 +63,10 @@ internal static class ReportMerger
         return aggregate;
     }
 
+    /// <summary>
+    /// 校验分片数量、身份、目标地址和影响验收结论的配置完全一致。
+    /// </summary>
+    /// <param name="reports">待合并的节点报告。</param>
     private static void ValidateReports(IReadOnlyList<NodeReport> reports)
     {
         var first = reports[0];
@@ -95,6 +109,11 @@ internal static class ReportMerger
         }
     }
 
+    /// <summary>
+    /// 为影响流量和验收的配置生成稳定 JSON 签名。
+    /// </summary>
+    /// <param name="report">节点报告。</param>
+    /// <returns>用于跨分片相等比较的配置 JSON。</returns>
     private static string CreateConfigurationSignature(NodeReport report)
     {
         // 分片编号和输出路径允许每台负载机不同，其余影响流量或验收结论的配置必须完全一致。
@@ -116,6 +135,11 @@ internal static class ReportMerger
             LoadTestConfigurationLoader.CreateSerializerOptions());
     }
 
+    /// <summary>
+    /// 合并多台负载机对同一个 Gateway 的重复观测，累计采样数并对服务端峰值取最大值。
+    /// </summary>
+    /// <param name="reports">全部节点报告。</param>
+    /// <returns>合并后的 Gateway 观测；没有启用服务端采样时返回 null。</returns>
     private static GatewayObservationSummary? MergeGatewayObservations(IEnumerable<NodeReport> reports)
     {
         var observations = reports
@@ -136,9 +160,28 @@ internal static class ReportMerger
             observations.Where(item => item.Last is not null)
                 .Select(item => item.Last)
                 .OrderByDescending(item => item!.TimestampUtc)
-                .FirstOrDefault());
+                .FirstOrDefault())
+        {
+            MaximumProcessCpuPercent = observations.Max(item => item.MaximumProcessCpuPercent),
+            MaximumProcessWorkingSetBytes = observations.Max(item => item.MaximumProcessWorkingSetBytes),
+            MaximumManagedHeapBytes = observations.Max(item => item.MaximumManagedHeapBytes),
+            MaximumThreadPoolPendingWorkItems = observations.Max(item => item.MaximumThreadPoolPendingWorkItems),
+            MaximumPeakPendingSendMessages = observations.Max(item => item.MaximumPeakPendingSendMessages),
+            MaximumPeakPendingSendBytes = observations.Max(item => item.MaximumPeakPendingSendBytes),
+            MaximumSessionScanDurationMilliseconds = observations.Max(item => item.MaximumSessionScanDurationMilliseconds),
+            // 多台负载机采样的是同一个 Gateway 累计计数，合并时取最大值，不能把重复观测相加。
+            AdditionalApplicationLogDropped = observations.Max(item => item.AdditionalApplicationLogDropped),
+            AdditionalUpstreamLogDropped = observations.Max(item => item.AdditionalUpstreamLogDropped),
+            AdditionalDownstreamLogDropped = observations.Max(item => item.AdditionalDownstreamLogDropped),
+            AdditionalHeartbeatLogSuppressed = observations.Max(item => item.AdditionalHeartbeatLogSuppressed)
+        };
     }
 
+    /// <summary>
+    /// 计算可用可空整数中的最小值，全部为空时保持空值语义。
+    /// </summary>
+    /// <param name="values">可空整数序列。</param>
+    /// <returns>最小非空值；没有非空值时返回 null。</returns>
     private static long? MinimumNullable(IEnumerable<long?> values)
     {
         var available = values.Where(item => item.HasValue).Select(item => item!.Value).ToArray();

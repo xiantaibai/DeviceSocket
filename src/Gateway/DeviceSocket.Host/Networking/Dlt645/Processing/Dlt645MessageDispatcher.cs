@@ -18,8 +18,9 @@ public sealed class Dlt645MessageDispatcher(
     {
         if (context.Frame.DeviceId is not null)
         {
-            connectionCoordinator.RegisterOrRefresh(
-                context.Session,
+            await connectionCoordinator.RegisterOrRefreshAsync(
+                context.Session.SessionID,
+                context.Session.RemoteEndPoint?.ToString(),
                 context.Frame.Protocol,
                 context.Frame.DeviceId,
                 context.ReceivedAt);

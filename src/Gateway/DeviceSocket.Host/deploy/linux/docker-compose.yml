@@ -1,0 +1,65 @@
+name: devicesocket
+
+services:
+  gateway:
+    # 通过 .env 切换本地加载、私有仓库或版本化镜像，生产环境不要长期使用浮动 latest。
+    image: "${DEVICE_SOCKET_IMAGE:-devicesocket-host:latest}"
+    container_name: "${DEVICE_SOCKET_CONTAINER_NAME:-devicesocket-host}"
+
+    # Linux host 网络绕过 Docker bridge NAT；端口直接使用应用的 5001、5002、5080 和 7001。
+    network_mode: host
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+
+    # 8 万 TCP 连接之外还要容纳监听、HTTP/RPC 和日志文件描述符。
+    ulimits:
+      nofile:
+        soft: 200000
+        hard: 200000
+
+    # 8 核 16 GiB 专用主机为内核、Docker、Socket 和文件缓存预留约 3 GiB。
+    mem_limit: "${DEVICE_SOCKET_MEMORY_LIMIT:-13g}"
+    # 与内存上限相同表示不允许额外使用 Swap，避免长连接 Gateway 出现不可控延迟。
+    memswap_limit: "${DEVICE_SOCKET_MEMORY_SWAP_LIMIT:-13g}"
+
+    environment:
+      # 镜像内已经启用 Server GC，此处显式保留便于运维检查。
+      DOTNET_gcServer: "1"
+      ASPNETCORE_ENVIRONMENT: Production
+      TZ: "${DEVICE_SOCKET_TIME_ZONE:-Asia/Shanghai}"
+
+      # 单节点 TCP 层压测默认关闭 Orleans；接入生产集群前再切换并配置真实集群发现。
+      Orleans__Enabled: "${ORLEANS_ENABLED:-false}"
+      Gateway__NodeId: "${GATEWAY_NODE_ID:-gateway-linux-01}"
+      Gateway__RpcEndpoint: http://127.0.0.1:7001
+
+      # 8 万目标连接上方保留 5 千接入余量，零表示关闭单 IP 限制。
+      DeviceSocket__ConnectionLimit__MaxConnections: "${MAX_CONNECTIONS:-85000}"
+      DeviceSocket__ConnectionLimit__MaxUnauthenticatedConnections: "${MAX_UNAUTHENTICATED_CONNECTIONS:-5000}"
+      DeviceSocket__ConnectionLimit__MaxConnectionsPerIp: "${MAX_CONNECTIONS_PER_IP:-0}"
+      DeviceSocket__ConnectionLimit__MaxConnectionsPerSecond: "${MAX_CONNECTIONS_PER_SECOND:-5000}"
+      DeviceSocket__ConnectionLimit__ReceiveBufferSize: "${RECEIVE_BUFFER_SIZE:-4096}"
+      DeviceSocket__ConnectionLimit__SendBufferSize: "${SEND_BUFFER_SIZE:-4096}"
+
+    volumes:
+      # 宿主机目录必须预先创建并授权给镜像内 UID 1654。
+      - ${DEVICE_SOCKET_LOG_DIR:-/data/devicesocket/logs}:/app/logs
+      # 单独挂载后可热更新心跳设备列表、采样比例和文件保留策略。
+      - ./config/serilog.json:/app/Configuration/Logging/serilog.json:ro
+
+    # 除日志挂载和 /tmp 外保持镜像只读，减少容器被入侵后的持久化写入面。
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    # 应用程序日志也会输出少量控制台信息，限制 Docker 自身日志避免重复占满磁盘。
+    logging:
+      driver: local
+      options:
+        max-size: 20m
+        max-file: "3"

@@ -24,6 +24,8 @@ public sealed class SysLogJsonFormatterTests
             new MessageTemplateParser().Parse("设备 {DeviceId} 处理失败"),
             [
                 new LogEventProperty("DeviceId", new ScalarValue("3761:3301-00001")),
+                new LogEventProperty("EventId", new ScalarValue(1102)),
+                new LogEventProperty("EventName", new ScalarValue("ProtocolHandlerFailed")),
                 new LogEventProperty("SourceContext", new ScalarValue("DeviceSocket.Test.Worker")),
                 new LogEventProperty("LocalHost", new ScalarValue("gateway-01")),
                 new LogEventProperty("Callsite", new ScalarValue("HandleAsync")),
@@ -42,6 +44,9 @@ public sealed class SysLogJsonFormatterTests
         Assert.Equal("2026-07-28 12:34:56.789", root.GetProperty("Longdate").GetString());
         Assert.Equal("WARNING", root.GetProperty("Level").GetString());
         Assert.Equal("DeviceSocket.Test.Worker", root.GetProperty("Logger").GetString());
+        Assert.Equal("Application", root.GetProperty("LogType").GetString());
+        Assert.Equal(1102, root.GetProperty("EventId").GetInt32());
+        Assert.Equal("ProtocolHandlerFailed", root.GetProperty("EventName").GetString());
         Assert.Equal("gateway-01", root.GetProperty("LocalHost").GetString());
         Assert.Equal("HandleAsync", root.GetProperty("Callsite").GetString());
         Assert.Equal("trace-001", root.GetProperty("TraceId").GetString());
@@ -49,5 +54,8 @@ public sealed class SysLogJsonFormatterTests
         Assert.Equal("DeviceSocket.Host", root.GetProperty("Application").GetString());
         Assert.Equal("设备 \"3761:3301-00001\" 处理失败", root.GetProperty("Info").GetString());
         Assert.Contains("模拟异常", root.GetProperty("Exception").GetString(), StringComparison.Ordinal);
+        Assert.Equal(
+            "3761:3301-00001",
+            root.GetProperty("Properties").GetProperty("DeviceId").GetString());
     }
 }

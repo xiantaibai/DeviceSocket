@@ -1,4 +1,5 @@
 using DeviceSocket.Cluster.Contracts.Gateways;
+using DeviceSocket.Host.Configuration.Logging.Messages;
 using Microsoft.Extensions.Options;
 using Orleans;
 
@@ -39,7 +40,7 @@ public sealed class GatewayNodeLeaseWorker(
             }
             catch (Exception exception) when (!stoppingToken.IsCancellationRequested)
             {
-                logger.LogWarning(exception, "网关节点续租失败: {GatewayNodeId}", _options.NodeId);
+                ClusterLogMessages.GatewayNodeLeaseFailed(logger, _options.NodeId, exception);
             }
         }
         while (await timer.WaitForNextTickAsync(stoppingToken));

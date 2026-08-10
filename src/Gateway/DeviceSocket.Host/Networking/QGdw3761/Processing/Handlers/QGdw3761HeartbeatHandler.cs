@@ -1,4 +1,5 @@
 using DeviceSocket.Core.Protocols.QGdw3761;
+using DeviceSocket.Host.Networking.Common;
 using DeviceSocket.Host.Networking.Processing.Common;
 using DeviceSocket.Host.Networking.QGdw3761.Responses;
 
@@ -23,7 +24,18 @@ public sealed class QGdw3761HeartbeatHandler(
         if (context.Frame.DeviceId is null)
             return;
 
-        connectionCoordinator.Touch(context.Session, context.Frame.DeviceId, context.ReceivedAt);
+        if (!connectionCoordinator.Touch(
+                context.Session.SessionID,
+                context.Frame.DeviceId,
+                context.ReceivedAt))
+        {
+            // 旧 Session 或未登录连接不能继续收到心跳确认，否则设备会误判失效链路仍然在线。
+            await connectionCoordinator.CloseSessionAsync(
+                context.Session.SessionID,
+                DeviceSessionCloseReason.StaleSession);
+            return;
+        }
+
         await confirmationSender.SendAsync(context);
     }
 }

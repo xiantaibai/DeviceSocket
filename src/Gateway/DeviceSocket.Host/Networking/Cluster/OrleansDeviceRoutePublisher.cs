@@ -1,6 +1,7 @@
 using System.Threading.Channels;
 using DeviceSocket.Cluster.Contracts.Devices;
 using DeviceSocket.Core.Runtime.Connections;
+using DeviceSocket.Host.Configuration.Logging.Messages;
 using Microsoft.Extensions.Options;
 using Orleans;
 
@@ -63,7 +64,13 @@ public sealed class OrleansDeviceRoutePublisher(
     {
         var accepted = _events.Writer.TryWrite(routeEvent);
         if (!accepted)
-            logger.LogWarning("设备路由同步队列已满，事件被拒绝: {EventType} {DeviceId} {SessionId}", routeEvent.GetType().Name, routeEvent.Snapshot.DeviceId, routeEvent.Snapshot.SessionId);
+        {
+            ClusterLogMessages.RouteQueueRejected(
+                logger,
+                routeEvent.GetType().Name,
+                routeEvent.Snapshot.DeviceId,
+                routeEvent.Snapshot.SessionId);
+        }
         return accepted;
     }
 
@@ -81,11 +88,19 @@ public sealed class OrleansDeviceRoutePublisher(
             }
             catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
             {
-                logger.LogWarning(exception, "同步设备路由失败，第 {Attempt} 次: {DeviceId} {SessionId}", attempt + 1, routeEvent.Snapshot.DeviceId, routeEvent.Snapshot.SessionId);
+                ClusterLogMessages.RouteSyncFailed(
+                    logger,
+                    attempt + 1,
+                    routeEvent.Snapshot.DeviceId,
+                    routeEvent.Snapshot.SessionId,
+                    exception);
             }
         }
 
-        logger.LogError("同步设备路由达到重试上限: {DeviceId} {SessionId}", routeEvent.Snapshot.DeviceId, routeEvent.Snapshot.SessionId);
+        ClusterLogMessages.RouteRetryExhausted(
+            logger,
+            routeEvent.Snapshot.DeviceId,
+            routeEvent.Snapshot.SessionId);
     }
 
     private async Task ProcessAsync(RouteEvent routeEvent)

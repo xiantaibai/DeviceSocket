@@ -5,6 +5,9 @@ using DeviceSocket.Core.Runtime.Connections;
 using DeviceSocket.Core.Runtime.Messages;
 using DeviceSocket.Core.Runtime.Metrics;
 using DeviceSocket.Host.Api.Models;
+using DeviceSocket.Host.Configuration.Logging;
+using DeviceSocket.Host.Networking.Common;
+using DeviceSocket.Host.Observability;
 
 namespace DeviceSocket.Host.Api;
 
@@ -41,18 +44,93 @@ public static class DeviceApiEndpoints
             .WithSummary("获取服务基本信息")
             .Produces(StatusCodes.Status200OK);
 
-        endpoints.MapGet("/api/status/connections", (IOnlineDeviceRegistry registry, RuntimeMetrics metrics) => Results.Ok(new
+        endpoints.MapGet("/api/status/connections", (
+            IOnlineDeviceRegistry registry,
+            RuntimeMetrics metrics,
+            DeviceConnectionLimiter limiter,
+            DeviceTcpSessionManager sessionManager,
+            GatewayProcessMetrics processMetrics,
+            DeviceTrafficLoggingMetrics trafficLoggingMetrics,
+            LogBufferMonitorRegistry logBufferMonitors) =>
         {
-            tcpConnections = metrics.TcpConnections,
-            authenticatedDevices = registry.Count,
-            protocol3761Connections = metrics.QGdw3761Connections,
-            protocol645Connections = metrics.Dlt645Connections,
-            receivedMessages = metrics.ReceivedMessages,
-            sentMessages = metrics.SentMessages,
-            sendFailures = metrics.SendFailures,
-            protocolErrors = metrics.ProtocolErrors,
-            timestamp = DateTimeOffset.UtcNow
-        }))
+            var process = processMetrics.Capture();
+            var applicationLog = logBufferMonitors.Capture(LogBufferMonitorRegistry.ApplicationLogType);
+            var upstreamLog = logBufferMonitors.Capture(DeviceTrafficLogCategories.UpstreamLogType);
+            var downstreamLog = logBufferMonitors.Capture(DeviceTrafficLogCategories.DownstreamLogType);
+            return Results.Ok(new
+            {
+                tcpConnections = metrics.TcpConnections,
+                peakTcpConnections = metrics.PeakTcpConnections,
+                openedConnections = metrics.OpenedConnections,
+                closedConnections = metrics.ClosedConnections,
+                authenticatedDevices = registry.Count,
+                trackedSessions = sessionManager.SessionCount,
+                authenticatedSessions = sessionManager.AuthenticatedSessionCount,
+                unauthenticatedConnections = limiter.UnauthenticatedConnectionCount,
+                protocol3761Connections = metrics.QGdw3761Connections,
+                protocol645Connections = metrics.Dlt645Connections,
+                rejectedConnections = limiter.RejectedConnections,
+                capacityRejections = limiter.CapacityRejections,
+                unauthenticatedCapacityRejections = limiter.UnauthenticatedCapacityRejections,
+                perIpCapacityRejections = limiter.PerIpCapacityRejections,
+                rateLimitRejections = limiter.RateLimitRejections,
+                pendingSendMessages = sessionManager.PendingSendMessages,
+                pendingSendBytes = sessionManager.PendingSendBytes,
+                peakPendingSendMessages = sessionManager.PeakPendingSendMessages,
+                peakPendingSendBytes = sessionManager.PeakPendingSendBytes,
+                loginTimeoutClosures = sessionManager.LoginTimeoutClosures,
+                idleTimeoutClosures = sessionManager.IdleTimeoutClosures,
+                protocolErrorClosures = sessionManager.ProtocolErrorClosures,
+                duplicateLoginClosures = sessionManager.DuplicateLoginClosures,
+                logoutClosures = sessionManager.LogoutClosures,
+                sendTimeoutClosures = sessionManager.SendTimeoutClosures,
+                sendBackpressureClosures = sessionManager.SendBackpressureClosures,
+                staleSessionClosures = sessionManager.StaleSessionClosures,
+                receivedMessages = metrics.ReceivedMessages,
+                sentMessages = metrics.SentMessages,
+                sendFailures = metrics.SendFailures,
+                protocolErrors = metrics.ProtocolErrors,
+                heartbeatsReceived = metrics.HeartbeatsReceived,
+                heartbeatConfirmationsSent = metrics.HeartbeatConfirmationsSent,
+                sessionScanCount = sessionManager.SessionScanCount,
+                lastSessionScanAt = sessionManager.LastSessionScanAt,
+                lastSessionScanDurationMilliseconds = sessionManager.LastSessionScanDurationMilliseconds,
+                maximumSessionScanDurationMilliseconds = sessionManager.MaximumSessionScanDurationMilliseconds,
+                lastSessionScanSessions = sessionManager.LastSessionScanSessions,
+                lastSessionScanCandidates = sessionManager.LastSessionScanCandidates,
+                lastSessionScanClosed = sessionManager.LastSessionScanClosed,
+                heartbeatLogSuppressed = trafficLoggingMetrics.HeartbeatSuppressed,
+                heartbeatLogRecordedByDevice = trafficLoggingMetrics.HeartbeatRecordedByDevice,
+                heartbeatLogRecordedBySampling = trafficLoggingMetrics.HeartbeatRecordedBySampling,
+                upstreamLogSubmitted = trafficLoggingMetrics.UpstreamSubmitted,
+                downstreamLogSubmitted = trafficLoggingMetrics.DownstreamSubmitted,
+                trafficLogSynchronousFailures = trafficLoggingMetrics.SynchronousWriteFailures,
+                applicationLogCount = applicationLog.Count,
+                applicationLogBufferSize = applicationLog.BufferSize,
+                applicationLogDropped = applicationLog.DroppedMessagesCount,
+                upstreamLogCount = upstreamLog.Count,
+                upstreamLogBufferSize = upstreamLog.BufferSize,
+                upstreamLogDropped = upstreamLog.DroppedMessagesCount,
+                downstreamLogCount = downstreamLog.Count,
+                downstreamLogBufferSize = downstreamLog.BufferSize,
+                downstreamLogDropped = downstreamLog.DroppedMessagesCount,
+                processCpuPercent = process.CpuPercent,
+                processWorkingSetBytes = process.WorkingSetBytes,
+                managedHeapBytes = process.ManagedHeapBytes,
+                gcCommittedBytes = process.GcCommittedBytes,
+                gcPauseTimePercentage = process.GcPauseTimePercentage,
+                gen0Collections = process.Gen0Collections,
+                gen1Collections = process.Gen1Collections,
+                gen2Collections = process.Gen2Collections,
+                threadPoolThreads = process.ThreadPoolThreads,
+                threadPoolPendingWorkItems = process.ThreadPoolPendingWorkItems,
+                threadPoolAvailableWorkerThreads = process.ThreadPoolAvailableWorkerThreads,
+                threadPoolAvailableIoThreads = process.ThreadPoolAvailableIoThreads,
+                processHandleCount = process.HandleCount,
+                processUptimeSeconds = process.UptimeSeconds,
+                timestamp = DateTimeOffset.UtcNow
+            });
+        })
             .WithName("GetConnectionStatus")
             .WithTags("运行状态")
             .WithSummary("查询当前连接数、在线设备数和收发指标")

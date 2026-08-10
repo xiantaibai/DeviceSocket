@@ -4,8 +4,17 @@ using DeviceSocket.LoadTester.Configuration;
 
 namespace DeviceSocket.LoadTester.Reporting;
 
+/// <summary>
+/// 把多负载节点合并结果写为 JSON 和便于人工验收的 Markdown 报告。
+/// </summary>
 internal static class AggregateReportWriter
 {
+    /// <summary>
+    /// 将汇总报告写入指定目录。
+    /// </summary>
+    /// <param name="report">已经完成验收计算的汇总报告。</param>
+    /// <param name="outputDirectory">报告输出目录。</param>
+    /// <param name="cancellationToken">取消写入操作的令牌。</param>
     internal static async Task WriteAsync(AggregateReport report, string outputDirectory, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(outputDirectory);
@@ -21,6 +30,11 @@ internal static class AggregateReportWriter
             cancellationToken);
     }
 
+    /// <summary>
+    /// 生成包含客户端负载和 Gateway 资源峰值的汇总 Markdown。
+    /// </summary>
+    /// <param name="report">汇总报告。</param>
+    /// <returns>完整 Markdown 文本。</returns>
     private static string BuildMarkdown(AggregateReport report)
     {
         var metrics = report.Metrics;
@@ -46,6 +60,12 @@ internal static class AggregateReportWriter
             builder.AppendLine($"| Gateway 测试前基线 TCP/认证设备 | {gateway.BaselineTcpConnections?.ToString("N0") ?? "不可用"}/{gateway.BaselineAuthenticatedDevices?.ToString("N0") ?? "不可用"} |");
             builder.AppendLine($"| Gateway 本轮峰值增量 TCP/认证设备 | {gateway.MaximumAdditionalTcpConnections:N0}/{gateway.MaximumAdditionalAuthenticatedDevices:N0} |");
             builder.AppendLine($"| Gateway 峰值 TCP/认证设备 | {gateway.MaximumTcpConnections:N0}/{gateway.MaximumAuthenticatedDevices:N0} |");
+            builder.AppendLine($"| Gateway CPU/工作集/托管堆峰值 | {gateway.MaximumProcessCpuPercent:F2}%/{FormatBytes(gateway.MaximumProcessWorkingSetBytes)}/{FormatBytes(gateway.MaximumManagedHeapBytes)} |");
+            builder.AppendLine($"| Gateway 线程池最大排队 | {gateway.MaximumThreadPoolPendingWorkItems:N0} |");
+            builder.AppendLine($"| Gateway 发送积压消息/字节历史峰值 | {gateway.MaximumPeakPendingSendMessages:N0}/{FormatBytes(gateway.MaximumPeakPendingSendBytes)} |");
+            builder.AppendLine($"| Gateway Session 扫描最大耗时 | {gateway.MaximumSessionScanDurationMilliseconds:N0} ms |");
+            builder.AppendLine($"| Gateway 新增程序/上行/下发日志丢弃 | {gateway.AdditionalApplicationLogDropped:N0}/{gateway.AdditionalUpstreamLogDropped:N0}/{gateway.AdditionalDownstreamLogDropped:N0} |");
+            builder.AppendLine($"| Gateway 默认过滤心跳日志 | {gateway.AdditionalHeartbeatLogSuppressed:N0} |");
             builder.AppendLine($"| Gateway 不可用采样 | {gateway.UnavailableSamples:N0}/{gateway.Samples:N0} |");
         }
         builder.AppendLine($"| 登录延迟 P50/P95/P99 | {metrics.LoginLatency.Percentile(0.50)}/{metrics.LoginLatency.Percentile(0.95)}/{metrics.LoginLatency.Percentile(0.99)} ms |");
@@ -57,4 +77,11 @@ internal static class AggregateReportWriter
             builder.AppendLine($"- {(check.Passed ? "通过" : "失败")} {check.Name}：{check.Actual:F4} {check.Comparator} {check.Threshold:F4}");
         return builder.ToString();
     }
+
+    /// <summary>
+    /// 把字节数格式化为便于压测报告阅读的 MiB 文本。
+    /// </summary>
+    /// <param name="bytes">字节数。</param>
+    /// <returns>保留两位小数的 MiB 文本。</returns>
+    private static string FormatBytes(long bytes) => $"{bytes / 1024d / 1024d:F2} MiB";
 }

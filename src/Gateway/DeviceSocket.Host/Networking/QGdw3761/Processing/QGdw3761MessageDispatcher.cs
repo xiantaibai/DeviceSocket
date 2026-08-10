@@ -18,7 +18,7 @@ public sealed class QGdw3761MessageDispatcher(
     {
         var frame = context.Frame;
         if (frame.LinkMessageKind == QGdw3761LinkMessageKind.Other && frame.DeviceId is not null)
-            connectionCoordinator.Touch(context.Session, frame.DeviceId, context.ReceivedAt);
+            connectionCoordinator.Touch(context.Session.SessionID, frame.DeviceId, context.ReceivedAt);
 
         await instructionDispatcher.DispatchAsync(context, cancellationToken);
     }

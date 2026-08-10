@@ -16,7 +16,28 @@ public static class QGdw3761Codec
     /// 从缓冲区头部读取一条 376.1 帧；半包不消费数据，错误帧返回可记录的错误包。
     /// </summary>
     /// <param name="input">当前连接尚未消费的字节。</param>
-    public static FrameReadResult<QGdw3761Frame> Read(ReadOnlySpan<byte> input)
+    public static FrameReadResult<QGdw3761Frame> Read(ReadOnlySpan<byte> input) =>
+        ReadCore(input, null);
+
+    /// <summary>
+    /// 解析已经按协议长度截取的完整 376.1 帧，并在校验成功时直接把该数组交给帧模型持有。
+    /// </summary>
+    /// <param name="frameBytes">调用方独占且不再修改的完整帧字节数组。</param>
+    /// <returns>完整帧的解析结果；头部或校验错误时返回可记录的错误帧。</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="frameBytes"/> 为空时抛出。</exception>
+    public static FrameReadResult<QGdw3761Frame> ReadCompleteFrame(byte[] frameBytes)
+    {
+        ArgumentNullException.ThrowIfNull(frameBytes);
+        return ReadCore(frameBytes, frameBytes);
+    }
+
+    /// <summary>
+    /// 执行 376.1 帧边界和字段解析；完整帧数组由调用方独占时避免再次复制 Raw 数据。
+    /// </summary>
+    /// <param name="input">当前待解析字节。</param>
+    /// <param name="ownedCompleteFrame">可直接转交帧模型的完整数组；普通流式读取时为空。</param>
+    /// <returns>帧读取状态、消费长度和解析后的帧。</returns>
+    private static FrameReadResult<QGdw3761Frame> ReadCore(ReadOnlySpan<byte> input, byte[]? ownedCompleteFrame)
     {
         if (input.IsEmpty)
             return FrameReadResult<QGdw3761Frame>.NeedMoreData();
@@ -55,7 +76,9 @@ public static class QGdw3761Codec
         if (input.Length < totalLength)
             return FrameReadResult<QGdw3761Frame>.NeedMoreData();
 
-        var raw = input[..totalLength].ToArray();
+        var raw = ownedCompleteFrame is not null && ownedCompleteFrame.Length == totalLength
+            ? ownedCompleteFrame
+            : input[..totalLength].ToArray();
         if (raw[^1] != 0x16)
             return Invalid(ProtocolErrorCode.InvalidEnd, "帧结束符不是 16H。", raw, totalLength);
 

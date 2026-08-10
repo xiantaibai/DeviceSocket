@@ -15,5 +15,19 @@ public sealed record GatewayStatusSnapshot
     public long SentMessages { get; init; }
     public long SendFailures { get; init; }
     public long ProtocolErrors { get; init; }
+    public long PeakTcpConnections { get; init; }
+    public long PeakPendingSendMessages { get; init; }
+    public long PeakPendingSendBytes { get; init; }
+    public long HeartbeatsReceived { get; init; }
+    public long HeartbeatConfirmationsSent { get; init; }
+    public long HeartbeatLogSuppressed { get; init; }
+    public long ApplicationLogDropped { get; init; }
+    public long UpstreamLogDropped { get; init; }
+    public long DownstreamLogDropped { get; init; }
+    public long MaximumSessionScanDurationMilliseconds { get; init; }
+    public double ProcessCpuPercent { get; init; }
+    public long ProcessWorkingSetBytes { get; init; }
+    public long ManagedHeapBytes { get; init; }
+    public long ThreadPoolPendingWorkItems { get; init; }
     public string? Error { get; init; }
 }

@@ -1,4 +1,5 @@
 using DeviceSocket.Core.Protocols.QGdw3761;
+using DeviceSocket.Host.Networking.Common;
 using DeviceSocket.Host.Networking.Processing.Common;
 using DeviceSocket.Host.Networking.QGdw3761.Responses;
 
@@ -21,6 +22,9 @@ public sealed class QGdw3761LogoutHandler(
         CancellationToken cancellationToken)
     {
         await confirmationSender.SendAsync(context);
-        connectionCoordinator.Disconnect(context.Session, context.ReceivedAt);
+        connectionCoordinator.Disconnect(context.Session.SessionID, context.ReceivedAt);
+        await connectionCoordinator.CloseSessionAsync(
+            context.Session.SessionID,
+            DeviceSessionCloseReason.Logout);
     }
 }

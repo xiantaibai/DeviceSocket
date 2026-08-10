@@ -23,11 +23,14 @@ public sealed class QGdw3761LoginHandler(
         if (context.Frame.DeviceId is null)
             return;
 
-        connectionCoordinator.Register(
-            context.Session,
+        var registration = await connectionCoordinator.RegisterAsync(
+            context.Session.SessionID,
+            context.Session.RemoteEndPoint?.ToString(),
             context.Frame.Protocol,
             context.Frame.DeviceId,
             context.ReceivedAt);
+        if (registration is null)
+            return;
         await confirmationSender.SendAsync(context);
     }
 }

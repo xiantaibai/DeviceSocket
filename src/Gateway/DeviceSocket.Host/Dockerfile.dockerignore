@@ -1,0 +1,8 @@
+# 构建上下文是 DeviceSocket.Host 项目目录，必须保留 publish 目录供 Dockerfile 复制。
+obj/
+logs/
+deploy/
+bin/Debug/
+bin/Release/net8.0/linux-*/
+*.user
+*.suo

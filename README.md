@@ -15,7 +15,7 @@
 - HTTP/2 7001：网关内部 MagicOnion Unary 下发服务。
 - Orleans：设备路由、SessionEpoch、网关节点租约，以及重要消息的持久化、重试、到期和确认状态。
 - 内存实现：当前 Demo 的在线表、近期消息和 Orleans 状态；后续可以替换 Redis 或数据库。
-- 每条合法上报与下发均记录 `Direction`、`MsgId`、设备、Session、协议和原始报文日志。
+- 业务上报与下发分别记录 `Direction`、`MsgId`、设备、Session、协议和原始报文；高频心跳默认关闭日志并可按设备临时开启。
 - 协议指令通过统一泛型 Handler 接口和强类型指令键分发，新 Handler 由 Gateway 启动扫描自动注册。
 
 ## 项目结构
@@ -71,6 +71,19 @@ dotnet run --project src\Gateway\DeviceSocket.Host\DeviceSocket.Host.csproj
 ```
 
 如果只验证协议解析、不启动 Orleans，可以将网关 `appsettings.json` 中的 `Orleans:Enabled` 改为 `false`。
+
+## Docker 镜像与 Linux 部署
+
+`DeviceSocket.Host` 的构建脚本先在宿主机执行 `dotnet publish`，再用精简 Dockerfile 复制发布产物。默认构建 `linux/amd64` 镜像，也可以导出 tar 供离线 Linux 服务器加载：
+
+```powershell
+src/Gateway/DeviceSocket.Host/build-docker-image.ps1 `
+  -Tag 1.0.0 `
+  -Pull `
+  -ArchivePath artifacts/docker/devicesocket-host-1.0.0.tar
+```
+
+Linux Compose 配置采用 host 网络、20 万文件描述符、13 GiB 容器内存上限、非 root 用户、只读根文件系统和宿主机日志挂载。部署步骤、端口安全边界、日志热更新与升级回滚见 `src/Gateway/DeviceSocket.Host/deploy/linux/README.md`。
 
 ## 模拟设备登录
 
@@ -134,13 +147,13 @@ var importantResult = await deviceGrain.SendReliableMessageAsync(
 
 ## 日志
 
-Gateway 通过 Serilog 将日志分为两类：程序日志写入 `logs/app/app-.jsonl`，设备上报和下发 Command 日志写入 `logs/command/command-.jsonl`。两者均按行保存结构化 JSON；Command 日志可通过 `Direction`、`MsgId`、`TraceId`、设备、协议和发送次数检索。
+Gateway 通过 Serilog 将日志分为三类：程序日志写入 `logs/app/app-.jsonl`，设备上行写入 `logs/device/upstream-.jsonl`，设备下行写入 `logs/device/downstream-.jsonl`。固定模板使用 `LoggerMessageAttribute` 编译时源生成；设备通信日志可通过 `EventId`、`Direction`、`MsgId`、`TraceId`、设备、协议和发送次数检索。
 
-日志级别、路径、滚动保留和异步缓冲配置集中在 `src/Gateway/DeviceSocket.Host/Configuration/Logging/serilog.json`。详细字段和异常策略参见 `docs/architecture/logging.md`。
+心跳日志默认在生成 `RawHex` 前过滤，可通过 `HeartbeatEnabledDeviceIds` 热开启指定设备，或通过 `HeartbeatSampleRate` 对设备做稳定采样。日志级别、路径、滚动保留和异步缓冲配置集中在 `src/Gateway/DeviceSocket.Host/Configuration/Logging/serilog.json`；Docker 部署将对应配置挂载到容器内以保留热更新能力。详细字段、EventId 和异常策略参见 `docs/architecture/logging.md`。
 
 ## 连接容量限制
 
-Gateway 对 376.1 和 DL/T 645 使用同一个进程级连接配额，默认最大连接数为 70,000。配置位置为 `DeviceSocket:ConnectionLimit:MaxConnections`；容量检查通过 SuperSocket `MiddlewareBase.RegisterSession` 执行，达到上限时返回 `false`，由 SuperSocket 2.1.0 立即以 `Rejected` 原因关闭，不会进入登录、协议解析和设备注册流程。
+Gateway 对 376.1 和 DL/T 645 使用同一个进程级连接配额，默认最大连接数为 85,000，为 80,000 条目标连接预留少量接入余量。配置位置为 `DeviceSocket:ConnectionLimit:MaxConnections`；容量检查通过 SuperSocket `MiddlewareBase.RegisterSession` 执行，达到上限时返回 `false`，由 SuperSocket 2.1.0 立即以 `Rejected` 原因关闭，不会进入登录、协议解析和设备注册流程。
 
 当前连接数继续通过原有 `GET /api/status/connections` 查询。拒绝洪峰只记录前十次和每一千次告警，避免恶意或异常重连产生过量磁盘日志。
 
@@ -152,4 +165,4 @@ Gateway 对 376.1 和 DL/T 645 使用同一个进程级连接配额，默认最�
 - 上报业务异步分发、Kafka/Outbox 和各协议的响应匹配规则属于下一阶段；当前已建立 `MsgId`、SessionEpoch、节点租约、Gateway 幂等、可靠消息状态机和自动重试基础。
 - 6 万连接需要在独立 8 核 16 GB 环境分阶段压测，本地开发阶段以业务链路通畅和异常隔离为目标。
 
-生产化的分阶段改造内容、测试矩阵和上线门槛参见 `docs/architecture/production-readiness-plan.md`。
+TCP 连接容量、僵尸回收、KeepAlive、重复登录关闭和发送背压参数参见 `docs/architecture/tcp-connection-layer.md`。生产化的其余分阶段改造内容、测试矩阵和上线门槛参见 `docs/architecture/production-readiness-plan.md`。

@@ -10,5 +10,6 @@ public sealed record ProtocolMessageContext<TFrame>(
     IAppSession Session,
     TFrame Frame,
     string MsgId,
-    DateTimeOffset ReceivedAt)
+    DateTimeOffset ReceivedAt,
+    bool RecordTraffic = true)
     where TFrame : IProtocolFrame;

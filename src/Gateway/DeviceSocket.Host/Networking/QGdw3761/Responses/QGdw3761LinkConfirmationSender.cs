@@ -2,6 +2,8 @@ using DeviceSocket.Core.Protocols.Common;
 using DeviceSocket.Core.Protocols.QGdw3761;
 using DeviceSocket.Core.Runtime.Messages;
 using DeviceSocket.Core.Runtime.Metrics;
+using DeviceSocket.Host.Configuration.Logging.Messages;
+using DeviceSocket.Host.Networking.Common;
 using DeviceSocket.Host.Networking.Processing.Common;
 
 namespace DeviceSocket.Host.Networking.QGdw3761.Responses;
@@ -12,6 +14,7 @@ namespace DeviceSocket.Host.Networking.QGdw3761.Responses;
 public sealed class QGdw3761LinkConfirmationSender(
     RuntimeMetrics metrics,
     IRecentStore<DeviceErrorEvent> errors,
+    DeviceTcpSessionManager sessionManager,
     IDeviceTrafficSink trafficSink,
     ILogger<QGdw3761LinkConfirmationSender> logger)
 {
@@ -25,18 +28,26 @@ public sealed class QGdw3761LinkConfirmationSender(
         try
         {
             var response = QGdw3761Codec.CreateLinkConfirmation(request);
-            await session.SendAsync(response);
+            await sessionManager.SendAsync(session.SessionID, response);
             metrics.MessageSent();
-            trafficSink.TryWrite(new DeviceTrafficRecord(
-                DateTimeOffset.UtcNow,
-                context.MsgId,
-                MessageDirection.Downstream,
-                request.Protocol,
-                request.DeviceId,
-                session.SessionID,
-                response.Length,
-                HexCodec.ToHex(response),
-                Source: "LinkConfirmation"));
+            if (request.TrafficKind == ProtocolTrafficKind.Heartbeat)
+                metrics.HeartbeatConfirmationSent();
+            if (context.RecordTraffic)
+            {
+                trafficSink.TryWrite(new DeviceTrafficRecord(
+                    DateTimeOffset.UtcNow,
+                    context.MsgId,
+                    MessageDirection.Downstream,
+                    request.Protocol,
+                    request.DeviceId,
+                    session.SessionID,
+                    response.Length,
+                    HexCodec.ToHex(response),
+                    Source: "LinkConfirmation",
+                    TrafficKind: request.TrafficKind == ProtocolTrafficKind.Heartbeat
+                        ? ProtocolTrafficKind.HeartbeatConfirmation
+                        : ProtocolTrafficKind.LinkConfirmation));
+            }
         }
         catch (Exception exception)
         {
@@ -51,11 +62,18 @@ public sealed class QGdw3761LinkConfirmationSender(
                 session.SessionID,
                 session.RemoteEndPoint?.ToString(),
                 TruncateHex(request.Raw)));
-            SafeLog(() => logger.LogWarning(
-                exception,
-                "376.1 confirmation failed for {DeviceId} / {SessionId}",
-                request.DeviceId,
-                session.SessionID));
+            try
+            {
+                ProtocolLogMessages.LinkConfirmationFailed(
+                    logger,
+                    request.DeviceId,
+                    session.SessionID,
+                    exception);
+            }
+            catch
+            {
+                // 确认日志失败不能覆盖原始发送错误记录。
+            }
         }
     }
 
@@ -66,15 +84,4 @@ public sealed class QGdw3761LinkConfirmationSender(
         return bytes.Length > maximumBytes ? $"{hex}..." : hex;
     }
 
-    private static void SafeLog(Action writeLog)
-    {
-        try
-        {
-            writeLog();
-        }
-        catch
-        {
-            // 确认日志失败不能影响设备收包处理。
-        }
-    }
 }
