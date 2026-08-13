@@ -43,6 +43,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DeviceSocket.Cluster.Grains
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DeviceSocket.Cluster.Silo", "src\Cluster\DeviceSocket.Cluster.Silo\DeviceSocket.Cluster.Silo.csproj", "{697CA10C-E4C4-4A72-A83F-6FAE9643898A}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DeviceSocket.Cluster.Persistence", "src\Cluster\DeviceSocket.Cluster.Persistence\DeviceSocket.Cluster.Persistence.csproj", "{B1E79F14-A1E8-4DD5-AC6C-82E084661D7B}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -104,6 +106,10 @@ Global
 		{697CA10C-E4C4-4A72-A83F-6FAE9643898A}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{697CA10C-E4C4-4A72-A83F-6FAE9643898A}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{697CA10C-E4C4-4A72-A83F-6FAE9643898A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B1E79F14-A1E8-4DD5-AC6C-82E084661D7B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B1E79F14-A1E8-4DD5-AC6C-82E084661D7B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B1E79F14-A1E8-4DD5-AC6C-82E084661D7B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B1E79F14-A1E8-4DD5-AC6C-82E084661D7B}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{4C3A7D45-50C7-4C66-906F-753766EA5F44} = {03DBDD49-68BE-4CE2-939B-16CA631B611E}
@@ -123,5 +129,6 @@ Global
 		{089E72EE-3BB7-4DEE-98E1-283FC19E8CD6} = {2368CBDA-98D5-449E-BAEE-639A3716DDA9}
 		{64444374-B77E-4B52-8719-E4560862DDC8} = {2368CBDA-98D5-449E-BAEE-639A3716DDA9}
 		{697CA10C-E4C4-4A72-A83F-6FAE9643898A} = {2368CBDA-98D5-449E-BAEE-639A3716DDA9}
+		{B1E79F14-A1E8-4DD5-AC6C-82E084661D7B} = {2368CBDA-98D5-449E-BAEE-639A3716DDA9}
 	EndGlobalSection
 EndGlobal

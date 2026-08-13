@@ -1,77 +1,176 @@
-# 设备集群与内部 RPC 架构
+# 设备集群与可靠命令架构
 
-## 服务边界
+## 容量边界
+
+- Orleans Cluster 按接近 100 万设备同时在线设计。
+- 单个 `DeviceSocket.Host` 只承担 6～8 万条 TCP 连接，百万在线设备需要多个 Gateway 节点共同承载。
+- Gateway 数量和 Silo 数量独立扩展；Gateway 保存真实 Socket，Silo 不保存连接对象。
+- 本阶段只完成 Orleans 闭环和 SQL Server 持久化，Gateway 上行协议 Handler 接入回复入口、Kafka 和业务查询库不在本阶段范围内。
 
 ```text
-设备
-  │ 376.1 / 645 TCP
-  ▼
-Gateway ──Orleans Client──> Cluster Silo <──Orleans Client── 业务服务
-  ▲                              │
-  └────── MagicOnion Unary ──────┘
+业务入口 / 未来 Kafka
+        │
+        ▼
+   IDeviceGrain ───────────────> GatewayNodeGrain ──MagicOnion──> DeviceSocket.Host
+        │                                                        │
+        ├──设备级唯一执行通道                                      ▼
+        │                                                       Device
+        ▼
+IDeviceCommandGrain
+        ▲
+        │ 到期唤醒
+DeviceCommandSchedulerGrain（固定分片）
 ```
 
-- Gateway 保存真实 SuperSocket Session，只负责连接、协议解析、日志和原始报文收发。
-- Cluster Silo 保存可序列化的设备路由、网关租约、SessionEpoch 和可靠消息状态。
-- 业务服务直接通过 Orleans Client 调用 `IDeviceGrain`，不再经过独立 CommandCenter 和额外 HTTP 调用。
-- `IDeviceGrain` 是设备消息统一入口；`IDeviceCommandGrain` 按 MsgId 独立管理可靠消息的持久化、重试、到期和确认。
-- MagicOnion 使用 Unary 请求响应，不使用 StreamingHub 承担关键下发。
+## Grain 职责
 
-## 登录与路由
+### DeviceGrain
 
-1. Gateway 在本地内存注册设备 Session。
-2. 376.1 登录确认立即在本地发送，不等待 Orleans。
-3. 登录事件进入 65536 容量的有界路由队列。
-4. 后台 Worker 调用 `IDeviceGrain.RegisterConnectionAsync`。
-5. Grain 在新 Session 登录时递增 `SessionEpoch`。
-6. Gateway 只在 Session 仍匹配时把 Epoch 写回本地连接快照。
-7. 心跳刷新设备路由租约；断开事件按 GatewayNodeId 和 SessionId 条件失效路由。
+`IDeviceGrain` 是设备消息统一入口。每个 DeviceId 的 Grain 调用天然串行，状态只保存：
 
-上述条件更新用于解决“旧连接关闭事件晚于设备重连到达”的竞态，旧事件不能删除或覆盖新 Session。
+- 当前 Gateway、SessionId、SessionEpoch 和路由租约；
+- 当前占用设备一问一答通道的 MsgId；
+- 是否存在待处理工作、下一唤醒时间和调度版本；
+- 固定 Scheduler 分片号和最后分配的设备命令顺序号。
 
-## 下发链路
+DeviceGrain 不保存完整命令队列，不创建设备级 Timer/Reminder。`TouchAsync` 每次校验 Session，但默认每 30 秒最多持久化一次路由心跳，避免百万在线设备把每次心跳都转化为 SQL UPDATE。
 
-### 普通消息
+### DeviceCommandGrain
 
-1. 业务服务取得目标 `IDeviceGrain`。
-2. 调用 `SendBestEffortMessageAsync`。
-3. DeviceGrain 查询设备路由和网关节点租约。
-4. Silo 根据网关 `RpcEndpoint` 复用 MagicOnion gRPC Channel。
-5. Gateway 校验 DeviceId、Protocol、SessionId 和 SessionEpoch，然后写入 Socket。
-6. 离线、路由失效或调用失败直接返回，不持久化、不自动重试。
+每个 MsgId 对应一个 `IDeviceCommandGrain`，保存完整报文和运行状态：
 
-### 重要消息
+- `EnqueuePending`、`Queued`、`Dispatching`、`AwaitingConfirmation`；
+- `RetryPending`、`Confirmed`、`CompletedWithoutConfirmation`、`Expired`、`Failed`、`Cancelled`；
+- NotBefore、ExpiresAt、ReplyDeadline、MaxAttempts 和退避时间；
+- Priority、DeviceSequence、ActionVersion 和 ActiveSessionEpoch。
+- TerminalAt 和 PayloadCompactedAt，用于终态热数据压缩和物理清理。
 
-1. 业务服务生成全局唯一 `MsgId`，调用 `SendReliableMessageAsync`。
-2. DeviceGrain 取得以 MsgId 为主键的 `IDeviceCommandGrain`。
-3. CommandGrain 先把报文、到期时间和状态持久化到 `CommandStore`。
-4. DeviceGrain 选择当前 Gateway，并通过 MagicOnion 执行首次下发。
-5. Gateway 使用 `MsgId + AttemptNo` 去重，然后校验当前 Session 并写入 Socket。
-6. CommandGrain 根据结果进入 `Completed`、`AwaitingConfirmation`、`RetryPending`、`Dispatching` 或 `Failed`。
-7. Orleans Reminder 在默认五分钟到期前调度后续重试；到期后进入 `Expired`。
+CommandGrain 不注册 Timer/Reminder。所有异步结果都校验 AttemptNo 和 ActionVersion，设备回复还要校验 SessionEpoch。
 
-`Completed` 不是设备确认。对必须收到确认的消息，需要针对具体 AFN（应用层功能码）、功能码和 645 控制码建立响应匹配规则，再调用 `IDeviceCommandGrain.ConfirmAsync` 更新为 `Confirmed`。
+### DeviceCommandSchedulerGrain
 
-Reminder 调度 DeviceGrain 时使用 Orleans 单向消息，DeviceGrain 完成 Gateway 调用后再把结果写回 CommandGrain。这样可以避免业务调用与后台重试同时发生时，两个 Grain 互相等待形成调用环。
+设备使用稳定 FNV-1a 哈希映射到固定分片：
 
-## 异常语义
+```text
+ShardId = StableHash(DeviceId) & (ShardCount - 1)
+```
 
-- Orleans 暂时失败：路由事件最多重试三次，Socket 消息处理不因远程异常崩溃。
-- Gateway RPC 结果不确定：CommandGrain 保持相同 AttemptNo 重试，Gateway 可通过 `MsgId + AttemptNo` 返回已处理结果。
-- Gateway 明确未写入：CommandGrain 增加 AttemptNo 后重试，避免把一次确定失败永久缓存。
-- 设备重连：旧 SessionId 或 SessionEpoch 会被 Gateway 拒绝为 `StaleSession`。
-- 网关重启：InstanceId 改变，旧节点租约过期；设备重连后建立新路由。
-- 重复 MsgId：内容一致时返回原状态；内容冲突时拒绝，不能用一个 MsgId 表示两条消息。
-- 日志磁盘异常：只记录错误，不抛回协议处理线程；有界队列防止日志积压无限占用内存。
+默认 `ShardCount=1024`，必须是 2 的幂。每个分片只持有：
 
-## 当前存储与生产替换点
+- 一个按 DueAt 排序的内存最小堆；
+- 一个始终指向最近任务的动态 one-shot Timer；
+- 一个低频持久化 Reminder，用于 Silo 退出后重建内存堆。
 
-当前 Silo 使用 `DeviceStore`、`GatewayStore`、`CommandStore` 和内存 Reminder，仅用于本机开发。生产环境至少需要替换：
+Reminder 数量固定为分片数，不随设备或命令数量增长。Silo 启动后 `DeviceCommandSchedulerBootstrapService` 分批幂等激活所有分片。每次恢复从 SQL 读取未来两分钟窗口，并修复超过恢复时间仍为 `EnqueuePending` 的命令。
 
-- Orleans 集群发现。
-- Grain 持久化存储。
-- 可靠消息与 Reminder 持久化、历史指令归档和 Outbox。
-- Kafka 上报事件与失败重放。
-- 内部 MagicOnion 的 mTLS 或服务身份认证。
+## 一问一答流程
 
-契约项目保持不变，替换工作应集中在 Silo 配置、Infrastructure 和部署配置中。
+1. DeviceGrain 为命令保留设备内顺序号。
+2. CommandGrain 先持久化完整命令，状态为 `EnqueuePending`。
+3. DeviceGrain 持久化 `HasPendingWork` 和 `NextWakeAt`。
+4. CommandGrain 转为 `Queued`；若步骤 2、3 之间退出，Scheduler 后续扫描并幂等修复。
+5. DeviceGrain 只在设备通道空闲时，从 Command 类型表索引选择已经到期的最高优先级命令。
+6. DeviceGrain 把命令设为当前 Active，再通过 MagicOnion 下发到当前 Gateway。
+7. 写入 Socket 后进入 `AwaitingConfirmation`，在设备回复或回复截止时间到达前不会发送下一条命令。
+8. 成功回复进入 `Confirmed` 并释放设备通道；失败回复、回复超时或明确未写入按 MaxAttempts 和退避策略重试。
+9. ExpiresAt 到达后进入 `Expired`；最大次数耗尽进入 `Failed`，两者都释放设备通道。
+
+同设备批量入口只负责批量受理和连续分配顺序号，执行仍严格逐条一问一答。优先级只重排等待命令，不抢占已经 Active 的命令。未来命令未到 NotBefore 时不会阻塞已经到期的其他命令。
+
+## 调用方向与幂等
+
+关键同步调用保持单向依赖：
+
+```text
+业务入口 / Scheduler -> DeviceGrain -> CommandGrain
+                              │
+                              └────> GatewayNodeGrain / Gateway RPC
+```
+
+CommandGrain 不同步反调 DeviceGrain，避免 Grain 循环等待。Scheduler 到 DeviceGrain、DeviceGrain 到 Scheduler 的通知使用 Orleans OneWay；状态先写 SQL，再发送通知。通知丢失时由分片恢复扫描补齐。
+
+Gateway 对可能重复的物理下发继续使用 `MsgId + AttemptNo` 去重：
+
+- 明确未写入时增加 AttemptNo；
+- 无法判断是否写入时保持相同 AttemptNo；
+- 旧 ActionVersion 的结果不能覆盖新状态；
+- 旧 SessionEpoch 的设备回复不能确认重连后的命令。
+
+## SQL Server 持久化
+
+应用状态使用自定义 `IGrainStorage`，数据库方言和连接创建分别由 `IRelationalGrainStorageDialect`、`IRelationalConnectionFactory` 隔离。首期实现使用 `Microsoft.Data.SqlClient`；未来替换数据库时增加连接工厂、方言和迁移，不修改 Grain 状态机。
+
+每种 Grain 类型一张表：
+
+| 命名存储 | SQL Server 表 | 内容 |
+| --- | --- | --- |
+| `DeviceStore` | `orleans_app.OrleansDeviceState` | 路由、Active 命令、NextWakeAt |
+| `CommandStore` | `orleans_app.OrleansDeviceCommandState` | Payload、状态、回复超时、重试策略 |
+| `GatewayStore` | `orleans_app.OrleansGatewayNodeState` | Gateway 实例和租约 |
+| `SchedulerStore` | `orleans_app.OrleansDeviceCommandSchedulerState` | 分片恢复时间和统计水位 |
+
+每张表保存 Orleans 二进制 State、SchemaVersion 和 bigint ETag。调度所需字段同时作为结构化列原子更新，避免扫描或反序列化 Payload：
+
+- 设备到期索引：`SchedulerShard + HasPendingWork + NextWakeAt`；
+- 设备队列索引：`DeviceId + Status + NotBefore + Priority DESC + DeviceSequence`；
+- 入队恢复索引：`SchedulerShard + Status + EnqueueRecoveryAt`。
+- 终态删除索引：`SchedulerShard + TerminalAt`；
+- Payload 压缩索引：`SchedulerShard + PayloadCompactedAt + TerminalAt`。
+
+## CommandGrain 历史清理
+
+命令执行生命周期与业务历史查询分开保存。Kafka 和业务查询库负责长期历史；Orleans 的 `OrleansDeviceCommandState` 只保留调度闭环需要的短期状态：
+
+1. `Confirmed`、`CompletedWithoutConfirmation`、`Expired`、`Failed`、`Cancelled` 首次进入时记录 `TerminalAt`。
+2. 终态满 `PayloadRetentionDays=7` 天后，由对应 CommandGrain 清空 Payload，保留 PayloadHash、状态、失败说明、尝试次数和时间。
+3. 终态满 `CommandRetentionDays=30` 天后，调用 `ClearStateAsync` 物理删除整条 CommandGrain 状态。
+4. 非终态命令不因保留期限直接删除。回复超时先按 MaxAttempts 重试并进入 `Failed`，整体 ExpiresAt 到期则进入 `Expired`，之后才参与清理。
+
+清理复用现有 1024 个 `DeviceCommandSchedulerGrain`，不新增设备级或命令级 Timer/Reminder。首次扫描按分片编号分散到一个清理周期内；每个分片按 `CleanupBatchSize` 和 `CleanupMaxBatchesPerRun` 有界处理，并以固定 16 路并发调用候选 CommandGrain。SQL 只负责返回 MsgId，CommandGrain 在串行上下文中再次校验终态和 TerminalAt，因此迟到回复、活动命令或旧扫描结果不能被误删。
+
+现有表升级时会新增两个可空时间列和两个清理索引；旧终态记录按原 `UpdatedAt` 分批回填 `TerminalAt`。生产环境若关闭 `AutoCreateSchema`，必须在切换新版 Silo 前通过受控数据库迁移执行等价 DDL。
+
+`AutoCreateSchema=true` 时首次访问会幂等创建四张应用表。生产环境可在首次迁移完成后设为 false，让运行账号只保留读写权限。
+
+Orleans Membership 和 Reminder 使用官方 ADO.NET 表，不属于应用 Grain 类型表。部署数据库必须依次执行与 Orleans 8.2.0 对应的官方脚本：
+
+1. [SQLServer-Main.sql](https://github.com/dotnet/orleans/blob/v8.2.0/src/AdoNet/Shared/SQLServer-Main.sql)
+2. [SQLServer-Clustering.sql](https://github.com/dotnet/orleans/blob/v8.2.0/src/AdoNet/Orleans.Clustering.AdoNet/SQLServer-Clustering.sql)
+3. [SQLServer-Reminders.sql](https://github.com/dotnet/orleans/blob/v8.2.0/src/AdoNet/Orleans.Reminders.AdoNet/SQLServer-Reminders.sql)
+
+应用没有使用 Orleans 通用 ADO.NET Grain Persistence 表，因此不需要执行 `SQLServer-Persistence.sql`。
+
+## 配置
+
+主要配置节：
+
+- `Orleans:Cluster`：ClusterId、ServiceId、Silo/Gateway 端口、AdvertisedIPAddress；
+- `Orleans:Persistence`：连接字符串、Schema、命令超时、自动建表和四张表映射；
+- `Orleans:CommandScheduling`：分片数、恢复窗口、批量上限、TTL、回复超时、最大次数、退避、路由写入合并间隔，以及整数单位的清理配置。
+
+清理配置均使用整数，不使用 .NET TimeSpan 的天数格式：
+
+```json
+{
+  "PayloadRetentionDays": 7,
+  "CommandRetentionDays": 30,
+  "CleanupScanIntervalMinutes": 15,
+  "CleanupBatchSize": 200,
+  "CleanupMaxBatchesPerRun": 5
+}
+```
+
+连接字符串应由 `Orleans__Persistence__ConnectionString` 或密钥系统覆盖，禁止把生产凭据写入配置文件。多机部署必须覆盖 `AdvertisedIPAddress`，不能使用默认回环地址。
+
+## 当前未接入部分
+
+- Gateway 协议 Handler 尚未调用 `IDeviceGrain.ReceiveCommandReplyAsync`；Orleans 入口、连接代次校验和状态转换已经完成并通过测试。
+- Gateway 仍会把设备活动逐条调用到 Orleans；本阶段只合并 SQL 写入。百万在线设备的最终吞吐还需要后续在 Gateway 合并或批量发布活动事件。
+- Kafka、业务命令历史查询库、跨设备批量拆分和 Control API 不属于本次 Orleans 改造。
+
+## 验收方式
+
+- 常规测试启动真实 Orleans TestingHost，验证设备串行、批量、延迟、回复、超时、重试、取消、过期、旧 Session、恢复状态机，以及终态 Payload 压缩和物理删除前的二次校验。
+- `DeviceCommandCapacityInvariantTests` 每次测试对 100 万个设备编号执行稳定哈希，检查 1024 分片覆盖和热点边界。
+- Windows 验收环境设置 `DEVICESOCKET_SQLSERVER_INTEGRATION=1` 后，LocalDB 测试会创建随机数据库并验证真实 DDL、索引和队首查询，结束后删除数据库。
+- 设置 `DEVICESOCKET_MILLION_SQLSERVER=1` 后，容量测试会临时写入 100 万条 DeviceGrain 状态并验证单分片有界到期扫描；该测试不会在普通 CI 中隐式启动数据库。

@@ -31,4 +31,10 @@ public sealed class CommandAttemptResult
 
     /// <summary>供调用方稳定判断失败类型的结果代码。</summary>
     [Id(7)] public string Code { get; set; } = string.Empty;
+
+    /// <summary>发送时绑定的设备连接代次。</summary>
+    [Id(8)] public long SessionEpoch { get; set; }
+
+    /// <summary>产生本结果的命令动作版本。</summary>
+    [Id(9)] public long ActionVersion { get; set; }
 }

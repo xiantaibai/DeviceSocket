@@ -59,6 +59,7 @@ dotnet run --project tools\DeviceSocket.LoadTester\DeviceSocket.LoadTester.cspro
 | --- | --- |
 | `smoke-3761.json` | 10 台376.1设备的登录、心跳和基础报告冒烟测试 |
 | `smoke-645.json` | 10 台645设备的地址绑定和周期通信冒烟测试 |
+| `intranet-local-5000-10000.json` | 单台本地负载机分阶段模拟5,000和10,000台376.1终端 |
 | `restart-smoke.json` | 10 台376.1设备的手工停服、重启和恢复验收 |
 | `restart-storm.json` | 10,000 台设备在 Gateway 重启后的集中重连压力 |
 | `protocol-chaos-3761.json` | 时延、丢包、黑洞、坏校验、半包、粘包、断线波次和恢复组合测试 |
@@ -66,6 +67,20 @@ dotnet run --project tools\DeviceSocket.LoadTester\DeviceSocket.LoadTester.cspro
 | `capacity-limit-645.json` | 1,000 台设备冲击配置为 500 的服务端连接上限 |
 | `soak-60000.json` | 60,000 台设备的多机爬升和六小时长稳测试 |
 | `soak-80000.json` | 80,000 台设备的多机爬升和六小时上限长稳测试 |
+
+### 本地连接内网 Gateway 的5,000～10,000终端测试
+
+复制 `intranet-local-5000-10000.json`，至少把两个 `CHANGE-ME-INTRANET-IP` 替换为公司内网 Gateway 地址。默认只连接376.1的 TCP 5001端口，并关闭状态 API 观测，所以只替换 `target.host` 即可运行；如果本机可以访问 Gateway 的 HTTP 5080端口，可把 `serverObservation.enabled` 改为 `true`，同时替换 `statusUrl`，并按需增加服务端认证设备验收门槛。
+
+该场景依次执行：60秒爬升至5,000台、稳定5分钟、90秒扩展至10,000台、稳定10分钟、10秒冷却下线。连接速率默认每秒250条，心跳为60秒加10秒随机抖动，断线后采用指数退避重连，避免内网服务突然承受同步重连风暴。
+
+```powershell
+dotnet run --project tools\DeviceSocket.LoadTester\DeviceSocket.LoadTester.csproj -- `
+  run --config tools\DeviceSocket.LoadTester\Scenarios\intranet-local-5000-10000.json `
+  --run-id intranet-local-001
+```
+
+正式运行前先用 `Test-NetConnection <内网IP> -Port 5001` 验证网络和防火墙。Windows 本机还应执行 `netsh int ipv4 show dynamicport tcp`；若动态端口范围明显不足以容纳10,000条连接及重连产生的 `TIME_WAIT`，应先停在5,000阶段观察，或换用多台负载机分片测试。
 
 ## 多负载机运行
 

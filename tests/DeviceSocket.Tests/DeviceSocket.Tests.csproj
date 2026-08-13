@@ -12,6 +12,8 @@
   <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="6.0.0" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.2" />
+    <PackageReference Include="Microsoft.Orleans.TestingHost" Version="8.2.0" />
     <PackageReference Include="xunit" Version="2.5.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />
   </ItemGroup>
@@ -22,6 +24,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Cluster\DeviceSocket.Cluster.Contracts\DeviceSocket.Cluster.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\Cluster\DeviceSocket.Cluster.Grains\DeviceSocket.Cluster.Grains.csproj" />
+    <ProjectReference Include="..\..\src\Cluster\DeviceSocket.Cluster.Persistence\DeviceSocket.Cluster.Persistence.csproj" />
     <ProjectReference Include="..\..\src\Gateway\DeviceSocket.Host\DeviceSocket.Host.csproj" />
     <ProjectReference Include="..\..\src\Shared\DeviceSocket.Core\DeviceSocket.Core.csproj" />
     <ProjectReference Include="..\..\src\Infrastructure\DeviceSocket.Infrastructure.Memory\DeviceSocket.Infrastructure.Memory.csproj" />

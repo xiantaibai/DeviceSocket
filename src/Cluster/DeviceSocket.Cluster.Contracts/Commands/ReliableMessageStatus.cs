@@ -17,8 +17,8 @@ public enum ReliableMessageStatus
     /// <summary>设备已经返回成功确认。</summary>
     Confirmed = 3,
 
-    /// <summary>不要求设备确认的消息已经完成。</summary>
-    Completed = 4,
+    /// <summary>消息不要求设备确认，并已在成功写入 Socket 后完成。</summary>
+    CompletedWithoutConfirmation = 4,
 
     /// <summary>确定未写入，等待下一次正式重试。</summary>
     RetryPending = 5,
@@ -30,5 +30,11 @@ public enum ReliableMessageStatus
     Failed = 7,
 
     /// <summary>调用方已经取消消息。</summary>
-    Cancelled = 8
+    Cancelled = 8,
+
+    /// <summary>命令已持久化，但设备执行游标尚未确认接管，可由分片调度器修复。</summary>
+    EnqueuePending = 9,
+
+    /// <summary>命令已经进入设备等待队列，尚未取得设备级执行权。</summary>
+    Queued = 10
 }

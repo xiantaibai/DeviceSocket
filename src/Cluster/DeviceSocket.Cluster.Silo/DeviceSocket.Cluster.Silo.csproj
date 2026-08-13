@@ -10,11 +10,14 @@
 
   <ItemGroup>
     <ProjectReference Include="..\DeviceSocket.Cluster.Grains\DeviceSocket.Cluster.Grains.csproj" />
+    <ProjectReference Include="..\DeviceSocket.Cluster.Persistence\DeviceSocket.Cluster.Persistence.csproj" />
     <ProjectReference Include="..\..\Shared\DeviceSocket.Rpc.Contracts\DeviceSocket.Rpc.Contracts.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="MagicOnion.Client" Version="7.10.2" />
+    <PackageReference Include="Microsoft.Orleans.Clustering.AdoNet" Version="8.2.0" />
+    <PackageReference Include="Microsoft.Orleans.Reminders.AdoNet" Version="8.2.0" />
     <PackageReference Include="Microsoft.Orleans.Server" Version="8.2.0" />
   </ItemGroup>
 

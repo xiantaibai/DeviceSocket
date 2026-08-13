@@ -1,10 +1,11 @@
-<#
+﻿<#
 .SYNOPSIS
 先发布 DeviceSocket.Host，再构建 Linux 容器镜像，并可选导出离线 tar 包。
 
 .DESCRIPTION
 脚本在宿主机执行 dotnet publish，把框架依赖发布产物写入 bin/Release/net8.0/publish，
 随后以 DeviceSocket.Host 项目目录作为 Docker 上下文。脚本只构建或导出镜像，不启动容器。
+文件使用带 BOM 的 UTF-8 编码，以兼容 Windows PowerShell 5.1 对中文脚本的读取规则。
 
 .PARAMETER ImageName
 镜像名称，可包含私有仓库前缀；默认 devicesocket-host。

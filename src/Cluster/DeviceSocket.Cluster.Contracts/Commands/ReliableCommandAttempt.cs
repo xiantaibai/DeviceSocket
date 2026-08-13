@@ -25,4 +25,7 @@ public sealed class ReliableCommandAttempt
 
     /// <summary>跨服务链路编号。</summary>
     [Id(5)] public string TraceId { get; set; } = string.Empty;
+
+    /// <summary>本次命令动作版本，旧版本的发送结果不得覆盖新状态。</summary>
+    [Id(6)] public long ActionVersion { get; set; }
 }

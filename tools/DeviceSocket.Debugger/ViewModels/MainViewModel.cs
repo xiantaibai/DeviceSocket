@@ -19,6 +19,7 @@ public partial class MainViewModel : ViewModelBase, IAsyncDisposable
 {
     private const int MaximumDisplayCharacters = 300_000;
     private readonly CommandSetLoader _commandSetLoader = new();
+    private readonly CommandInputValueMemory _commandInputValueMemory = new();
     private readonly CommandEncoderRegistry _encoderRegistry = new();
     private readonly ICommandSetFilePicker _filePicker;
     private readonly DebugTcpSession _session;
@@ -136,6 +137,10 @@ public partial class MainViewModel : ViewModelBase, IAsyncDisposable
         await _session.DisposeAsync();
     }
 
+    /// <summary>
+    /// 切换具体指令时重建动态输入区，并优先恢复当前协议下用户已经修改过的同名参数。
+    /// </summary>
+    /// <param name="value">指令树新选中的节点；协议或分组节点不重建输入。</param>
     partial void OnSelectedNodeChanged(CommandTreeNodeViewModel? value)
     {
         if (value?.Command is null)
@@ -151,7 +156,12 @@ public partial class MainViewModel : ViewModelBase, IAsyncDisposable
 
         Inputs.Clear();
         foreach (var input in value.Command.Definition.Inputs)
-            Inputs.Add(new CommandInputViewModel(input));
+        {
+            Inputs.Add(new CommandInputViewModel(
+                input,
+                value.Command.Protocol,
+                _commandInputValueMemory));
+        }
         GeneratedHex = string.Empty;
     }
 

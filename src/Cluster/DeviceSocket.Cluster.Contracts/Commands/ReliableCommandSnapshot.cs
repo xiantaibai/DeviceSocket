@@ -49,4 +49,43 @@ public sealed class ReliableCommandSnapshot
 
     /// <summary>是否必须收到设备协议确认。</summary>
     [Id(13)] public bool RequireDeviceConfirmation { get; set; }
+
+    /// <summary>最早允许发送的时间。</summary>
+    [Id(14)] public DateTimeOffset NotBefore { get; set; }
+
+    /// <summary>当前尝试等待设备回复的绝对截止时间。</summary>
+    [Id(15)] public DateTimeOffset? ReplyDeadline { get; set; }
+
+    /// <summary>写入 Socket 后等待设备回复的超时时间。</summary>
+    [Id(16)] public TimeSpan ResponseTimeout { get; set; }
+
+    /// <summary>包括首次发送在内的最大正式尝试次数。</summary>
+    [Id(17)] public int MaxAttempts { get; set; }
+
+    /// <summary>同一设备等待队列中的优先级。</summary>
+    [Id(18)] public int Priority { get; set; }
+
+    /// <summary>设备范围内的命令顺序号。</summary>
+    [Id(19)] public long DeviceSequence { get; set; }
+
+    /// <summary>命令每次改变下一动作时递增的版本，用于丢弃重复或迟到唤醒。</summary>
+    [Id(20)] public long ActionVersion { get; set; }
+
+    /// <summary>设备所属的命令调度分片。</summary>
+    [Id(21)] public int SchedulerShard { get; set; }
+
+    /// <summary>供协议层识别设备应答的稳定匹配键。</summary>
+    [Id(22)] public string ResponseMatcher { get; set; } = string.Empty;
+
+    /// <summary>设备游标未接管命令时，允许恢复扫描介入的时间。</summary>
+    [Id(23)] public DateTimeOffset? EnqueueRecoveryAt { get; set; }
+
+    /// <summary>本次实际下发所绑定的设备连接代次，用于拒绝旧连接迟到回复。</summary>
+    [Id(24)] public long ActiveSessionEpoch { get; set; }
+
+    /// <summary>命令首次进入 Confirmed、CompletedWithoutConfirmation、Expired、Failed 或 Cancelled 终态的时间。</summary>
+    [Id(25)] public DateTimeOffset? TerminalAt { get; set; }
+
+    /// <summary>终态命令为降低热存储容量而清空 Payload 的时间；空值表示尚未压缩。</summary>
+    [Id(26)] public DateTimeOffset? PayloadCompactedAt { get; set; }
 }

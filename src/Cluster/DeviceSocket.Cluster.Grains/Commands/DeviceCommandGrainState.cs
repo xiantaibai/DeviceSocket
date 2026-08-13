@@ -4,7 +4,7 @@ using Orleans;
 namespace DeviceSocket.Cluster.Grains.Commands;
 
 /// <summary>
-/// 单条可靠消息的持久化状态；存储提供程序可从内存替换为 Redis 或数据库。
+/// 单条可靠消息的持久化状态；报文正文和完整运行状态只在 CommandGrain 类型表保存。
 /// </summary>
 [GenerateSerializer]
 public sealed class DeviceCommandGrainState

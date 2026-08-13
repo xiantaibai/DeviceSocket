@@ -31,4 +31,25 @@ public sealed class ReliableCommandRegistration
 
     /// <summary>是否必须收到设备协议确认才算完成。</summary>
     [Id(7)] public bool RequireDeviceConfirmation { get; set; }
+
+    /// <summary>最早允许发送的时间。</summary>
+    [Id(8)] public DateTimeOffset NotBefore { get; set; }
+
+    /// <summary>写入 Socket 后等待设备回复的超时时间。</summary>
+    [Id(9)] public TimeSpan ResponseTimeout { get; set; }
+
+    /// <summary>同一设备待发送命令的优先级，数值越大越优先。</summary>
+    [Id(10)] public int Priority { get; set; }
+
+    /// <summary>设备范围内单调递增的命令序号，用于相同优先级下保持先进先出。</summary>
+    [Id(11)] public long DeviceSequence { get; set; }
+
+    /// <summary>包括首次发送在内的最大正式尝试次数。</summary>
+    [Id(12)] public int MaxAttempts { get; set; }
+
+    /// <summary>设备所属的命令调度分片。</summary>
+    [Id(13)] public int SchedulerShard { get; set; }
+
+    /// <summary>供协议层识别设备应答的稳定匹配键。</summary>
+    [Id(14)] public string ResponseMatcher { get; set; } = string.Empty;
 }

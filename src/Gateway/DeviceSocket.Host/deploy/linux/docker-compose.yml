@@ -3,8 +3,8 @@ name: devicesocket
 services:
   gateway:
     # 通过 .env 切换本地加载、私有仓库或版本化镜像，生产环境不要长期使用浮动 latest。
-    image: "${DEVICE_SOCKET_IMAGE:-devicesocket-host:latest}"
-    container_name: "${DEVICE_SOCKET_CONTAINER_NAME:-devicesocket-host}"
+    image: "${DEVICE_SOCKET_IMAGE:-devicesocket-host:1.0.0}"
+    container_name: devicesocket-host
 
     # Linux host 网络绕过 Docker bridge NAT；端口直接使用应用的 5001、5002、5080 和 7001。
     network_mode: host
@@ -29,24 +29,27 @@ services:
       ASPNETCORE_ENVIRONMENT: Production
       TZ: "${DEVICE_SOCKET_TIME_ZONE:-Asia/Shanghai}"
 
-      # 单节点 TCP 层压测默认关闭 Orleans；接入生产集群前再切换并配置真实集群发现。
-      Orleans__Enabled: "${ORLEANS_ENABLED:-false}"
-      Gateway__NodeId: "${GATEWAY_NODE_ID:-gateway-linux-01}"
-      Gateway__RpcEndpoint: http://127.0.0.1:7001
-
-      # 8 万目标连接上方保留 5 千接入余量，零表示关闭单 IP 限制。
-      DeviceSocket__ConnectionLimit__MaxConnections: "${MAX_CONNECTIONS:-85000}"
-      DeviceSocket__ConnectionLimit__MaxUnauthenticatedConnections: "${MAX_UNAUTHENTICATED_CONNECTIONS:-5000}"
-      DeviceSocket__ConnectionLimit__MaxConnectionsPerIp: "${MAX_CONNECTIONS_PER_IP:-0}"
-      DeviceSocket__ConnectionLimit__MaxConnectionsPerSecond: "${MAX_CONNECTIONS_PER_SECOND:-5000}"
-      DeviceSocket__ConnectionLimit__ReceiveBufferSize: "${RECEIVE_BUFFER_SIZE:-4096}"
-      DeviceSocket__ConnectionLimit__SendBufferSize: "${SEND_BUFFER_SIZE:-4096}"
-
     volumes:
-      # 宿主机目录必须预先创建并授权给镜像内 UID 1654。
-      - ${DEVICE_SOCKET_LOG_DIR:-/data/devicesocket/logs}:/app/logs
-      # 单独挂载后可热更新心跳设备列表、采样比例和文件保留策略。
-      - ./config/serilog.json:/app/Configuration/Logging/serilog.json:ro
+      # 应用参数统一由宿主机 appsettings.json 管理，避免再被 Compose 环境变量隐式覆盖。
+      - type: bind
+        source: "${DEVICE_SOCKET_CONFIG_DIR:-/data/config/devicesocket}/appsettings.json"
+        target: /app/appsettings.json
+        read_only: true
+        bind:
+          create_host_path: false
+      # Serilog 独立配置支持按设备调整心跳日志和文件保留策略。
+      - type: bind
+        source: "${DEVICE_SOCKET_CONFIG_DIR:-/data/config/devicesocket}/serilog.json"
+        target: /app/Configuration/Logging/serilog.json
+        read_only: true
+        bind:
+          create_host_path: false
+      # 日志目录必须预先授权给镜像内 UID/GID 1654；禁止由 Docker 自动创建 root 目录。
+      - type: bind
+        source: "${DEVICE_SOCKET_LOG_DIR:-/data/logs/devicesocket}"
+        target: /app/logs
+        bind:
+          create_host_path: false
 
     # 除日志挂载和 /tmp 外保持镜像只读，减少容器被入侵后的持久化写入面。
     read_only: true

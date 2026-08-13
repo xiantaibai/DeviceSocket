@@ -35,7 +35,7 @@
 
 当前限制：
 
-- Orleans 使用本机单 Silo、内存 Grain Storage 和内存 Reminder；
+- Orleans 应用 Grain 已切换为 SQL Server 独立类型表，集群成员和 Reminder 使用 ADO.NET；生产数据库仍需执行官方 Membership/Reminder 初始化脚本并完成多 Silo 实际部署演练；
 - API、Swagger 和 MagicOnion 尚未配置生产认证与 TLS；
 - 协议响应尚未关联到可靠消息的 `ConfirmAsync`；
 - 路由事件允许丢弃，且没有持久化 Outbox 和周期性对账；
@@ -98,11 +98,13 @@
 
 ### 阶段二：Orleans 持久化与高可用
 
+> 2026-08-11 已完成代码侧第一批：SQL Server 四类 Grain 独立表、可替换关系方言、ADO.NET Membership/Reminder 配置、固定 1024 分片调度器、Timer/Reminder 恢复和 LocalDB 查询集成测试。多 Silo 故障演练、生产备份恢复和容量压测仍需在部署环境完成。
+
 #### 改造内容
 
 1. 生产环境使用至少两个 Silo，开发环境继续保留本机单 Silo 配置。
-2. 选定 SQL Server 或 PostgreSQL 作为首个生产存储实现。
-3. 将集群成员、`DeviceStore`、`GatewayStore`、`CommandStore` 和 Reminder 全部切换到持久化提供程序。
+2. 首个生产存储实现使用 SQL Server，通过连接工厂和 SQL 方言保留替换能力。
+3. 集群成员和 Reminder 使用 Orleans ADO.NET；`DeviceStore`、`GatewayStore`、`CommandStore`、`SchedulerStore` 分别映射到独立应用表。
 4. 为 Grain 状态增加版本字段、向后兼容规则和数据迁移脚本。
 5. 配置数据库连接池、命令超时、重试、熔断和容量告警。
 6. 建立数据库备份、恢复和故障切换流程。
@@ -125,6 +127,8 @@
 - 备份数据可在独立环境完成恢复演练。
 
 ### 阶段三：可靠消息闭环
+
+> 2026-08-11 已完成 Orleans 内部闭环：设备级唯一执行通道、延迟、优先级、同设备批量、回复截止时间、最大次数、重试、到期、旧 Session 拒绝及分片恢复。Gateway 协议响应 Handler 的实际接入仍留在后续 Gateway 改造。
 
 #### 改造内容
 
