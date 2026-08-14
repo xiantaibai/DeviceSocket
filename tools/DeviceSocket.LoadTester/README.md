@@ -14,7 +14,7 @@
 - 可按阶段注入网络时延、上下行丢包/黑洞、非法校验和、半包与粘包。
 - 对需要确认的376.1下行帧和645读请求自动生成协议应答。
 - 可选轮询 Gateway 状态 API，按测试前基线核对本轮新增 TCP 与认证设备峰值，并记录 CPU、内存、线程池、发送积压、Session 扫描和三条日志流丢弃。
-- 多机 `RunId + ShardIndex + ShardCount` 地址分片。
+- 支持固定行政区划下的顺序地址和区间无重复随机地址，多机 `RunId + ShardIndex + ShardCount` 地址分片保持一致。
 - 每秒 JSONL 时间序列、节点 JSON/CSV/Markdown 报告。
 - 可合并延迟直方图及多节点汇总报告。
 - 配置化成功率、在线率、协议错误率和恢复时间验收门槛。
@@ -109,7 +109,9 @@ DeviceSocket.LoadTester report merge --input collected\soak-001 --output collect
 ## 场景配置
 
 - `target`：协议、Gateway 主机和端口。
-- `devices`：全局设备总数、起始地址、376.1 行政区划。
+- `devices`：全局设备总数、设备地址生成模式、起止地址和376.1行政区划。
+- `devices.generationMode`：`sequential` 从 `addressStart` 连续递增；`random` 在 `addressStart`～`addressEnd` 闭区间内无重复抽取。默认 `sequential`，随机模式当前只支持376.1。
+- `devices.administrativeDivision`：376.1设备号前四位，必须填写数据库真实存在的固定行政区划；`addressStart` 对应后五位终端地址的起始值。
 - `devices.spanAdministrativeDivisions`：376.1 设备超过单区划 65,535 个终端地址时，递增行政区划并从终端地址 1 继续；默认关闭，8 万场景显式开启。
 - `connection`：Ramp/Burst、连接速率、并发度和超时。
 - `heartbeat`：心跳间隔、抖动和确认超时。
@@ -121,6 +123,35 @@ DeviceSocket.LoadTester report merge --input collected\soak-001 --output collect
 - `serverObservation`：Gateway 状态 API 采样；启动前先记录基线，容量验收使用本轮新增认证设备峰值；不可用只记录采样失败，不阻断 TCP 负载。
 - `acceptance`：自动验收门槛；省略或设为 `null` 表示不启用该规则。`minimumObservedAuthenticatedDevices` 和 `maximumObservedAuthenticatedDevices` 均指扣除测试前基线后的本轮新增认证设备峰值。
 - `distributed`：运行编号、分片编号和计划启动时间。
+
+正式环境使用数据库已存在设备时，可按下面两种方式配置。376.1终端地址虽然显示为五位十进制文本，但协议字段为16位无符号数，因此有效范围为 `00001`～`65535`。
+
+顺序模式会生成 `3301 + 12001`、`3301 + 12002`、`3301 + 12003`……，其中前四位固定，后五位从起始值递增：
+
+```json
+"devices": {
+  "count": 5000,
+  "generationMode": "sequential",
+  "administrativeDivision": "3301",
+  "addressStart": 12001,
+  "spanAdministrativeDivisions": false
+}
+```
+
+随机模式会从指定闭区间无重复选取设备；同一个 `distributed.runId` 在单机或多分片下得到相同设备集合，修改 RunId 后重新抽取。为保证登录设备确实存在，必须确保该区间内每一个“行政区划 + 终端地址”组合都已在数据库预置：
+
+```json
+"devices": {
+  "count": 5000,
+  "generationMode": "random",
+  "administrativeDivision": "3301",
+  "addressStart": 10001,
+  "addressEnd": 20000,
+  "spanAdministrativeDivisions": false
+}
+```
+
+随机区间容量必须不少于唯一设备数；如果配置了 `duplicateIdentityPercentage`，容量按扣除重复登录连接后的唯一身份数校验。数据库地址存在断号时不要使用覆盖断号的随机区间，应改用多个连续区间分别测试，或使用顺序模式选择一段连续已存在地址。
 
 阶段缩容会先降低预期在线数，再关闭多余设备，避免把正常冷却误判为故障。报告保留最后一个非 Cooldown 阶段作为最终验收快照。
 

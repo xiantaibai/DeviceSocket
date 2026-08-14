@@ -5,6 +5,7 @@ using DeviceSocket.Core.Runtime.Metrics;
 using DeviceSocket.Host.Configuration.Logging.Messages;
 using DeviceSocket.Host.Networking.Cluster;
 using DeviceSocket.Host.Networking.Common;
+using DeviceSocket.Host.Networking.QGdw3761.Commands;
 using DeviceSocket.Rpc.Contracts.Gateway;
 using MagicOnion;
 using MagicOnion.Server;
@@ -21,6 +22,7 @@ public sealed class GatewayCommandService(
     RuntimeMetrics metrics,
     IRecentStore<DeviceErrorEvent> errors,
     IOptions<GatewayNodeOptions> options,
+    QGdw3761CommandCorrelationRegistry qGdw3761Correlations,
     ILogger<GatewayCommandService> logger)
     : ServiceBase<IGatewayCommandService>, IGatewayCommandService
 {
@@ -56,6 +58,25 @@ public sealed class GatewayCommandService(
         if (!string.Equals(snapshot.Protocol.ToString(), request.Protocol, StringComparison.OrdinalIgnoreCase))
             return Response(request.MsgId, GatewayDispatchStatus.InvalidCommand, "请求协议与设备当前连接协议不一致。");
 
+        var payload = request.Payload;
+        // 路由注册回执写回本地在线表存在极短竞态；SessionId 已匹配时优先使用 Silo 请求携带的正数代次，避免合法设备回复被标记为旧连接。
+        var effectiveSessionEpoch = request.SessionEpoch > 0 ? request.SessionEpoch : snapshot.SessionEpoch;
+        if (request.RequireDeviceConfirmation && snapshot.Protocol == DeviceProtocol.QGdw3761)
+        {
+            if (!qGdw3761Correlations.TryPrepare(
+                    request,
+                    snapshot.SessionId,
+                    effectiveSessionEpoch,
+                    DateTimeOffset.UtcNow,
+                    out var prepared,
+                    out var correlationError) || prepared is null)
+            {
+                return Response(request.MsgId, GatewayDispatchStatus.InvalidCommand, correlationError);
+            }
+
+            payload = prepared.Payload;
+        }
+
         try
         {
             using var auditContext = DeviceSendAuditContext.Push(
@@ -63,9 +84,19 @@ public sealed class GatewayCommandService(
                 request.TraceId,
                 "MagicOnionCommand",
                 request.AttemptNo);
-            await connection.SendAsync(request.Payload, Context.CallContext.CancellationToken);
+            await connection.SendAsync(payload, Context.CallContext.CancellationToken);
+            var writtenAt = DateTimeOffset.UtcNow;
+            if (request.RequireDeviceConfirmation && snapshot.Protocol == DeviceProtocol.QGdw3761)
+            {
+                qGdw3761Correlations.MarkWritten(
+                    snapshot.SessionId,
+                    request.MsgId,
+                    request.AttemptNo,
+                    writtenAt,
+                    request.ResponseTimeout);
+            }
             metrics.MessageSent();
-            return Response(request.MsgId, GatewayDispatchStatus.WrittenToSocket, "报文已经写入设备 Socket。", request.Payload.Length);
+            return Response(request.MsgId, GatewayDispatchStatus.WrittenToSocket, "报文已经写入设备 Socket。", payload.Length, writtenAt);
         }
         catch (Exception exception) when (exception is not OperationCanceledException || !Context.CallContext.CancellationToken.IsCancellationRequested)
         {
@@ -79,7 +110,7 @@ public sealed class GatewayCommandService(
                 request.DeviceId,
                 request.SessionId,
                 snapshot.RemoteEndPoint,
-                ToTruncatedHex(request.Payload),
+                ToTruncatedHex(payload),
                 request.TraceId));
             ClusterLogMessages.MagicOnionSendFailed(
                 logger,
@@ -91,14 +122,30 @@ public sealed class GatewayCommandService(
         }
     }
 
-    private SendCommandResponse Response(string msgId, GatewayDispatchStatus status, string message, int bytesWritten = 0) => new()
-    {
-        MsgId = msgId,
-        Status = status,
-        Message = message,
-        BytesWritten = bytesWritten,
-        GatewayNodeId = _options.NodeId
-    };
+    /// <summary>
+    /// 创建携带 Gateway 实际处理时间的稳定 RPC 结果，使 Silo 回复窗口与协议关联表使用相同时间基准。
+    /// </summary>
+    /// <param name="msgId">逻辑消息编号。</param>
+    /// <param name="status">Gateway 确定性处理状态。</param>
+    /// <param name="message">结果说明。</param>
+    /// <param name="bytesWritten">实际写入字节数。</param>
+    /// <param name="occurredAt">处理发生时间；空值使用当前 UTC 时间。</param>
+    /// <returns>MagicOnion 下发回执。</returns>
+    private SendCommandResponse Response(
+        string msgId,
+        GatewayDispatchStatus status,
+        string message,
+        int bytesWritten = 0,
+        DateTimeOffset? occurredAt = null) =>
+        new()
+        {
+            MsgId = msgId,
+            Status = status,
+            Message = message,
+            BytesWritten = bytesWritten,
+            GatewayNodeId = _options.NodeId,
+            OccurredAt = occurredAt ?? DateTimeOffset.UtcNow
+        };
 
     private static string ToTruncatedHex(byte[] bytes)
     {

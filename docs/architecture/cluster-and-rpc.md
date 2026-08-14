@@ -5,7 +5,7 @@
 - Orleans Cluster 按接近 100 万设备同时在线设计。
 - 单个 `DeviceSocket.Host` 只承担 6～8 万条 TCP 连接，百万在线设备需要多个 Gateway 节点共同承载。
 - Gateway 数量和 Silo 数量独立扩展；Gateway 保存真实 Socket，Silo 不保存连接对象。
-- 本阶段只完成 Orleans 闭环和 SQL Server 持久化，Gateway 上行协议 Handler 接入回复入口、Kafka 和业务查询库不在本阶段范围内。
+- 本阶段完成 Orleans 闭环、SQL Server 持久化，以及 Gateway 的 Q/GDW 376.1 `AFN=00H/F3` 协议应答关联；Kafka 和业务查询库不在本阶段范围内。
 
 ```text
 业务入口 / 未来 Kafka
@@ -96,6 +96,8 @@ Gateway 对可能重复的物理下发继续使用 `MsgId + AttemptNo` 去重：
 - 旧 ActionVersion 的结果不能覆盖新状态；
 - 旧 SessionEpoch 的设备回复不能确认重连后的命令。
 
+Q/GDW 376.1 可靠下发还增加协议级幂等：Gateway 为新 MsgId 分配 PSEQ、强制 `CON=1` 并重算 CS；同一 MsgId 的新 AttemptNo 复用 PSEQ。终端的 `AFN=00H/F3` 只有同时匹配 Session、设备、RSEQ 和原 AFN/DA/DT，且没有超过本次回复截止时间，才恢复原 MsgId 并提交 DeviceGrain。硬件侧报文格式、缓存重放和迟到丢弃规则见 [Q/GDW 376.1 可靠命令与终端应答约定](../protocols/qgdw3761-reliable-command-response.md)。
+
 ## SQL Server 持久化
 
 应用状态使用自定义 `IGrainStorage`，数据库方言和连接创建分别由 `IRelationalGrainStorageDialect`、`IRelationalConnectionFactory` 隔离。首期实现使用 `Microsoft.Data.SqlClient`；未来替换数据库时增加连接工厂、方言和迁移，不修改 Grain 状态机。
@@ -147,6 +149,7 @@ Orleans Membership 和 Reminder 使用官方 ADO.NET 表，不属于应用 Grain
 - `Orleans:Cluster`：ClusterId、ServiceId、Silo/Gateway 端口、AdvertisedIPAddress；
 - `Orleans:Persistence`：连接字符串、Schema、命令超时、自动建表和四张表映射；
 - `Orleans:CommandScheduling`：分片数、恢复窗口、批量上限、TTL、回复超时、最大次数、退避、路由写入合并间隔，以及整数单位的清理配置。
+- `DeviceSocket:Protocols:QGdw3761:CommandCorrelation`：单 Gateway 关联容量和节点级清理周期，全部使用整数。
 
 清理配置均使用整数，不使用 .NET TimeSpan 的天数格式：
 
@@ -164,7 +167,7 @@ Orleans Membership 和 Reminder 使用官方 ADO.NET 表，不属于应用 Grain
 
 ## 当前未接入部分
 
-- Gateway 协议 Handler 尚未调用 `IDeviceGrain.ReceiveCommandReplyAsync`；Orleans 入口、连接代次校验和状态转换已经完成并通过测试。
+- 当前 Gateway 应答闭环覆盖 Q/GDW 376.1 `AFN=00H/F3` 逐数据单元确认；需要返回业务数据的查询类命令，应为对应 AFN/Fn 继续增加专用响应 Handler，不能复用 F3 伪造业务数据响应。
 - Gateway 仍会把设备活动逐条调用到 Orleans；本阶段只合并 SQL 写入。百万在线设备的最终吞吐还需要后续在 Gateway 合并或批量发布活动事件。
 - Kafka、业务命令历史查询库、跨设备批量拆分和 Control API 不属于本次 Orleans 改造。
 

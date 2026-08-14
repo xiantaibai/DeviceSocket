@@ -141,7 +141,10 @@ public sealed class DeviceCommandGrain(
             Protocol = snapshot.Protocol,
             Payload = snapshot.Payload.ToArray(),
             TraceId = snapshot.TraceId,
-            ActionVersion = snapshot.ActionVersion
+            ActionVersion = snapshot.ActionVersion,
+            RequireDeviceConfirmation = snapshot.RequireDeviceConfirmation,
+            ResponseTimeout = snapshot.ResponseTimeout,
+            ExpiresAt = snapshot.ExpiresAt
         };
     }
 
@@ -211,7 +214,7 @@ public sealed class DeviceCommandGrain(
     }
 
     /// <summary>
-    /// 记录设备协议确认；只接受当前等待回复的尝试和连接代次。
+    /// 记录设备协议确认；接受当前等待回复的尝试，也接受 Gateway 写入失败但终端在有效窗口内回复的不确定投递。
     /// </summary>
     /// <param name="confirmation">协议层确认结果。</param>
     /// <returns>确认后的命令快照；迟到回复返回原状态。</returns>
@@ -221,8 +224,12 @@ public sealed class DeviceCommandGrain(
             return EmptySnapshot();
 
         var snapshot = state.State.Snapshot;
+        var acceptsCurrentAttempt = snapshot.Status is
+            ReliableMessageStatus.Dispatching or
+            ReliableMessageStatus.AwaitingConfirmation or
+            ReliableMessageStatus.RetryPending;
         if (!string.Equals(confirmation.MsgId, snapshot.MsgId, StringComparison.Ordinal) ||
-            snapshot.Status != ReliableMessageStatus.AwaitingConfirmation ||
+            !acceptsCurrentAttempt ||
             confirmation.AttemptNo != snapshot.AttemptNo ||
             confirmation.SessionEpoch != snapshot.ActiveSessionEpoch ||
             IsTerminal(snapshot.Status))

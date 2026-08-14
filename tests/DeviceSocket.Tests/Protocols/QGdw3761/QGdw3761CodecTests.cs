@@ -74,6 +74,31 @@ public sealed class QGdw3761CodecTests
     }
 
     /// <summary>
+    /// 验证可靠下行准备会保留 SEQ 高位语义、置 CON、重写 PSEQ 和 CS，终端确认则完整回显原 AFN/DA/DT。
+    /// </summary>
+    [Fact]
+    public void ReliableDownstreamAndTerminalConfirmation_RoundTripCorrelationFields()
+    {
+        var bytes = QGdw3761Codec.CreateLinkRequest("1234", 18, QGdw3761LinkMessageKind.Login, sequence: 2);
+        bytes[6] = 0x49;
+        bytes[12] = 0x04;
+        bytes[^2] = QGdw3761Codec.CalculateChecksum(bytes.AsSpan(6, bytes.Length - 8));
+        var command = Assert.IsType<QGdw3761Frame>(QGdw3761Codec.ReadCompleteFrame(bytes).Package);
+
+        var prepared = Assert.IsType<QGdw3761Frame>(QGdw3761Codec.ReadCompleteFrame(
+            QGdw3761Codec.PrepareReliableDownstreamCommand(command, sequence: 9)).Package);
+        var response = Assert.IsType<QGdw3761Frame>(QGdw3761Codec.ReadCompleteFrame(
+            QGdw3761Codec.CreateTerminalConfirmation(prepared)).Package);
+
+        Assert.True(prepared.ConfirmationRequested);
+        Assert.Equal(9, prepared.Sequence);
+        Assert.True(response.IsUpstream);
+        Assert.False(response.IsPrimaryMessage);
+        Assert.Equal(9, response.Sequence);
+        Assert.Equal(new byte[] { prepared.Afn, prepared.Da1, prepared.Da2, prepared.Dt1, prepared.Dt2, 0x00 }, response.DataUnitPayload);
+    }
+
+    /// <summary>
     /// 验证输入半包时请求继续收取数据，不提前消费缓冲区。
     /// </summary>
     [Fact]

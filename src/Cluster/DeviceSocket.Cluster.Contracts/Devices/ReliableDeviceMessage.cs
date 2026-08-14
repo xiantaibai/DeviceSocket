@@ -38,6 +38,6 @@ public sealed class ReliableDeviceMessage
     /// <summary>包括首次发送在内的最大正式尝试次数；零值表示使用 Silo 默认值。</summary>
     [Id(9)] public int MaxAttempts { get; set; }
 
-    /// <summary>供协议层识别应答的稳定匹配键；为空时由协议 Handler 使用 MsgId 匹配。</summary>
+    /// <summary>供特定协议补充语义匹配的稳定键；376.1 始终以 Gateway 生成的 PSEQ 及原 AFN/DA/DT 为主匹配条件，不会把 MsgId 写入协议报文。</summary>
     [Id(10)] public string ResponseMatcher { get; set; } = string.Empty;
 }

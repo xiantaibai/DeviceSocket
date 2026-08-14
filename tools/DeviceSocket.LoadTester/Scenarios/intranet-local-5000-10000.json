@@ -1,13 +1,14 @@
 {
   "target": {
-    "host": "192.168.111.221",
-    "port": 5001,
+    "host": "192.168.111.18",
+    "port": 6666,
     "protocol": "qGdw3761"
   },
   "devices": {
     "count": 10000,
-    "addressStart": 1,
-    "administrativeDivision": "3301"
+    "generationMode": "sequential",
+    "administrativeDivision": "2608",
+    "addressStart": 10001
   },
   "connection": {
     "startMode": "ramp",
@@ -84,7 +85,7 @@
     "writeConsoleSummary": true
   },
   "serverObservation": {
-    "enabled": true,
+    "enabled": false,
     "statusUrl": "http://192.168.111.221:5080/api/status/connections",
     "timeoutSeconds": 3
   },

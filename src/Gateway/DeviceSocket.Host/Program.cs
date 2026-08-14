@@ -78,7 +78,7 @@ builder.Services.AddSingleton<DeviceTcpSessionManager>();
 // BackgroundService 不需要业务代码手动调用，外层 ASP.NET Core Generic Host 会自动启动 ExecuteAsync。
 builder.Services.AddHostedService<DeviceTcpSessionCleanupWorker>();
 builder.Services.AddSingleton<IDeviceTrafficSink, DeviceTrafficLogSink>();
-builder.Services.AddDeviceProtocolProcessing();
+builder.Services.AddDeviceProtocolProcessing(builder.Configuration);
 builder.Services.Configure<GatewayNodeOptions>(builder.Configuration.GetSection(GatewayNodeOptions.SectionName));
 builder.Services.AddSingleton<GatewayCommandDeduplicator>();
 
@@ -90,11 +90,13 @@ if (orleansEnabled)
     builder.Services.AddSingleton<OrleansDeviceRoutePublisher>();
     builder.Services.AddSingleton<IDeviceRoutePublisher>(services => services.GetRequiredService<OrleansDeviceRoutePublisher>());
     builder.Services.AddHostedService(services => services.GetRequiredService<OrleansDeviceRoutePublisher>());
+    builder.Services.AddSingleton<IDeviceCommandReplyPublisher, OrleansDeviceCommandReplyPublisher>();
     builder.Services.AddHostedService<GatewayNodeLeaseWorker>();
 }
 else
 {
     builder.Services.AddSingleton<IDeviceRoutePublisher, NullDeviceRoutePublisher>();
+    builder.Services.AddSingleton<IDeviceCommandReplyPublisher, NullDeviceCommandReplyPublisher>();
 }
 
 builder.Services.AddHostedService<QGdw3761ServerWorker>();

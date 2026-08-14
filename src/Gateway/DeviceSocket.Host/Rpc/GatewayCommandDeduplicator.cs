@@ -29,7 +29,39 @@ public sealed class GatewayCommandDeduplicator
             TrimIfNeeded();
         }
 
-        return await actual.Value;
+        SendCommandResponse response;
+        try
+        {
+            response = await actual.Value;
+        }
+        catch
+        {
+            // 异常任务也不能永久占用幂等键；并发调用仍共享本次异常，之后同 AttemptNo 可以按相同协议事务重试。
+            ((ICollection<KeyValuePair<string, Lazy<Task<SendCommandResponse>>>>)_entries)
+                .Remove(new KeyValuePair<string, Lazy<Task<SendCommandResponse>>>(deduplicationKey, actual));
+            throw;
+        }
+        if (response.Status != GatewayDispatchStatus.WrittenToSocket)
+        {
+            // 失败结果只合并本轮并发调用；后续同 AttemptNo 必须能够再次执行发送，并由协议层复用 PSEQ 保证终端幂等。
+            ((ICollection<KeyValuePair<string, Lazy<Task<SendCommandResponse>>>>)_entries)
+                .Remove(new KeyValuePair<string, Lazy<Task<SendCommandResponse>>>(deduplicationKey, actual));
+            return response;
+        }
+
+        if (ReferenceEquals(candidate, actual))
+            return response;
+
+        // 同一 AttemptNo 的 RPC 重放不能再次写 Socket，但仍要显式返回 Duplicate，避免 Silo 把缓存的失败结果误认为“本次又执行了一次发送”。
+        return new SendCommandResponse
+        {
+            MsgId = response.MsgId,
+            Status = GatewayDispatchStatus.Duplicate,
+            Message = "相同 MsgId 和 AttemptNo 已处理，本次未重复写入设备 Socket。",
+            BytesWritten = response.BytesWritten,
+            GatewayNodeId = response.GatewayNodeId,
+            OccurredAt = response.OccurredAt
+        };
     }
 
     private void TrimIfNeeded()

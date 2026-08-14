@@ -24,6 +24,15 @@ public static class DeviceAddressAllocator
         var duplicateCount = (int)Math.Floor(
             options.Devices.Count * options.Devices.DuplicateIdentityPercentage / 100d);
         var uniqueIdentityCount = Math.Max(1, options.Devices.Count - duplicateCount);
+        var randomAddressRange = options.Devices.GenerationMode == DeviceAddressGenerationMode.Random
+            ? checked(options.Devices.AddressEnd!.Value - options.Devices.AddressStart + 1)
+            : 0;
+        var randomAddressOffset = randomAddressRange > 0
+            ? unchecked((uint)runSeed) % randomAddressRange
+            : 0;
+        var randomAddressStep = randomAddressRange > 0
+            ? FindCoprimeStep(unchecked((uint)CombineSeed(runSeed, uniqueIdentityCount)), randomAddressRange)
+            : 0;
         for (var ordinal = options.Distributed.ShardIndex;
              ordinal < options.Devices.Count;
              ordinal += options.Distributed.ShardCount)
@@ -32,14 +41,13 @@ public static class DeviceAddressAllocator
             var identityOrdinal = ordinal % uniqueIdentityCount;
             if (options.Target.Protocol == LoadProtocol.QGdw3761)
             {
-                // 终端地址零不参与压测；超过 65535 时按显式配置递增四位行政区划并从 1 继续。
-                var linearAddress = options.Devices.AddressStart - 1 + identityOrdinal;
-                var divisionOffset = linearAddress / ushort.MaxValue;
-                var administrativeDivision = (int.Parse(
-                    options.Devices.AdministrativeDivision,
-                    System.Globalization.CultureInfo.InvariantCulture) + divisionOffset)
-                    .ToString("D4", System.Globalization.CultureInfo.InvariantCulture);
-                var terminalAddress = checked((ushort)(linearAddress % ushort.MaxValue + 1));
+                var terminalAddress = options.Devices.GenerationMode == DeviceAddressGenerationMode.Random
+                    ? checked((ushort)(options.Devices.AddressStart +
+                        ((randomAddressOffset + identityOrdinal * randomAddressStep) % randomAddressRange)))
+                    : AllocateSequentialQGdwAddress(options.Devices.AddressStart, identityOrdinal);
+                var administrativeDivision = options.Devices.GenerationMode == DeviceAddressGenerationMode.Random
+                    ? options.Devices.AdministrativeDivision
+                    : AllocateSequentialAdministrativeDivision(options.Devices, identityOrdinal);
                 devices.Add(new VirtualDeviceDescriptor(
                     ordinal,
                     options.Target.Protocol,
@@ -65,6 +73,71 @@ public static class DeviceAddressAllocator
         }
 
         return devices;
+    }
+
+    /// <summary>
+    /// 按顺序模式计算376.1终端地址，跨区划后从地址 1 重新开始。
+    /// </summary>
+    /// <param name="addressStart">第一个行政区划内的起始终端地址。</param>
+    /// <param name="identityOrdinal">唯一设备身份的全局序号。</param>
+    /// <returns>当前设备在所属行政区划内的16位终端地址。</returns>
+    private static ushort AllocateSequentialQGdwAddress(long addressStart, int identityOrdinal)
+    {
+        // 终端地址零不参与压测；线性地址每跨过 65535 个值便映射到下一个行政区划。
+        var linearAddress = addressStart - 1 + identityOrdinal;
+        return checked((ushort)(linearAddress % ushort.MaxValue + 1));
+    }
+
+    /// <summary>
+    /// 按顺序模式计算376.1行政区划；未跨越单区划容量时始终返回配置值。
+    /// </summary>
+    /// <param name="options">设备编号配置。</param>
+    /// <param name="identityOrdinal">唯一设备身份的全局序号。</param>
+    /// <returns>四位十进制行政区划码。</returns>
+    private static string AllocateSequentialAdministrativeDivision(DeviceOptions options, int identityOrdinal)
+    {
+        var linearAddress = options.AddressStart - 1 + identityOrdinal;
+        var divisionOffset = linearAddress / ushort.MaxValue;
+        return (int.Parse(
+                options.AdministrativeDivision,
+                System.Globalization.CultureInfo.InvariantCulture) + divisionOffset)
+            .ToString("D4", System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// 从随机种子派生与区间容量互质的步长，使全局设备序号映射为无重复的伪随机排列。
+    /// </summary>
+    /// <param name="seed">由 RunId 和设备规模派生的稳定种子。</param>
+    /// <param name="range">随机地址闭区间包含的地址数量。</param>
+    /// <returns>区间容量为 1 时返回 0；否则返回小于区间容量且与其互质的正步长。</returns>
+    private static long FindCoprimeStep(uint seed, long range)
+    {
+        if (range == 1)
+            return 0;
+
+        var step = 1 + seed % (range - 1);
+        while (GreatestCommonDivisor(step, range) != 1)
+            step = step + 1 == range ? 1 : step + 1;
+
+        return step;
+    }
+
+    /// <summary>
+    /// 使用欧几里得算法计算两个非负整数的最大公约数。
+    /// </summary>
+    /// <param name="left">第一个非负整数。</param>
+    /// <param name="right">第二个非负整数。</param>
+    /// <returns>两个整数的最大公约数。</returns>
+    private static long GreatestCommonDivisor(long left, long right)
+    {
+        while (right != 0)
+        {
+            var remainder = left % right;
+            left = right;
+            right = remainder;
+        }
+
+        return left;
     }
 
     /// <summary>

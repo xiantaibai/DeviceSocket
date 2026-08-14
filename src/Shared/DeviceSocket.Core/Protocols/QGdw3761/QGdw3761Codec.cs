@@ -164,6 +164,54 @@ public static class QGdw3761Codec
     }
 
     /// <summary>
+    /// 为需要设备确认的下行报文写入 PSEQ（启动帧序号）并置 CON=1，然后重新计算校验和。
+    /// </summary>
+    /// <param name="command">已通过完整性和校验和检查的主站下行启动帧。</param>
+    /// <param name="sequence">本次逻辑命令的 PSEQ，仅使用低 4 位。</param>
+    /// <returns>可直接写入 Socket 的新报文；不修改输入帧持有的 Raw。</returns>
+    /// <exception cref="ArgumentException">报文不是合法的主站下行启动帧时抛出。</exception>
+    public static byte[] PrepareReliableDownstreamCommand(QGdw3761Frame command, byte sequence)
+    {
+        if (!command.IsValid || command.IsUpstream || !command.IsPrimaryMessage ||
+            command.Raw.Length != command.UserDataLength + FixedOverheadLength || command.Raw.Length < 18)
+        {
+            throw new ArgumentException("只能处理包含数据单元标识的合法 376.1 主站下行启动帧。", nameof(command));
+        }
+
+        var result = command.Raw.ToArray();
+        // SEQ 高 3 位的 TpV/FIR/FIN 保持原值；可靠命令必须置 CON=1，低 4 位由 Gateway 统一分配 PSEQ。
+        result[13] = (byte)((result[13] & 0xE0) | 0x10 | (sequence & 0x0F));
+        result[^2] = CalculateChecksum(result.AsSpan(6, command.UserDataLength));
+        return result;
+    }
+
+    /// <summary>
+    /// 为主站下行启动帧生成终端 AFN=00H/F3 逐数据单元确认，RSEQ 复用请求的 PSEQ。
+    /// </summary>
+    /// <param name="request">终端已收到的合法主站下行启动帧。</param>
+    /// <param name="errorCode">协议附录 D 定义的 ERR；0 表示正确，非 0 表示否认。</param>
+    /// <returns>终端应向主站发送的完整确认帧。</returns>
+    /// <exception cref="ArgumentException">请求不是合法主站下行帧时抛出。</exception>
+    public static byte[] CreateTerminalConfirmation(QGdw3761Frame request, byte errorCode = 0)
+    {
+        if (!request.IsValid || request.IsUpstream || !request.IsPrimaryMessage || request.Raw.Length < 18)
+            throw new ArgumentException("只能确认合法的 376.1 主站下行启动帧。", nameof(request));
+
+        var application = new byte[]
+        {
+            0x00,
+            (byte)(0x60 | request.Sequence),
+            0x00, 0x00, 0x04, 0x00,
+            request.Afn,
+            request.Da1, request.Da2, request.Dt1, request.Dt2,
+            errorCode
+        };
+
+        // DIR=1 表示终端上行，PRM=0 表示从动响应，功能码 0 用于确认。
+        return BuildFrame(0x80, request.Raw.AsSpan(7, 5), application);
+    }
+
+    /// <summary>
     /// 创建供模拟终端使用的 AFN=02H 登录、退出登录或心跳上行帧。
     /// </summary>
     /// <param name="administrativeDivision">4 位 BCD 行政区划码。</param>

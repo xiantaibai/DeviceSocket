@@ -31,6 +31,79 @@ public sealed class DeviceAddressAllocatorTests
     }
 
     /// <summary>
+    /// 验证顺序模式保持四位行政区划不变，并将后五位终端地址从配置起点依次递增。
+    /// </summary>
+    [Fact]
+    public void QGdwSequentialMode_UsesFixedDivisionAndIncreasingTerminalAddress()
+    {
+        var options = TestOptionsFactory.Create();
+        options.Devices.Count = 3;
+        options.Devices.AdministrativeDivision = "3712";
+        options.Devices.AddressStart = 12_001;
+
+        var devices = DeviceAddressAllocator.Allocate(options);
+
+        Assert.Equal(
+            ["3761:3712-12001", "3761:3712-12002", "3761:3712-12003"],
+            devices.Select(item => item.DeviceId));
+        Assert.All(devices, item => Assert.Equal("3712", item.AdministrativeDivision));
+    }
+
+    /// <summary>
+    /// 验证随机模式在数据库预置区间内无重复抽取，并可由相同 RunId 跨执行复现。
+    /// </summary>
+    [Fact]
+    public void QGdwRandomMode_IsUniqueBoundedAndReproducible()
+    {
+        var options = TestOptionsFactory.Create();
+        options.Devices.Count = 20;
+        options.Devices.GenerationMode = DeviceAddressGenerationMode.Random;
+        options.Devices.AdministrativeDivision = "3712";
+        options.Devices.AddressStart = 10_001;
+        options.Devices.AddressEnd = 10_100;
+        options.Distributed.RunId = "random-address-test";
+
+        var first = DeviceAddressAllocator.Allocate(options);
+        var second = DeviceAddressAllocator.Allocate(options);
+
+        Assert.Equal(first.Select(item => item.DeviceId), second.Select(item => item.DeviceId));
+        Assert.Equal(20, first.Select(item => item.DeviceId).Distinct(StringComparer.Ordinal).Count());
+        Assert.All(first, item =>
+        {
+            Assert.Equal("3712", item.AdministrativeDivision);
+            Assert.InRange(item.TerminalAddress, (ushort)10_001, (ushort)10_100);
+        });
+    }
+
+    /// <summary>
+    /// 验证随机地址在多分片合并后与单节点生成结果完全一致。
+    /// </summary>
+    [Fact]
+    public void QGdwRandomMode_ShardsMatchSingleNodeAllocation()
+    {
+        var options = TestOptionsFactory.Create();
+        options.Devices.Count = 50;
+        options.Devices.GenerationMode = DeviceAddressGenerationMode.Random;
+        options.Devices.AddressStart = 20_001;
+        options.Devices.AddressEnd = 20_100;
+        options.Distributed.RunId = "random-shard-test";
+        var expected = DeviceAddressAllocator.Allocate(options)
+            .OrderBy(item => item.GlobalOrdinal)
+            .Select(item => item.DeviceId)
+            .ToArray();
+        var actual = new List<VirtualDeviceDescriptor>();
+
+        options.Distributed.ShardCount = 3;
+        for (var shard = 0; shard < options.Distributed.ShardCount; shard++)
+        {
+            options.Distributed.ShardIndex = shard;
+            actual.AddRange(DeviceAddressAllocator.Allocate(options));
+        }
+
+        Assert.Equal(expected, actual.OrderBy(item => item.GlobalOrdinal).Select(item => item.DeviceId));
+    }
+
+    /// <summary>
     /// 验证645表地址始终使用十二位十进制格式。
     /// </summary>
     [Fact]

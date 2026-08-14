@@ -41,4 +41,16 @@ public sealed class SendCommandRequest
     /// </summary>
     [Key(7)]
     public int AttemptNo { get; set; } = 1;
+
+    /// <summary>是否必须收到设备协议确认；为 false 时 Gateway 不创建协议应答关联。</summary>
+    [Key(8)]
+    public bool RequireDeviceConfirmation { get; set; }
+
+    /// <summary>完整报文写入 Socket 后允许设备回复的最长时间。</summary>
+    [Key(9)]
+    public TimeSpan ResponseTimeout { get; set; }
+
+    /// <summary>逻辑命令停止发送和接受设备回复的绝对到期时间。</summary>
+    [Key(10)]
+    public DateTimeOffset ExpiresAt { get; set; }
 }

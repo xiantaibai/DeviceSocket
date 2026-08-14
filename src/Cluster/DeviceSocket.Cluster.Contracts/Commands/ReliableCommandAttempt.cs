@@ -28,4 +28,13 @@ public sealed class ReliableCommandAttempt
 
     /// <summary>本次命令动作版本，旧版本的发送结果不得覆盖新状态。</summary>
     [Id(6)] public long ActionVersion { get; set; }
+
+    /// <summary>是否必须收到设备协议确认；尽力消息为 false，可靠消息为 true。</summary>
+    [Id(7)] public bool RequireDeviceConfirmation { get; set; }
+
+    /// <summary>完整报文写入 Socket 后等待设备回复的最长时间。</summary>
+    [Id(8)] public TimeSpan ResponseTimeout { get; set; }
+
+    /// <summary>逻辑命令停止发送和接受回复的绝对到期时间。</summary>
+    [Id(9)] public DateTimeOffset ExpiresAt { get; set; }
 }

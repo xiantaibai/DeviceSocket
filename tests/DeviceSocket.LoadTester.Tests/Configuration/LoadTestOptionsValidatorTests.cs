@@ -35,6 +35,45 @@ public sealed class LoadTestOptionsValidatorTests
     }
 
     /// <summary>
+    /// 验证随机模式必须提供合法地址上界，且区间必须容纳全部唯一设备。
+    /// </summary>
+    [Fact]
+    public void QGdwRandomAddressRange_IsValidated()
+    {
+        var options = TestOptionsFactory.Create();
+        options.Devices.GenerationMode = DeviceAddressGenerationMode.Random;
+        options.Devices.Count = 10;
+        options.Devices.AddressStart = 100;
+
+        var missingEndErrors = LoadTestOptionsValidator.Validate(options);
+        options.Devices.AddressEnd = 105;
+        var insufficientRangeErrors = LoadTestOptionsValidator.Validate(options);
+
+        Assert.Contains(missingEndErrors, item => item.Contains("addressEnd", StringComparison.Ordinal));
+        Assert.Contains(insufficientRangeErrors, item => item.Contains("区间容量", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// 验证随机模式固定行政区划，并拒绝当前未实现的645随机地址。
+    /// </summary>
+    [Fact]
+    public void RandomMode_RejectsSpanningDivisionAndDlt645()
+    {
+        var options = TestOptionsFactory.Create();
+        options.Devices.GenerationMode = DeviceAddressGenerationMode.Random;
+        options.Devices.AddressEnd = 100;
+        options.Devices.SpanAdministrativeDivisions = true;
+
+        var spanningErrors = LoadTestOptionsValidator.Validate(options);
+        options.Target.Protocol = LoadProtocol.Dlt6452007;
+        options.Devices.SpanAdministrativeDivisions = false;
+        var dltErrors = LoadTestOptionsValidator.Validate(options);
+
+        Assert.Contains(spanningErrors, item => item.Contains("不能跨区划", StringComparison.Ordinal));
+        Assert.Contains(dltErrors, item => item.Contains("只支持 Q/GDW 376.1", StringComparison.Ordinal));
+    }
+
+    /// <summary>
     /// 验证极大起始地址不会因 long 加法回绕而绕过645地址上限校验。
     /// </summary>
     [Fact]

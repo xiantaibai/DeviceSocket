@@ -166,7 +166,8 @@ public sealed partial class DeviceGrain(
             DeviceId = this.GetPrimaryKeyString(),
             Protocol = NormalizeProtocol(request.Protocol),
             Payload = request.Payload,
-            TraceId = string.IsNullOrWhiteSpace(request.TraceId) ? msgId : request.TraceId.Trim()
+            TraceId = string.IsNullOrWhiteSpace(request.TraceId) ? msgId : request.TraceId.Trim(),
+            RequireDeviceConfirmation = false
         });
         return ToBestEffortResult(result);
     }
@@ -555,12 +556,15 @@ public sealed partial class DeviceGrain(
                 SessionEpoch = route.SessionEpoch,
                 Protocol = attempt.Protocol,
                 Payload = attempt.Payload,
-                TraceId = attempt.TraceId
+                TraceId = attempt.TraceId,
+                RequireDeviceConfirmation = attempt.RequireDeviceConfirmation,
+                ResponseTimeout = attempt.ResponseTimeout,
+                ExpiresAt = attempt.ExpiresAt
             });
             return response.Status switch
             {
                 GatewayDispatchStatus.WrittenToSocket or GatewayDispatchStatus.Duplicate =>
-                    AttemptResult(attempt, CommandAttemptOutcome.WrittenToSocket, "WRITTEN_TO_SOCKET", response.Message, response.GatewayNodeId, response.BytesWritten, route.SessionEpoch),
+                    AttemptResult(attempt, CommandAttemptOutcome.WrittenToSocket, "WRITTEN_TO_SOCKET", response.Message, response.GatewayNodeId, response.BytesWritten, route.SessionEpoch, response.OccurredAt),
                 GatewayDispatchStatus.SessionNotFound or GatewayDispatchStatus.StaleSession or GatewayDispatchStatus.GatewayStopping =>
                     AttemptResult(attempt, CommandAttemptOutcome.RetryableFailure, response.Status.ToString(), response.Message, response.GatewayNodeId, sessionEpoch: route.SessionEpoch),
                 GatewayDispatchStatus.SendFailed =>
@@ -643,6 +647,7 @@ public sealed partial class DeviceGrain(
     /// <param name="gatewayNodeId">实际处理节点编号。</param>
     /// <param name="bytesWritten">明确写入的字节数。</param>
     /// <param name="sessionEpoch">发送绑定的连接代次。</param>
+    /// <param name="occurredAt">Gateway 实际完成处理的时间；旧 Gateway 未返回时使用本机当前时间。</param>
     /// <returns>可幂等写回 CommandGrain 的结果。</returns>
     private static CommandAttemptResult AttemptResult(
         ReliableCommandAttempt attempt,
@@ -651,7 +656,8 @@ public sealed partial class DeviceGrain(
         string message,
         string? gatewayNodeId = null,
         int bytesWritten = 0,
-        long sessionEpoch = 0) => new()
+        long sessionEpoch = 0,
+        DateTimeOffset occurredAt = default) => new()
         {
             MsgId = attempt.MsgId,
             AttemptNo = attempt.AttemptNo,
@@ -660,7 +666,7 @@ public sealed partial class DeviceGrain(
             Message = message,
             GatewayNodeId = gatewayNodeId,
             BytesWritten = bytesWritten,
-            OccurredAt = DateTimeOffset.UtcNow,
+            OccurredAt = occurredAt == default ? DateTimeOffset.UtcNow : occurredAt,
             SessionEpoch = sessionEpoch,
             ActionVersion = attempt.ActionVersion
         };

@@ -12,11 +12,13 @@ namespace DeviceSocket.Host.Networking.Processing.Common;
 /// </summary>
 /// <param name="connectionCoordinator">负责设备绑定和断开清理的连接协调器。</param>
 /// <param name="sessionManager">统一跟踪设备 TCP Session 的管理器。</param>
+/// <param name="sessionResourceCleaners">各协议注册的 Session 临时资源清理器。</param>
 /// <param name="metrics">Gateway 连接运行指标。</param>
 /// <param name="logger">记录生命周期异常和调试信息的程序日志器。</param>
 public sealed class DeviceSessionLifecycleHandler(
     DeviceConnectionCoordinator connectionCoordinator,
     DeviceTcpSessionManager sessionManager,
+    IEnumerable<IDeviceSessionResourceCleaner> sessionResourceCleaners,
     RuntimeMetrics metrics,
     ILogger<DeviceSessionLifecycleHandler> logger)
 {
@@ -74,6 +76,8 @@ public sealed class DeviceSessionLifecycleHandler(
             sessionManager.RecordSuperSocketIdleTimeout(session.SessionID);
         sessionManager.UnregisterSession(session.SessionID);
         connectionCoordinator.Disconnect(session.SessionID, DateTimeOffset.UtcNow);
+        foreach (var cleaner in sessionResourceCleaners)
+            cleaner.RemoveSession(session.SessionID);
         metrics.ConnectionClosed(protocol);
         try
         {

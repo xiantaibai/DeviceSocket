@@ -27,6 +27,8 @@ public static class LoadTestOptionsValidator
             errors.Add("devices.addressStart: 起始地址必须大于 0。");
         if (options.Devices.DuplicateIdentityPercentage is < 0 or > 100)
             errors.Add("devices.duplicateIdentityPercentage: 必须在 0-100 之间。");
+        if (!Enum.IsDefined(options.Devices.GenerationMode))
+            errors.Add("devices.generationMode: 仅支持 sequential 或 random。");
 
         var duplicateCount = (int)Math.Floor(
             options.Devices.Count * options.Devices.DuplicateIdentityPercentage / 100d);
@@ -41,7 +43,11 @@ public static class LoadTestOptionsValidator
                 errors.Add("devices.administrativeDivision: 376.1 行政区划必须是 4 位十进制数字。");
             }
 
-            if (options.Devices.AddressStart > ushort.MaxValue)
+            if (options.Devices.GenerationMode == DeviceAddressGenerationMode.Random)
+            {
+                ValidateRandomQGdwAddressSpace(options.Devices, uniqueIdentityCount, errors);
+            }
+            else if (options.Devices.AddressStart > ushort.MaxValue)
             {
                 errors.Add("devices.addressStart: 376.1 起始终端地址不能超过 65535。");
             }
@@ -59,6 +65,10 @@ public static class LoadTestOptionsValidator
                 if (requiredDivisionOffset > 9_999 - startingDivision)
                     errors.Add("devices: 376.1 跨行政区划后的区划码不能超过 9999。");
             }
+        }
+        else if (options.Devices.GenerationMode == DeviceAddressGenerationMode.Random)
+        {
+            errors.Add("devices.generationMode: random 当前只支持 Q/GDW 376.1 协议。");
         }
         else if (options.Devices.AddressStart > MaximumDlt645Address ||
                  requiredAddressOffset > MaximumDlt645Address - options.Devices.AddressStart)
@@ -177,6 +187,40 @@ public static class LoadTestOptionsValidator
         }
 
         return errors;
+    }
+
+    /// <summary>
+    /// 校验376.1随机地址模式的固定区划、闭区间边界和无重复地址容量。
+    /// </summary>
+    /// <param name="devices">设备编号配置。</param>
+    /// <param name="uniqueIdentityCount">扣除重复登录连接后需要生成的唯一设备身份数量。</param>
+    /// <param name="errors">接收校验错误的集合。</param>
+    private static void ValidateRandomQGdwAddressSpace(
+        DeviceOptions devices,
+        int uniqueIdentityCount,
+        ICollection<string> errors)
+    {
+        if (devices.SpanAdministrativeDivisions)
+            errors.Add("devices.spanAdministrativeDivisions: random 模式必须固定行政区划，不能跨区划。");
+        if (devices.AddressStart > ushort.MaxValue)
+            errors.Add("devices.addressStart: 376.1 随机地址下界不能超过 65535。");
+        if (!devices.AddressEnd.HasValue)
+        {
+            errors.Add("devices.addressEnd: random 模式必须设置随机终端地址上界。");
+            return;
+        }
+
+        if (devices.AddressEnd <= 0 || devices.AddressEnd > ushort.MaxValue)
+            errors.Add("devices.addressEnd: 376.1 随机地址上界必须在 1-65535 之间。");
+        if (devices.AddressEnd < devices.AddressStart)
+        {
+            errors.Add("devices.addressEnd: 随机地址上界不能小于 addressStart。");
+            return;
+        }
+
+        var addressCapacity = devices.AddressEnd.Value - devices.AddressStart + 1;
+        if (addressCapacity < uniqueIdentityCount)
+            errors.Add("devices: 随机地址区间容量不能小于需要生成的唯一设备数量。");
     }
 
     /// <summary>

@@ -27,4 +27,8 @@ public sealed class SendCommandResponse
     /// <summary>处理请求的网关节点编号。</summary>
     [Key(4)]
     public string GatewayNodeId { get; set; } = string.Empty;
+
+    /// <summary>Gateway 完成 Socket 写入或确定失败的 UTC 时间，用于 Silo 和 Gateway 使用同一回复截止时间基准。</summary>
+    [Key(5)]
+    public DateTimeOffset OccurredAt { get; set; }
 }
