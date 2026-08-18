@@ -2,6 +2,9 @@ using System.Diagnostics;
 
 namespace DeviceSocket.LoadTester.Reporting;
 
+/// <summary>
+/// 采样 LoadTester 当前进程的 CPU、工作集、托管堆、GC 和线程池指标，帮助判断负载机是否先于被测服务达到瓶颈。
+/// </summary>
 internal sealed class ResourceSampler : IDisposable
 {
     private readonly Process _process = Process.GetCurrentProcess();

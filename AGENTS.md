@@ -17,6 +17,14 @@
 9. 新增或修改 `appsettings*.json`、YAML、环境变量示例和部署参数时，配置格式支持注释的必须在配置项附近添加中文注释；格式不支持注释的必须在对应 Options 属性和相关说明文档中补充中文说明，禁止为添加注释而破坏标准格式或部署工具兼容性。
 10. 配置项名称、默认值或行为发生变化时，必须同步更新配置示例、启动校验和相关架构文档，确保代码、配置和文档中的中文说明一致。
 
+## LoadTester 配置文档维护要求
+
+1. `tools/DeviceSocket.LoadTester/docs/json-configuration.md` 是 LoadTester 场景 JSON 的字段基准文档；新增、删除、重命名或修改任何 LoadTester 配置属性、枚举值、默认值、单位、null/零值语义、适用角色、协议约束或运行行为时，必须在同一变更中同步更新该文档。
+2. 每个配置字段的文档必须写明完整 JSON 路径、数据类型或枚举值、默认值、有效范围、null/零值语义、关键影响和典型使用场景；复杂字段还必须给出组合约束或示例，禁止只复述属性名称。
+3. 场景 JSON 中的就近注释用于解释“该场景为什么这样取值”，不能替代字段基准文档；修改配置时还必须同步更新至少一个适用的场景或示例。
+4. 配置变更必须同步检查 `LoadTestOptionsValidator`、多节点报告配置签名、报告/验收口径和相关测试，避免配置可以加载但无法正确校验、合并或解释。
+5. `DeviceSocket.LoadTester.Tests` 中的配置文档覆盖测试必须保持通过；不得通过排除配置类型、放宽路径匹配或写入无意义字段列表来绕过文档维护要求。
+
 ## 项目结构要求
 
 1. 原则上一个公共类型只放在一个同名文件中；仅供所属类型使用的私有嵌套类型可以保留在同一文件。
@@ -46,4 +54,5 @@
 dotnet format DeviceSocket.sln --verify-no-changes --no-restore
 dotnet build DeviceSocket.sln -c Release --no-restore
 dotnet test tests\DeviceSocket.Tests\DeviceSocket.Tests.csproj -c Release --no-build --no-restore
+dotnet test tests\DeviceSocket.LoadTester.Tests\DeviceSocket.LoadTester.Tests.csproj -c Release --no-build --no-restore
 ```

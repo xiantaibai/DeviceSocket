@@ -5,6 +5,10 @@ using DeviceSocket.LoadTester.Protocols;
 
 namespace DeviceSocket.LoadTester.Runtime;
 
+/// <summary>
+/// 维护单条 TCP 会话的可复用接收缓冲区，循环调用协议拆包器处理半包和粘包，并对连续未成帧数据设置内存上限。
+/// </summary>
+/// <param name="protocol">当前虚拟设备使用的协议编解码适配器。</param>
 internal sealed class ProtocolSocketReader(ILoadTestProtocol protocol) : IDisposable
 {
     private const int InitialBufferSize = 512;

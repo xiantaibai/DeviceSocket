@@ -5,6 +5,9 @@ using DeviceSocket.LoadTester.Devices;
 
 namespace DeviceSocket.LoadTester.Protocols.Dlt645;
 
+/// <summary>
+/// 实现 DL/T 645-2007 虚拟电表的首帧绑定、周期读数和服务端读请求应答；该协议没有独立登录或心跳确认。
+/// </summary>
 internal sealed class Dlt645LoadTestProtocol : ILoadTestProtocol
 {
     public LoadProtocol Protocol => LoadProtocol.Dlt6452007;
@@ -22,7 +25,7 @@ internal sealed class Dlt645LoadTestProtocol : ILoadTestProtocol
 
     public byte[]? CreateLogoutFrame(VirtualDeviceDescriptor device, byte sequence) => null;
 
-    public byte[]? CreateDownstreamResponse(
+    public DownstreamResponsePlan? CreateDownstreamResponse(
         IProtocolFrame frame,
         VirtualDeviceDescriptor device,
         byte sequence)
@@ -38,7 +41,8 @@ internal sealed class Dlt645LoadTestProtocol : ILoadTestProtocol
         // 645 响应控制码置 DIR 位并保留请求功能码；数据标识回显后附加模拟读数。
         var identifier = request.Data.Take(Math.Min(4, request.Data.Length));
         var data = identifier.Concat(new byte[] { sequence, (byte)(sequence ^ 0x5A) }).ToArray();
-        return Dlt645Codec.CreateFrame(device.MeterAddress, (byte)(0x80 | request.FunctionCode), data, preambleLength: 0);
+        return DownstreamResponsePlan.Generic(
+            Dlt645Codec.CreateFrame(device.MeterAddress, (byte)(0x80 | request.FunctionCode), data, preambleLength: 0));
     }
 
     public bool IsConfirmation(

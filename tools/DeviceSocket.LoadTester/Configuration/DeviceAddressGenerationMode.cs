@@ -13,5 +13,10 @@ public enum DeviceAddressGenerationMode
     /// <summary>
     /// 在 <c>devices.addressStart</c> 到 <c>devices.addressEnd</c> 的闭区间内无重复抽取，适合随机选取已预置设备的场景。
     /// </summary>
-    Random
+    Random,
+
+    /// <summary>
+    /// 从 <c>devices.deviceMappingFile</c> 的 <c>meterId,deviceId</c> 行读取真实376.1设备身份，适合数据库设备编号不连续的场景。
+    /// </summary>
+    Csv
 }

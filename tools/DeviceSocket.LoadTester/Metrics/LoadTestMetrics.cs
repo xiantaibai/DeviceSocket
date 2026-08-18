@@ -13,6 +13,8 @@ public sealed class LoadTestMetrics
     private readonly MergeableHistogram _loginLatency = new();
     private readonly MergeableHistogram _heartbeatLatency = new();
     private readonly MergeableHistogram _connectionScheduleLag = new();
+    private readonly MergeableHistogram _apiRequestLatency = new();
+    private readonly MergeableHistogram _gatherReadingResponseLatency = new();
     private long _expectedOnline;
     private long _connecting;
     private long _tcpConnected;
@@ -46,6 +48,16 @@ public sealed class LoadTestMetrics
     private long _injectedDuplicateFrames;
     private long _injectedFragmentedWrites;
     private long _downstreamResponsesSent;
+    private long _apiRequestsStarted;
+    private long _apiRequestsSucceeded;
+    private long _apiRequestsFailed;
+    private long _apiRequestTimeouts;
+    private long _gatherReadingCommandsReceived;
+    private long _gatherReadingCommandsResponded;
+    private long _gatherReadingResponsesSent;
+    private long _gatherReadingResponsesDropped;
+    private long _gatherReadingBusinessFailuresSent;
+    private long _gatherReadingDuplicateResponsesSent;
     private bool _baselineReached;
     private DateTimeOffset? _outageStartedAt;
     private long _outageCount;
@@ -223,7 +235,71 @@ public sealed class LoadTestMetrics
         Interlocked.Add(ref _bytesSent, bytes);
     }
 
+    /// <summary>记录 HTTP 指令驱动开始发送一个 API 请求。</summary>
+    public void ApiRequestStarted() => Interlocked.Increment(ref _apiRequestsStarted);
+
+    /// <summary>
+    /// 记录 HTTP 请求完成、端到端延迟以及可聚合的稳定失败码。
+    /// </summary>
+    /// <param name="succeeded">HTTP 和业务 success 字段是否同时成功。</param>
+    /// <param name="latency">从开始发送到读取完整响应体的耗时。</param>
+    /// <param name="errorCode">失败时使用的稳定错误码；成功时为空。</param>
+    public void ApiRequestCompleted(bool succeeded, TimeSpan latency, string? errorCode)
+    {
+        _apiRequestLatency.Record(latency);
+        if (succeeded)
+        {
+            Interlocked.Increment(ref _apiRequestsSucceeded);
+            return;
+        }
+
+        Interlocked.Increment(ref _apiRequestsFailed);
+        RecordError(string.IsNullOrWhiteSpace(errorCode) ? "API_FAILED" : errorCode);
+    }
+
+    /// <summary>
+    /// 记录 HTTP 请求超过客户端超时；超时同时计入 API 失败总数和延迟分布。
+    /// </summary>
+    /// <param name="latency">请求取消前的实际等待时长。</param>
+    public void ApiRequestTimedOut(TimeSpan latency)
+    {
+        Interlocked.Increment(ref _apiRequestTimeouts);
+        ApiRequestCompleted(false, latency, "API_TIMEOUT");
+    }
+
+    /// <summary>记录虚拟设备收到一条 Gather AFN=0CH/F129 读表命令。</summary>
+    public void GatherReadingCommandReceived() => Interlocked.Increment(ref _gatherReadingCommandsReceived);
+
+    /// <summary>
+    /// 记录一条 Gather 读表命令至少成功写出一次业务响应及其本地处理延迟。
+    /// </summary>
+    /// <param name="latency">从解析下行命令到首次业务响应写入完成的耗时。</param>
+    public void GatherReadingCommandResponded(TimeSpan latency)
+    {
+        Interlocked.Increment(ref _gatherReadingCommandsResponded);
+        _gatherReadingResponseLatency.Record(latency);
+    }
+
+    /// <summary>
+    /// 记录单条 Gather 读表业务响应写入以及特殊响应类型。
+    /// </summary>
+    /// <param name="businessFailure">是否携带模拟业务失败数据。</param>
+    /// <param name="duplicate">是否为同一命令的第二条重复响应。</param>
+    public void GatherReadingResponseSent(bool businessFailure, bool duplicate)
+    {
+        Interlocked.Increment(ref _gatherReadingResponsesSent);
+        if (businessFailure)
+            Interlocked.Increment(ref _gatherReadingBusinessFailuresSent);
+        if (duplicate)
+            Interlocked.Increment(ref _gatherReadingDuplicateResponsesSent);
+    }
+
+    /// <summary>记录响应模型有意丢弃一条 Gather 读表命令。</summary>
+    public void GatherReadingResponseDropped() => Interlocked.Increment(ref _gatherReadingResponsesDropped);
+
     /// <summary>创建当前所有原子指标和恢复状态的一致近似快照。</summary>
+    /// <param name="now">快照对应的 UTC 时间。</param>
+    /// <returns>可序列化、可跨节点合并的指标快照。</returns>
     public MetricSnapshot Snapshot(DateTimeOffset now)
     {
         bool outageActive;
@@ -272,6 +348,16 @@ public sealed class LoadTestMetrics
             InjectedDuplicateFrames = Interlocked.Read(ref _injectedDuplicateFrames),
             InjectedFragmentedWrites = Interlocked.Read(ref _injectedFragmentedWrites),
             DownstreamResponsesSent = Interlocked.Read(ref _downstreamResponsesSent),
+            ApiRequestsStarted = Interlocked.Read(ref _apiRequestsStarted),
+            ApiRequestsSucceeded = Interlocked.Read(ref _apiRequestsSucceeded),
+            ApiRequestsFailed = Interlocked.Read(ref _apiRequestsFailed),
+            ApiRequestTimeouts = Interlocked.Read(ref _apiRequestTimeouts),
+            GatherReadingCommandsReceived = Interlocked.Read(ref _gatherReadingCommandsReceived),
+            GatherReadingCommandsResponded = Interlocked.Read(ref _gatherReadingCommandsResponded),
+            GatherReadingResponsesSent = Interlocked.Read(ref _gatherReadingResponsesSent),
+            GatherReadingResponsesDropped = Interlocked.Read(ref _gatherReadingResponsesDropped),
+            GatherReadingBusinessFailuresSent = Interlocked.Read(ref _gatherReadingBusinessFailuresSent),
+            GatherReadingDuplicateResponsesSent = Interlocked.Read(ref _gatherReadingDuplicateResponsesSent),
             OutageCount = outageCount,
             OutageActive = outageActive,
             LastRecoveryMilliseconds = lastRecovery,
@@ -279,7 +365,9 @@ public sealed class LoadTestMetrics
             ConnectionLatency = _connectionLatency.Snapshot(),
             LoginLatency = _loginLatency.Snapshot(),
             HeartbeatLatency = _heartbeatLatency.Snapshot(),
-            ConnectionScheduleLag = _connectionScheduleLag.Snapshot()
+            ConnectionScheduleLag = _connectionScheduleLag.Snapshot(),
+            ApiRequestLatency = _apiRequestLatency.Snapshot(),
+            GatherReadingResponseLatency = _gatherReadingResponseLatency.Snapshot()
         };
     }
 

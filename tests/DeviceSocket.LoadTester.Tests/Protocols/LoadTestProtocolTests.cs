@@ -29,6 +29,57 @@ public sealed class LoadTestProtocolTests
     }
 
     /// <summary>
+    /// 验证 Gather 兼容模式接受地址匹配、无数据区且固定 SEQ 的老式 F1/F3 确认，同时标准模式保持严格拒绝。
+    /// </summary>
+    [Fact]
+    public void GatherQGdwConfirmation_AcceptsLegacyAcknowledgementOnly()
+    {
+        var options = TestOptionsFactory.Create();
+        options.Devices.Count = 2;
+        options.Target.CompatibilityProfile = ServerCompatibilityProfile.GatherTcpCenter;
+        var devices = DeviceAddressAllocator.Allocate(options);
+        var gatherProtocol = LoadTestProtocolFactory.Create(options.Target);
+        var standardProtocol = LoadTestProtocolFactory.Create(LoadProtocol.QGdw3761);
+        var legacyF1 = Assert.IsType<QGdw3761Frame>(QGdw3761Codec.Read(
+            Convert.FromHexString("6832003200680B0133010002006000000100A316")).Package);
+        var legacyF3 = Assert.IsType<QGdw3761Frame>(QGdw3761Codec.Read(
+            Convert.FromHexString("6832003200680B0133010002006000000400A616")).Package);
+
+        Assert.True(gatherProtocol.IsConfirmation(legacyF1, devices[0], ProtocolOperation.Login, 7));
+        Assert.True(gatherProtocol.IsConfirmation(legacyF1, devices[0], ProtocolOperation.Heartbeat, 9));
+        Assert.True(gatherProtocol.IsConfirmation(legacyF3, devices[0], ProtocolOperation.Heartbeat, 11));
+        Assert.False(gatherProtocol.IsConfirmation(legacyF1, devices[1], ProtocolOperation.Login, 7));
+        Assert.False(standardProtocol.IsConfirmation(legacyF1, devices[0], ProtocolOperation.Login, 0));
+    }
+
+    /// <summary>
+    /// 验证 Gather 兼容模式应答老服务下行帧时原样保留 MSA，使 ConrLine 能关联当前指令。
+    /// </summary>
+    [Fact]
+    public void GatherDownstreamConfirmation_PreservesMasterStationAddress()
+    {
+        var options = TestOptionsFactory.Create();
+        options.Target.CompatibilityProfile = ServerCompatibilityProfile.GatherTcpCenter;
+        var device = DeviceAddressAllocator.Allocate(options)[0];
+        var protocol = LoadTestProtocolFactory.Create(options.Target);
+        var raw = protocol.CreateLoginFrame(device, 5);
+        raw[6] &= 0x7F;
+        raw[11] = 74;
+        raw[13] |= 0x10;
+        raw[^2] = QGdw3761Codec.CalculateChecksum(raw.AsSpan(6, raw.Length - 8));
+        var request = Assert.IsType<QGdw3761Frame>(protocol.Read(raw).Frame);
+
+        var plan = Assert.IsType<DownstreamResponsePlan>(protocol.CreateDownstreamResponse(request, device, 1));
+        var encoded = Assert.IsType<byte[]>(plan.Payload);
+        var response = Assert.IsType<QGdw3761Frame>(protocol.Read(encoded).Frame);
+
+        Assert.Equal(37, request.MasterStationAddress);
+        Assert.Equal(request.MasterStationAddress, response.MasterStationAddress);
+        Assert.True(response.IsUpstream);
+        Assert.False(response.IsPrimaryMessage);
+    }
+
+    /// <summary>
     /// 验证645首帧携带当前设备地址并能被核心编解码器正常解析。
     /// </summary>
     [Fact]
@@ -60,7 +111,8 @@ public sealed class LoadTestProtocolTests
         raw[^2] = QGdw3761Codec.CalculateChecksum(raw.AsSpan(6, raw.Length - 8));
         var request = Assert.IsType<QGdw3761Frame>(QGdw3761Codec.Read(raw).Package);
 
-        var encoded = Assert.IsType<byte[]>(protocol.CreateDownstreamResponse(request, device, 1));
+        var plan = Assert.IsType<DownstreamResponsePlan>(protocol.CreateDownstreamResponse(request, device, 1));
+        var encoded = Assert.IsType<byte[]>(plan.Payload);
         var response = Assert.IsType<QGdw3761Frame>(QGdw3761Codec.Read(encoded).Package);
 
         Assert.True(response.IsValid);
@@ -82,7 +134,8 @@ public sealed class LoadTestProtocolTests
         var requestRaw = Dlt645Codec.CreateFrame(device.MeterAddress, 0x11, [0x00, 0x00, 0x01, 0x00]);
         var request = Assert.IsType<Dlt645Frame>(Dlt645Codec.Read(requestRaw).Package);
 
-        var encoded = Assert.IsType<byte[]>(protocol.CreateDownstreamResponse(request, device, 3));
+        var plan = Assert.IsType<DownstreamResponsePlan>(protocol.CreateDownstreamResponse(request, device, 3));
+        var encoded = Assert.IsType<byte[]>(plan.Payload);
         var response = Assert.IsType<Dlt645Frame>(Dlt645Codec.Read(encoded).Package);
 
         Assert.True(response.IsValid);
@@ -120,5 +173,99 @@ public sealed class LoadTestProtocolTests
             protocol.Read(raw).Frame);
 
         Assert.Null(protocol.CreateDownstreamResponse(frame, devices[0], 1));
+    }
+
+    /// <summary>
+    /// 验证 Gather 兼容模式把 AFN=0CH/F129 下行读表命令转换为业务响应，而不是提前发送 AFN=00H 通用确认清空当前命令。
+    /// </summary>
+    [Fact]
+    public void GatherReadingCommand_CreatesParsableBusinessResponse()
+    {
+        var options = TestOptionsFactory.Create();
+        options.Target.CompatibilityProfile = ServerCompatibilityProfile.GatherTcpCenter;
+        options.Workload.GatherReadingResponse.BaseReadingKwh = 1_234.5678m;
+        var device = DeviceAddressAllocator.Allocate(options)[0];
+        var protocol = LoadTestProtocolFactory.Create(options);
+        var request = CreateGatherReadingRequest(protocol, device, masterStationAddress: 37, sequence: 9, point: 10);
+
+        var plan = Assert.IsType<DownstreamResponsePlan>(
+            protocol.CreateDownstreamResponse(request, device, sequence: 1));
+        var response = Assert.IsType<QGdw3761Frame>(protocol.Read(Assert.IsType<byte[]>(plan.Payload)).Frame);
+
+        Assert.Equal(DownstreamResponseKind.GatherReading, plan.Kind);
+        Assert.Equal(1, plan.SendCount);
+        Assert.Equal(0x88, response.Control);
+        Assert.Equal(0x0C, response.Afn);
+        Assert.Equal([129], response.Functions);
+        Assert.Equal([10], response.Points);
+        Assert.Equal(request.MasterStationAddress, response.MasterStationAddress);
+        Assert.Equal(request.Sequence, response.Sequence);
+        Assert.Equal(31, response.DataUnitPayload.Length);
+        Assert.Equal(4, response.DataUnitPayload[5]);
+        // A14 低位 BCD 在前：1234.5678 编码为 78 56 34 12 00。
+        Assert.Equal(new byte[] { 0x78, 0x56, 0x34, 0x12, 0x00 }, response.DataUnitPayload[6..11]);
+    }
+
+    /// <summary>
+    /// 验证 Gather 读表故障模型可稳定生成丢弃、延迟、业务失败和重复响应计划。
+    /// </summary>
+    /// <param name="mode">待验证应答模式。</param>
+    /// <param name="expectedSendCount">预期发送次数。</param>
+    /// <param name="expectsPayload">是否应生成业务帧。</param>
+    [Theory]
+    [InlineData(GatherReadingResponseMode.Drop, 0, false)]
+    [InlineData(GatherReadingResponseMode.Delayed, 1, true)]
+    [InlineData(GatherReadingResponseMode.BusinessError, 1, true)]
+    [InlineData(GatherReadingResponseMode.Duplicate, 2, true)]
+    public void GatherReadingResponseMode_CreatesExpectedPlan(
+        GatherReadingResponseMode mode,
+        int expectedSendCount,
+        bool expectsPayload)
+    {
+        var options = TestOptionsFactory.Create();
+        options.Target.CompatibilityProfile = ServerCompatibilityProfile.GatherTcpCenter;
+        options.Workload.GatherReadingResponse.Mode = mode;
+        options.Workload.GatherReadingResponse.DelayMilliseconds = 321;
+        var device = DeviceAddressAllocator.Allocate(options)[0];
+        var protocol = LoadTestProtocolFactory.Create(options);
+        var request = CreateGatherReadingRequest(protocol, device, masterStationAddress: 3, sequence: 2, point: 1);
+
+        var plan = Assert.IsType<DownstreamResponsePlan>(
+            protocol.CreateDownstreamResponse(request, device, sequence: 1));
+
+        Assert.Equal(expectedSendCount, plan.SendCount);
+        Assert.Equal(expectsPayload, plan.Payload is not null);
+        Assert.Equal(mode == GatherReadingResponseMode.Delayed ? 321 : 0, plan.Delay.TotalMilliseconds);
+        Assert.Equal(mode == GatherReadingResponseMode.BusinessError, plan.IsBusinessFailure);
+    }
+
+    /// <summary>
+    /// 根据指定地址、MSA、序号和测量点创建无数据区的 Gather AFN=0CH/F129 下行命令。
+    /// </summary>
+    /// <param name="protocol">用于创建基础地址帧和解析结果的协议适配器。</param>
+    /// <param name="device">命令目标虚拟设备。</param>
+    /// <param name="masterStationAddress">老服务用于关联命令的 MSA。</param>
+    /// <param name="sequence">下行命令 PSEQ。</param>
+    /// <param name="point">测量点 PN。</param>
+    /// <returns>合法的读表下行帧。</returns>
+    private static QGdw3761Frame CreateGatherReadingRequest(
+        ILoadTestProtocol protocol,
+        VirtualDeviceDescriptor device,
+        byte masterStationAddress,
+        byte sequence,
+        int point)
+    {
+        var raw = protocol.CreateLoginFrame(device, sequence);
+        raw[6] = 0x4B;
+        raw[11] = (byte)(masterStationAddress << 1);
+        raw[12] = 0x0C;
+        raw[13] = (byte)(0x60 | (sequence & 0x0F));
+        var group = (point - 1) / 8 + 1;
+        raw[14] = (byte)(1 << ((point - 1) % 8));
+        raw[15] = (byte)group;
+        raw[16] = 0x01;
+        raw[17] = 0x10;
+        raw[^2] = QGdw3761Codec.CalculateChecksum(raw.AsSpan(6, raw.Length - 8));
+        return Assert.IsType<QGdw3761Frame>(protocol.Read(raw).Frame);
     }
 }

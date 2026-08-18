@@ -2,18 +2,20 @@
   "target": {
     "host": "192.168.111.18",
     "port": 6666,
-    "protocol": "qGdw3761"
+    "protocol": "qGdw3761",
+    "compatibilityProfile": "gatherTcpCenter"
   },
   "devices": {
     "count": 10000,
     "generationMode": "sequential",
     "administrativeDivision": "2608",
-    "addressStart": 10001
+    "addressStart": 10001,
+    "spanAdministrativeDivisions": false
   },
   "connection": {
     "startMode": "ramp",
-    "connectionsPerSecond": 250,
-    "maxConcurrentConnecting": 200,
+    "connectionsPerSecond": 50,
+    "maxConcurrentConnecting": 100,
     "connectTimeoutSeconds": 5,
     "loginTimeoutSeconds": 5,
     "writeTimeoutSeconds": 5,
@@ -32,50 +34,78 @@
   },
   "reconnect": {
     "mode": "exponentialJitter",
-    "initialDelayMilliseconds": 500,
+    "initialDelayMilliseconds": 1000,
     "maximumDelaySeconds": 30,
     "multiplier": 2,
     "jitterRatio": 0.3,
     "maximumAttempts": 0
   },
   "scenario": {
-    "name": "intranet-local-5000-10000",
+    "name": "gather-tcpcenter-5000-10000",
     "durationSeconds": 1,
     "phases": [
       {
+        "name": "canary-100",
+        "kind": "ramp",
+        "durationSeconds": 30,
+        "targetDevicePercentage": 1,
+        "connectionsPerSecond": 10
+      },
+      {
+        "name": "steady-100",
+        "kind": "steady",
+        "durationSeconds": 60,
+        "targetDevicePercentage": 1,
+        "connectionsPerSecond": 10
+      },
+      {
+        "name": "ramp-to-1000",
+        "kind": "ramp",
+        "durationSeconds": 90,
+        "targetDevicePercentage": 10,
+        "connectionsPerSecond": 25
+      },
+      {
+        "name": "steady-1000",
+        "kind": "steady",
+        "durationSeconds": 120,
+        "targetDevicePercentage": 10,
+        "connectionsPerSecond": 25
+      },
+      {
         "name": "ramp-to-5000",
         "kind": "ramp",
-        "durationSeconds": 60,
+        "durationSeconds": 120,
         "targetDevicePercentage": 50,
-        "connectionsPerSecond": 250
+        "connectionsPerSecond": 50
       },
       {
         "name": "steady-5000",
         "kind": "steady",
         "durationSeconds": 300,
         "targetDevicePercentage": 50,
-        "connectionsPerSecond": 250
+        "connectionsPerSecond": 50
       },
       {
         "name": "ramp-to-10000",
         "kind": "ramp",
-        "durationSeconds": 90,
+        "durationSeconds": 180,
         "targetDevicePercentage": 100,
-        "connectionsPerSecond": 250
+        "connectionsPerSecond": 50
       },
       {
         "name": "steady-10000",
         "kind": "steady",
         "durationSeconds": 600,
         "targetDevicePercentage": 100,
-        "connectionsPerSecond": 250
+        "connectionsPerSecond": 50
       },
       {
         "name": "cooldown",
         "kind": "cooldown",
-        "durationSeconds": 10,
+        "durationSeconds": 30,
         "targetDevicePercentage": 0,
-        "connectionsPerSecond": 250
+        "connectionsPerSecond": 100
       }
     ]
   },
@@ -85,18 +115,17 @@
     "writeConsoleSummary": true
   },
   "serverObservation": {
-    "enabled": false,
-    "statusUrl": "http://192.168.111.221:5080/api/status/connections",
-    "timeoutSeconds": 3
+    "enabled": false
   },
   "acceptance": {
     "minimumConnectionSuccessRate": 0.95,
-    "minimumLoginSuccessRate": 0.95,
+    "minimumLoginSuccessRate": 0.98,
     "minimumFinalOnlineRate": 0.98,
+    "minimumFinalOnlineCount": 9800,
     "maximumProtocolErrorRate": 0.01
   },
   "distributed": {
-    "runId": "intranet-local-5k-10k",
+    "runId": "gather-tcpcenter-5k-10k",
     "shardIndex": 0,
     "shardCount": 1
   }

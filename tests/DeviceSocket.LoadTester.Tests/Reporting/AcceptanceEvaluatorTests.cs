@@ -52,4 +52,37 @@ public sealed class AcceptanceEvaluatorTests
         Assert.False(result.Passed);
         Assert.Contains(result.Checks, item => item.Name == "gatewayObservationAvailable" && !item.Passed);
     }
+
+    /// <summary>
+    /// 验证 apiOnly 角色忽略默认 TCP 在线门槛，并按 API 成功率和 P95 延迟验收。
+    /// </summary>
+    [Fact]
+    public void ApiOnly_UsesOnlyApiThresholds()
+    {
+        var options = new AcceptanceOptions
+        {
+            MinimumFinalOnlineRate = 0.99,
+            MaximumProtocolErrorRate = 0,
+            MinimumApiSuccessRate = 0.95,
+            MaximumApiP95Milliseconds = 1_000
+        };
+        var histogram = new MergeableHistogram();
+        histogram.Record(TimeSpan.FromMilliseconds(500));
+        var metrics = new MetricSnapshot
+        {
+            ApiRequestsStarted = 100,
+            ApiRequestsSucceeded = 98,
+            ApiRequestsFailed = 2,
+            ApiRequestLatency = histogram.Snapshot()
+        };
+
+        var result = AcceptanceEvaluator.Evaluate(
+            metrics,
+            options,
+            expectedOnline: 0,
+            role: LoadTestRole.ApiOnly);
+
+        Assert.True(result.Passed);
+        Assert.Equal(2, result.Checks.Count);
+    }
 }

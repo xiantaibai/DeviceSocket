@@ -17,6 +17,49 @@ namespace DeviceSocket.LoadTester.Tests.Runtime;
 public sealed class VirtualDeviceSessionTests
 {
     /// <summary>
+    /// 验证 Gather 兼容会话可通过真实 TCP 完成老式 F1 登录确认和心跳确认，不会误触发超时重连。
+    /// </summary>
+    [Fact]
+    public async Task GatherLegacyAcknowledgement_CompletesLoginAndHeartbeat()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var options = TestOptionsFactory.Create();
+        options.Devices.Count = 1;
+        options.Target.Port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        options.Target.CompatibilityProfile = ServerCompatibilityProfile.GatherTcpCenter;
+        options.Heartbeat.IntervalSeconds = 1;
+        options.Heartbeat.JitterSeconds = 0;
+        options.Heartbeat.ResponseTimeoutSeconds = 2;
+        var descriptor = Assert.Single(DeviceAddressAllocator.Allocate(options));
+        var protocol = LoadTestProtocolFactory.Create(options.Target);
+        var metrics = new LoadTestMetrics();
+        metrics.SetExpectedOnline(1, DateTimeOffset.UtcNow);
+        using var pacer = new ConnectionPacer(0, metrics);
+        using var gate = new SemaphoreSlim(1);
+        var faults = new FaultInjectionController();
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+
+        var serverTask = ServeGatherLoginAndHeartbeatAsync(listener, cancellation.Token);
+        var session = new VirtualDeviceSession(descriptor, options, protocol, metrics, pacer, gate, faults);
+        var sessionTask = session.RunAsync(cancellation.Token);
+
+        await WaitUntilAsync(
+            () => metrics.Snapshot(DateTimeOffset.UtcNow).HeartbeatsConfirmed >= 1,
+            TimeSpan.FromSeconds(5));
+        await serverTask;
+        cancellation.Cancel();
+        await sessionTask;
+        listener.Stop();
+
+        var snapshot = metrics.Snapshot(DateTimeOffset.UtcNow);
+        Assert.Equal(1, snapshot.LoginSucceeded);
+        Assert.True(snapshot.HeartbeatsConfirmed >= 1);
+        Assert.Equal(0, snapshot.LoginTimeouts);
+        Assert.Equal(0, snapshot.HeartbeatTimeouts);
+    }
+
+    /// <summary>
     /// 验证 TCP 已建立但服务端不返回登录确认时，设备会按登录超时关闭旧连接并自动重连。
     /// </summary>
     [Fact]
@@ -235,6 +278,42 @@ public sealed class VirtualDeviceSessionTests
             await stream.WriteAsync(QGdw3761Codec.CreateLinkConfirmation(request), cancellationToken);
             await Task.Delay(50, cancellationToken);
         }
+    }
+
+    /// <summary>
+    /// 接收一条登录和一条心跳，并按 Gather.TcpCenter 的固定 SEQ、无数据区 F1 格式分别确认。
+    /// </summary>
+    /// <param name="listener">回环 TCP 监听器。</param>
+    /// <param name="cancellationToken">取消模拟服务的令牌。</param>
+    /// <returns>完成两次协议交互的异步任务。</returns>
+    private static async Task ServeGatherLoginAndHeartbeatAsync(
+        TcpListener listener,
+        CancellationToken cancellationToken)
+    {
+        using var client = await listener.AcceptTcpClientAsync(cancellationToken);
+        var stream = client.GetStream();
+        var login = await ReadFrameAsync(stream, cancellationToken);
+        Assert.Equal(QGdw3761LinkMessageKind.Login, login.LinkMessageKind);
+        await stream.WriteAsync(CreateGatherLegacyConfirmation(login), cancellationToken);
+
+        var heartbeat = await ReadFrameAsync(stream, cancellationToken);
+        Assert.Equal(QGdw3761LinkMessageKind.Heartbeat, heartbeat.LinkMessageKind);
+        await stream.WriteAsync(CreateGatherLegacyConfirmation(heartbeat), cancellationToken);
+        await Task.Delay(50, cancellationToken);
+    }
+
+    /// <summary>
+    /// 根据请求地址创建与 Gather.TcpCenter ConfirmDataFrame 一致的 AFN=00H/F1 老式确认帧。
+    /// </summary>
+    /// <param name="request">已解析的登录或心跳请求。</param>
+    /// <returns>固定 SEQ=60H、无回显数据区的完整确认帧。</returns>
+    private static byte[] CreateGatherLegacyConfirmation(QGdw3761Frame request)
+    {
+        var response = Convert.FromHexString("6832003200680B00000000020060000001000016");
+        // 老服务沿用请求的四字节终端地址，但自行分配 A3 中的 MSA；确认关联不能依赖请求序号或 MSA。
+        request.Raw.AsSpan(7, 4).CopyTo(response.AsSpan(7, 4));
+        response[^2] = QGdw3761Codec.CalculateChecksum(response.AsSpan(6, response.Length - 8));
+        return response;
     }
 
     private static async Task ServeTimeoutThenLoginAsync(

@@ -1,4 +1,5 @@
 using DeviceSocket.LoadTester.Configuration;
+using DeviceSocket.LoadTester.Devices;
 using System.Text.Json;
 
 namespace DeviceSocket.LoadTester.Tests.Configuration;
@@ -17,6 +18,39 @@ public sealed class LoadTestOptionsValidatorTests
         var errors = LoadTestOptionsValidator.Validate(TestOptionsFactory.Create());
 
         Assert.Empty(errors);
+    }
+
+    /// <summary>
+    /// 验证 Gather.TcpCenter 兼容配置只允许与 Q/GDW 376.1 协议组合。
+    /// </summary>
+    [Fact]
+    public void GatherCompatibilityProfile_RejectsDlt645()
+    {
+        var options = TestOptionsFactory.Create(LoadProtocol.Dlt6452007);
+        options.Target.CompatibilityProfile = ServerCompatibilityProfile.GatherTcpCenter;
+
+        var errors = LoadTestOptionsValidator.Validate(options);
+
+        Assert.Contains(errors, item => item.Contains("gatherTcpCenter", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// 验证老服务万人场景使用已准备的260810001～260820000连续设备号和 Gather 兼容配置。
+    /// </summary>
+    [Fact]
+    public async Task GatherTenThousandScenario_UsesPreparedDeviceRange()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "Scenarios", "intranet-local-5000-10000.json");
+        var options = await LoadTestConfigurationLoader.LoadAsync(
+            path,
+            new RunCommandOverrides(),
+            CancellationToken.None);
+        var devices = DeviceAddressAllocator.Allocate(options);
+
+        Assert.Equal(ServerCompatibilityProfile.GatherTcpCenter, options.Target.CompatibilityProfile);
+        Assert.Equal(10_000, devices.Count);
+        Assert.Equal("3761:2608-10001", devices[0].DeviceId);
+        Assert.Equal("3761:2608-20000", devices[^1].DeviceId);
     }
 
     /// <summary>
@@ -71,6 +105,24 @@ public sealed class LoadTestOptionsValidatorTests
 
         Assert.Contains(spanningErrors, item => item.Contains("不能跨区划", StringComparison.Ordinal));
         Assert.Contains(dltErrors, item => item.Contains("只支持 Q/GDW 376.1", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// 验证 CSV 设备模式必须提供存在的文件、仅支持376.1，且不能再叠加重复身份比例。
+    /// </summary>
+    [Fact]
+    public void CsvMode_ValidatesFileProtocolAndDuplicateIdentity()
+    {
+        var options = TestOptionsFactory.Create(LoadProtocol.Dlt6452007);
+        options.Devices.GenerationMode = DeviceAddressGenerationMode.Csv;
+        options.Devices.DeviceMappingFile = Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}.csv");
+        options.Devices.DuplicateIdentityPercentage = 1;
+
+        var errors = LoadTestOptionsValidator.Validate(options);
+
+        Assert.Contains(errors, item => item.Contains("文件不存在", StringComparison.Ordinal));
+        Assert.Contains(errors, item => item.Contains("只支持 Q/GDW 376.1", StringComparison.Ordinal));
+        Assert.Contains(errors, item => item.Contains("必须为 0", StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -181,5 +233,103 @@ public sealed class LoadTestOptionsValidatorTests
         var errors = LoadTestOptionsValidator.Validate(options);
 
         Assert.Contains(errors, item => item.Contains("100", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// 验证 combined 角色必须显式启用 HTTP 指令负载，避免用户误以为已同时压测 API。
+    /// </summary>
+    [Fact]
+    public void CombinedRole_RequiresCommandWorkload()
+    {
+        var options = TestOptionsFactory.Create();
+        options.Role = LoadTestRole.Combined;
+
+        var errors = LoadTestOptionsValidator.Validate(options);
+
+        Assert.Contains(errors, item => item.Contains("commandWorkload.enabled", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// 验证使用顺序 meter_id、合法 API 地址和指令阶段时 combined 老服务配置可以通过校验。
+    /// </summary>
+    [Fact]
+    public void CombinedGatherCommandWorkload_IsValid()
+    {
+        var options = TestOptionsFactory.Create();
+        options.Role = LoadTestRole.Combined;
+        options.Target.CompatibilityProfile = ServerCompatibilityProfile.GatherTcpCenter;
+        options.CommandWorkload = new CommandWorkloadOptions
+        {
+            Enabled = true,
+            BaseUrl = "http://127.0.0.1:8080",
+            MeterIdStart = 1_000,
+            Phases =
+            [
+                new CommandPhaseOptions
+                {
+                    Name = "functional",
+                    TargetDeviceCount = 10,
+                    RequestsPerDevice = 1,
+                    RequestsPerSecond = 10,
+                    MaxConcurrency = 5
+                }
+            ]
+        };
+
+        var errors = LoadTestOptionsValidator.Validate(options);
+
+        Assert.Empty(errors);
+    }
+
+    /// <summary>
+    /// 验证 HTTP 阶段在线门槛不能超过全局设备数，且阶段等待上限设置后必须大于零。
+    /// </summary>
+    [Fact]
+    public void CommandPhaseOnlineGate_InvalidValuesAreRejected()
+    {
+        var options = TestOptionsFactory.Create();
+        options.Role = LoadTestRole.Combined;
+        options.Target.CompatibilityProfile = ServerCompatibilityProfile.GatherTcpCenter;
+        options.CommandWorkload = new CommandWorkloadOptions
+        {
+            Enabled = true,
+            BaseUrl = "http://127.0.0.1:8080",
+            MeterIdStart = 1_000,
+            Phases =
+            [
+                new CommandPhaseOptions
+                {
+                    Name = "invalid-gate",
+                    TargetDeviceCount = 10,
+                    RequestsPerDevice = 1,
+                    RequestsPerSecond = 10,
+                    MaxConcurrency = 5,
+                    MinimumOnlineCount = 11,
+                    OnlineStableSeconds = -1,
+                    OnlineWaitTimeoutSeconds = 0
+                }
+            ]
+        };
+
+        var errors = LoadTestOptionsValidator.Validate(options);
+
+        Assert.Contains(errors, item => item.Contains("minimumOnlineCount", StringComparison.Ordinal));
+        Assert.Contains(errors, item => item.Contains("onlineStableSeconds", StringComparison.Ordinal));
+        Assert.Contains(errors, item => item.Contains("onlineWaitTimeoutSeconds", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// 验证恢复检查点周期不能短于基础采样周期，否则检查点配置会造成无法兑现的写入频率。
+    /// </summary>
+    [Fact]
+    public void ReportingCheckpointInterval_ShorterThanSampleIntervalIsRejected()
+    {
+        var options = TestOptionsFactory.Create();
+        options.Reporting.SampleIntervalSeconds = 5;
+        options.Reporting.CheckpointIntervalSeconds = 4;
+
+        var errors = LoadTestOptionsValidator.Validate(options);
+
+        Assert.Contains(errors, item => item.Contains("checkpointIntervalSeconds", StringComparison.Ordinal));
     }
 }

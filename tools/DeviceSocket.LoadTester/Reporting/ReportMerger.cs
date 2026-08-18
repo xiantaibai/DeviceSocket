@@ -46,7 +46,18 @@ internal static class ReportMerger
             metrics,
             first.Options.Acceptance,
             (int)metrics.ExpectedOnline,
-            gatewayObservation);
+            gatewayObservation,
+            first.Options.Role);
+        var nodeOutcomes = reports
+            .OrderBy(item => item.ShardIndex)
+            .Select(item => new NodeRunOutcome
+            {
+                ShardIndex = item.ShardIndex,
+                NodeName = item.NodeName,
+                Status = item.RunStatus,
+                Reason = item.FailureReason
+            })
+            .ToArray();
         var aggregate = new AggregateReport
         {
             RunId = first.RunId,
@@ -57,10 +68,33 @@ internal static class ReportMerger
             Metrics = metrics,
             GatewayObservation = gatewayObservation,
             Acceptance = acceptance,
-            Nodes = reports.OrderBy(item => item.ShardIndex).Select(item => item.NodeName).ToArray()
+            RunStatus = ResolveRunStatus(nodeOutcomes, acceptance),
+            NodeOutcomes = nodeOutcomes,
+            Nodes = nodeOutcomes.Select(item => item.NodeName).ToArray()
         };
         await AggregateReportWriter.WriteAsync(aggregate, Path.GetFullPath(outputDirectory), cancellationToken);
         return aggregate;
+    }
+
+    /// <summary>
+    /// 根据所有分片的实际结束状态和集群级验收结论计算汇总状态，避免某节点未执行 HTTP 阶段时总报告仍显示通过。
+    /// </summary>
+    /// <param name="nodeOutcomes">按分片收集的节点运行结论。</param>
+    /// <param name="acceptance">使用聚合指标计算的验收结果。</param>
+    /// <returns>按终止、取消、失败、跳过、通过优先级解析出的集群运行状态。</returns>
+    private static LoadTestRunStatus ResolveRunStatus(
+        IReadOnlyCollection<NodeRunOutcome> nodeOutcomes,
+        AcceptanceResult acceptance)
+    {
+        if (nodeOutcomes.Any(item => item.Status == LoadTestRunStatus.Aborted))
+            return LoadTestRunStatus.Aborted;
+        if (nodeOutcomes.Any(item => item.Status == LoadTestRunStatus.Cancelled))
+            return LoadTestRunStatus.Cancelled;
+        if (!acceptance.Passed || nodeOutcomes.Any(item => item.Status == LoadTestRunStatus.Failed))
+            return LoadTestRunStatus.Failed;
+        if (nodeOutcomes.Any(item => item.Status == LoadTestRunStatus.CompletedWithSkippedPhases))
+            return LoadTestRunStatus.CompletedWithSkippedPhases;
+        return LoadTestRunStatus.Passed;
     }
 
     /// <summary>
@@ -90,10 +124,11 @@ internal static class ReportMerger
             throw new InvalidDataException("节点报告的外层分片信息与内嵌执行配置不一致。");
         }
         if (reports.Any(item => item.Options.Target.Protocol != first.Options.Target.Protocol ||
+                                item.Options.Target.CompatibilityProfile != first.Options.Target.CompatibilityProfile ||
                                 !string.Equals(item.Options.Target.Host, first.Options.Target.Host, StringComparison.OrdinalIgnoreCase) ||
                                 item.Options.Target.Port != first.Options.Target.Port))
         {
-            throw new InvalidDataException("节点报告的目标协议或地址不一致。");
+            throw new InvalidDataException("节点报告的目标协议、兼容配置或地址不一致。");
         }
 
         var expectedConfiguration = CreateConfigurationSignature(first);
@@ -121,10 +156,41 @@ internal static class ReportMerger
         return JsonSerializer.Serialize(
             new
             {
-                options.Devices,
+                Devices = new
+                {
+                    options.Devices.Count,
+                    options.Devices.GenerationMode,
+                    DeviceMappingFileName = Path.GetFileName(options.Devices.DeviceMappingFile),
+                    options.Devices.AddressStart,
+                    options.Devices.AddressEnd,
+                    options.Devices.AdministrativeDivision,
+                    options.Devices.SpanAdministrativeDivisions,
+                    options.Devices.DuplicateIdentityPercentage
+                },
+                options.Role,
                 options.Connection,
                 options.Heartbeat,
                 options.Workload,
+                CommandWorkload = new
+                {
+                    options.CommandWorkload.Enabled,
+                    options.CommandWorkload.BaseUrl,
+                    options.CommandWorkload.EndpointPath,
+                    options.CommandWorkload.AuthorizationHeaderName,
+                    options.CommandWorkload.AuthorizationKeyEnvironmentVariable,
+                    DeviceMappingFileName = Path.GetFileName(options.CommandWorkload.DeviceMappingFile),
+                    options.CommandWorkload.MeterIdStart,
+                    options.CommandWorkload.OperatorUserId,
+                    options.CommandWorkload.OperationSource,
+                    options.CommandWorkload.ReadingModel,
+                    options.CommandWorkload.ReadingCode,
+                    options.CommandWorkload.RequestTimeoutSeconds,
+                    options.CommandWorkload.RequiredOnlineRate,
+                    options.CommandWorkload.OnlineStableSeconds,
+                    options.CommandWorkload.OnlineWaitTimeoutSeconds,
+                    options.CommandWorkload.StartDelaySeconds,
+                    options.CommandWorkload.Phases
+                },
                 options.Reconnect,
                 options.Scenario,
                 options.Acceptance,

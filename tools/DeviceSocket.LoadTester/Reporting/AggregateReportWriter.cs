@@ -44,7 +44,8 @@ internal static class AggregateReportWriter
         builder.AppendLine($"- 节点：{report.NodeCount:N0}");
         builder.AppendLine($"- 设备：{report.DeviceCount:N0}");
         builder.AppendLine($"- 时间：{report.StartedAtUtc:O} 至 {report.EndedAtUtc:O}");
-        builder.AppendLine($"- 结果：{(report.Acceptance.Passed ? "通过" : "失败")}");
+        builder.AppendLine($"- 运行状态：{FormatRunStatus(report.RunStatus)}");
+        builder.AppendLine($"- 指标验收：{(report.Acceptance.Passed ? "通过" : "失败")}");
         builder.AppendLine();
         builder.AppendLine("| 指标 | 汇总值 |");
         builder.AppendLine("| --- | ---: |");
@@ -55,6 +56,9 @@ internal static class AggregateReportWriter
         builder.AppendLine($"| 主动断线 | {metrics.ForcedDisconnects:N0} |");
         builder.AppendLine($"| 注入丢包/校验和/粘包/半包 | {metrics.InjectedOutboundDrops + metrics.InjectedInboundDrops:N0}/{metrics.InjectedCorruptFrames:N0}/{metrics.InjectedDuplicateFrames:N0}/{metrics.InjectedFragmentedWrites:N0} |");
         builder.AppendLine($"| 下发应答 | {metrics.DownstreamResponsesSent:N0} |");
+        builder.AppendLine($"| HTTP API 发起/成功/失败/超时 | {metrics.ApiRequestsStarted:N0}/{metrics.ApiRequestsSucceeded:N0}/{metrics.ApiRequestsFailed:N0}/{metrics.ApiRequestTimeouts:N0} |");
+        builder.AppendLine($"| Gather 读表命令收到/已应答/丢弃 | {metrics.GatherReadingCommandsReceived:N0}/{metrics.GatherReadingCommandsResponded:N0}/{metrics.GatherReadingResponsesDropped:N0} |");
+        builder.AppendLine($"| Gather 读表响应帧/业务失败/重复帧 | {metrics.GatherReadingResponsesSent:N0}/{metrics.GatherReadingBusinessFailuresSent:N0}/{metrics.GatherReadingDuplicateResponsesSent:N0} |");
         if (report.GatewayObservation is { } gateway)
         {
             builder.AppendLine($"| Gateway 测试前基线 TCP/认证设备 | {gateway.BaselineTcpConnections?.ToString("N0") ?? "不可用"}/{gateway.BaselineAuthenticatedDevices?.ToString("N0") ?? "不可用"} |");
@@ -70,6 +74,19 @@ internal static class AggregateReportWriter
         }
         builder.AppendLine($"| 登录延迟 P50/P95/P99 | {metrics.LoginLatency.Percentile(0.50)}/{metrics.LoginLatency.Percentile(0.95)}/{metrics.LoginLatency.Percentile(0.99)} ms |");
         builder.AppendLine($"| 建连延迟 P50/P95/P99 | {metrics.ConnectionLatency.Percentile(0.50)}/{metrics.ConnectionLatency.Percentile(0.95)}/{metrics.ConnectionLatency.Percentile(0.99)} ms |");
+        builder.AppendLine($"| HTTP 端到端延迟 P50/P95/P99 | {metrics.ApiRequestLatency.Percentile(0.50)}/{metrics.ApiRequestLatency.Percentile(0.95)}/{metrics.ApiRequestLatency.Percentile(0.99)} ms |");
+        builder.AppendLine($"| Gather 读表本地响应延迟 P50/P95/P99 | {metrics.GatherReadingResponseLatency.Percentile(0.50)}/{metrics.GatherReadingResponseLatency.Percentile(0.95)}/{metrics.GatherReadingResponseLatency.Percentile(0.99)} ms |");
+        builder.AppendLine();
+        builder.AppendLine("## 节点运行状态");
+        builder.AppendLine();
+        builder.AppendLine("| 分片 | 节点 | 状态 | 原因 |");
+        builder.AppendLine("| ---: | --- | --- | --- |");
+        foreach (var outcome in report.NodeOutcomes)
+        {
+            builder.AppendLine(
+                $"| {outcome.ShardIndex} | {EscapeMarkdownCell(outcome.NodeName)} | {FormatRunStatus(outcome.Status)} | " +
+                $"{EscapeMarkdownCell(outcome.Reason ?? "-")} |");
+        }
         builder.AppendLine();
         builder.AppendLine("## 验收规则");
         builder.AppendLine();
@@ -77,6 +94,31 @@ internal static class AggregateReportWriter
             builder.AppendLine($"- {(check.Passed ? "通过" : "失败")} {check.Name}：{check.Actual:F4} {check.Comparator} {check.Threshold:F4}");
         return builder.ToString();
     }
+
+    /// <summary>
+    /// 把内部运行状态转换为报告中的中文结论。
+    /// </summary>
+    /// <param name="status">节点或汇总运行状态。</param>
+    /// <returns>用于 Markdown 展示的中文文本。</returns>
+    private static string FormatRunStatus(LoadTestRunStatus status) => status switch
+    {
+        LoadTestRunStatus.Passed => "通过",
+        LoadTestRunStatus.Failed => "失败",
+        LoadTestRunStatus.CompletedWithSkippedPhases => "完成但有阶段跳过",
+        LoadTestRunStatus.Cancelled => "已取消",
+        LoadTestRunStatus.Aborted => "已终止",
+        _ => status.ToString()
+    };
+
+    /// <summary>
+    /// 转义会破坏 Markdown 表格结构的节点名称或原因文本，并把换行压缩为空格。
+    /// </summary>
+    /// <param name="value">待写入表格单元格的文本。</param>
+    /// <returns>可安全写入 Markdown 表格的文本。</returns>
+    private static string EscapeMarkdownCell(string value) =>
+        value.Replace("|", "\\|", StringComparison.Ordinal)
+            .Replace("\r", " ", StringComparison.Ordinal)
+            .Replace("\n", " ", StringComparison.Ordinal);
 
     /// <summary>
     /// 把字节数格式化为便于压测报告阅读的 MiB 文本。

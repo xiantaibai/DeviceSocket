@@ -2,6 +2,11 @@ using DeviceSocket.LoadTester.Metrics;
 
 namespace DeviceSocket.LoadTester.Runtime;
 
+/// <summary>
+/// 在所有虚拟设备之间共享连接时间槽，按配置的每秒连接数平滑发放许可并记录调度滞后，避免线程批量唤醒形成非预期尖峰。
+/// </summary>
+/// <param name="connectionsPerSecond">初始连接速率，单位连接数/秒；运行阶段可动态覆盖。</param>
+/// <param name="metrics">接收连接调度滞后直方图的本节点指标容器。</param>
 internal sealed class ConnectionPacer(int connectionsPerSecond, LoadTestMetrics metrics) : IDisposable
 {
     private readonly SemaphoreSlim _scheduleLock = new(1, 1);

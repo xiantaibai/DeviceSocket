@@ -21,6 +21,9 @@ public static class DeviceAddressAllocator
         var devices = new List<VirtualDeviceDescriptor>(
             (options.Devices.Count + options.Distributed.ShardCount - 1) / options.Distributed.ShardCount);
         var runSeed = StableHash(options.Distributed.RunId);
+        if (options.Devices.GenerationMode == DeviceAddressGenerationMode.Csv)
+            return AllocateCsvDevices(options, devices, runSeed);
+
         var duplicateCount = (int)Math.Floor(
             options.Devices.Count * options.Devices.DuplicateIdentityPercentage / 100d);
         var uniqueIdentityCount = Math.Max(1, options.Devices.Count - duplicateCount);
@@ -70,6 +73,46 @@ public static class DeviceAddressAllocator
                     meterAddress,
                     CombineSeed(runSeed, ordinal)));
             }
+        }
+
+        return devices;
+    }
+
+    /// <summary>
+    /// 从共享 CSV 按数据行全局序号分配当前节点设备，保证单机和多机使用完全相同的真实身份集合。
+    /// </summary>
+    /// <param name="options">已经通过基础校验的完整负载配置。</param>
+    /// <param name="devices">接收当前分片设备的预分配集合。</param>
+    /// <param name="runSeed">由 RunId 派生的稳定随机种子。</param>
+    /// <returns>当前分片负责的真实设备描述。</returns>
+    /// <exception cref="ConfigurationValidationException">CSV 数据行数与 <c>devices.count</c> 不一致。</exception>
+    private static IReadOnlyList<VirtualDeviceDescriptor> AllocateCsvDevices(
+        LoadTestOptions options,
+        List<VirtualDeviceDescriptor> devices,
+        int runSeed)
+    {
+        var entries = DeviceIdentityCsvLoader.Load(options.Devices.DeviceMappingFile!);
+        if (entries.Count != options.Devices.Count)
+        {
+            throw new ConfigurationValidationException(
+            [
+                $"devices.count: 配置为 {options.Devices.Count}，但 devices.deviceMappingFile 包含 {entries.Count} 条真实设备映射；必须完全一致。"
+            ]);
+        }
+
+        foreach (var entry in entries)
+        {
+            // 以 CSV 数据行号作为全局序号，所有节点都可独立计算且不会重复领取同一真实设备。
+            if (entry.GlobalOrdinal % options.Distributed.ShardCount != options.Distributed.ShardIndex)
+                continue;
+            devices.Add(new VirtualDeviceDescriptor(
+                entry.GlobalOrdinal,
+                options.Target.Protocol,
+                entry.DeviceId,
+                entry.AdministrativeDivision,
+                entry.TerminalAddress,
+                string.Empty,
+                CombineSeed(runSeed, entry.GlobalOrdinal)));
         }
 
         return devices;

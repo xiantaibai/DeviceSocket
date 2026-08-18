@@ -11,9 +11,14 @@ public sealed class DeviceOptions
     public int Count { get; set; } = 100;
 
     /// <summary>
-    /// 获取或设置 <c>devices.generationMode</c>；默认 <see cref="DeviceAddressGenerationMode.Sequential"/>，决定终端地址按顺序递增或在指定区间内随机抽取。
+    /// 获取或设置 <c>devices.generationMode</c>；默认 <see cref="DeviceAddressGenerationMode.Sequential"/>，决定终端地址按顺序递增、随机抽取或从 CSV 读取。
     /// </summary>
     public DeviceAddressGenerationMode GenerationMode { get; set; } = DeviceAddressGenerationMode.Sequential;
+
+    /// <summary>
+    /// 获取或设置 <c>devices.deviceMappingFile</c>；默认空，仅 CSV 模式必填，文件每行格式为 <c>meterId,deviceId</c>，相对路径按场景 JSON 所在目录解析。
+    /// </summary>
+    public string? DeviceMappingFile { get; set; }
 
     /// <summary>
     /// 获取或设置 <c>devices.addressStart</c>；默认 1，376.1 下表示首个终端地址，顺序模式从该值递增，随机模式将其作为闭区间下界，零值无效。

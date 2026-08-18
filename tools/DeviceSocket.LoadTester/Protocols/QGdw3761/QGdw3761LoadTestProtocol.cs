@@ -5,6 +5,9 @@ using DeviceSocket.LoadTester.Devices;
 
 namespace DeviceSocket.LoadTester.Protocols.QGdw3761;
 
+/// <summary>
+/// 实现面向当前 DeviceSocket 服务端的标准 Q/GDW 376.1 登录、心跳、退出、下行确认和 AFN=00H/F3 请求关联规则。
+/// </summary>
 internal sealed class QGdw3761LoadTestProtocol : ILoadTestProtocol
 {
     public LoadProtocol Protocol => LoadProtocol.QGdw3761;
@@ -35,7 +38,7 @@ internal sealed class QGdw3761LoadTestProtocol : ILoadTestProtocol
             QGdw3761LinkMessageKind.Logout,
             sequence);
 
-    public byte[]? CreateDownstreamResponse(
+    public DownstreamResponsePlan? CreateDownstreamResponse(
         IProtocolFrame frame,
         VirtualDeviceDescriptor device,
         byte sequence) =>
@@ -44,7 +47,7 @@ internal sealed class QGdw3761LoadTestProtocol : ILoadTestProtocol
         !request.IsUpstream &&
         request.ConfirmationRequested &&
         string.Equals(request.DeviceId, device.DeviceId, StringComparison.OrdinalIgnoreCase)
-            ? QGdw3761TerminalResponseEncoder.CreateConfirmation(request)
+            ? DownstreamResponsePlan.Generic(QGdw3761TerminalResponseEncoder.CreateConfirmation(request))
             : null;
 
     public bool IsConfirmation(

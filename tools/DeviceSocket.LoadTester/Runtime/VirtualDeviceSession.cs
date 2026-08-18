@@ -8,6 +8,16 @@ using DeviceSocket.LoadTester.Protocols;
 
 namespace DeviceSocket.LoadTester.Runtime;
 
+/// <summary>
+/// 管理单台虚拟终端从限速建连、协议登录、心跳和业务应答到断线退避重连的完整生命周期，并把结果写入共享指标。
+/// </summary>
+/// <param name="descriptor">本设备稳定的协议身份、全局序号和随机种子。</param>
+/// <param name="options">连接、心跳、上报、重连和协议兼容配置。</param>
+/// <param name="protocol">负责创建帧、拆包和确认关联的协议适配器。</param>
+/// <param name="metrics">本节点共享的并发安全指标容器。</param>
+/// <param name="pacer">所有设备共享的连接速率调度器。</param>
+/// <param name="connectionGate">限制同时处于连接和登录过程中的设备数量。</param>
+/// <param name="faultController">提供当前场景阶段的故障参数快照。</param>
 internal sealed class VirtualDeviceSession(
     VirtualDeviceDescriptor descriptor,
     LoadTestOptions options,
@@ -350,19 +360,56 @@ internal sealed class VirtualDeviceSession(
         }
     }
 
+    /// <summary>
+    /// 执行协议适配器生成的下行响应计划，并把 Gather 读表命令、丢弃、延迟和重复应答单独计量。
+    /// </summary>
+    /// <param name="stream">当前设备连接的网络流。</param>
+    /// <param name="response">服务端下发且已完成协议解析的帧。</param>
+    /// <param name="cancellationToken">连接周期取消令牌。</param>
+    /// <returns>响应计划执行完成的异步任务。</returns>
     private async Task RespondToDownstreamAsync(
         NetworkStream stream,
         IProtocolFrame response,
         CancellationToken cancellationToken)
     {
         metrics.DownstreamFrame();
-        var protocolResponse = protocol.CreateDownstreamResponse(response, descriptor, NextSequence());
-        if (protocolResponse is null)
+        var plan = protocol.CreateDownstreamResponse(response, descriptor, NextSequence());
+        if (plan is null)
             return;
+        var isGatherReading = plan.Kind == DownstreamResponseKind.GatherReading;
+        if (isGatherReading)
+            metrics.GatherReadingCommandReceived();
+        if (plan.Payload is null || plan.SendCount <= 0)
+        {
+            if (isGatherReading)
+                metrics.GatherReadingResponseDropped();
+            return;
+        }
 
-        var bytesWritten = await WriteAsync(stream, protocolResponse, cancellationToken);
-        if (bytesWritten > 0)
+        var stopwatch = Stopwatch.StartNew();
+        if (plan.Delay > TimeSpan.Zero)
+            await Task.Delay(plan.Delay, cancellationToken);
+
+        var responded = false;
+        for (var index = 0; index < plan.SendCount; index++)
+        {
+            var bytesWritten = await WriteAsync(stream, plan.Payload, cancellationToken);
+            if (bytesWritten <= 0)
+                continue;
             metrics.DownstreamResponseSent(bytesWritten);
+            if (isGatherReading)
+            {
+                metrics.GatherReadingResponseSent(plan.IsBusinessFailure, duplicate: index > 0);
+                if (!responded)
+                {
+                    metrics.GatherReadingCommandResponded(stopwatch.Elapsed);
+                    responded = true;
+                }
+            }
+        }
+
+        if (isGatherReading && !responded)
+            metrics.GatherReadingResponseDropped();
     }
 
     private async Task<int> WriteAsync(NetworkStream stream, byte[] frame, CancellationToken cancellationToken)

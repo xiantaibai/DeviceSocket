@@ -3,6 +3,9 @@ using DeviceSocket.LoadTester.Configuration;
 
 namespace DeviceSocket.LoadTester.CommandLine;
 
+/// <summary>
+/// 将 <c>run</c> 和 <c>report merge</c> 命令行参数解析为强类型命令，并集中处理必填项、重复项和数值格式错误。
+/// </summary>
 internal static class CommandLineParser
 {
     internal static LoadTesterCommand Parse(string[] args)

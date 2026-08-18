@@ -1,0 +1,186 @@
+{
+  "role": "combined",
+  "target": {
+    "host": "192.168.111.18",
+    "port": 6666,
+    "protocol": "qGdw3761",
+    "compatibilityProfile": "gatherTcpCenter"
+  },
+  "devices": {
+    "count": 10000,
+    "generationMode": "csv",
+    "deviceMappingFile": "gather-device-10000.csv"
+  },
+  "connection": {
+    "startMode": "ramp",
+    "connectionsPerSecond": 300,
+    "maxConcurrentConnecting": 500,
+    "connectTimeoutSeconds": 5,
+    "loginTimeoutSeconds": 5,
+    "writeTimeoutSeconds": 5,
+    "noDelay": true
+  },
+  "heartbeat": {
+    "enabled": true,
+    "intervalSeconds": 60,
+    "jitterSeconds": 10,
+    "responseTimeoutSeconds": 5
+  },
+  "workload": {
+    "reportsEnabled": false,
+    "reportIntervalSeconds": 300,
+    "jitterSeconds": 30,
+    "gatherReadingResponse": {
+      "enabled": true,
+      "mode": "normal",
+      "affectedDevicePercentage": 100,
+      "delayMilliseconds": 1000,
+      "rateCount": 4,
+      "baseReadingKwh": 1000,
+      "deviceStepKwh": 0.01
+    }
+  },
+  "commandWorkload": {
+    "enabled": true,
+    "baseUrl": "http://192.168.111.18:9011",
+    "endpointPath": "/api/ammeter/reading",
+    "authorizationHeaderName": "gather-authorize-key",
+    "authorizationKeyEnvironmentVariable": "",
+    "operatorUserId": 0,
+    "operationSource": 6,
+    "readingModel": 0,
+    "readingCode": 0,
+    "requestTimeoutSeconds": 70,
+    "requiredOnlineRate": 0.98,
+    "onlineStableSeconds": 30,
+    "onlineWaitTimeoutSeconds": 600,
+    "startDelaySeconds": 0,
+    "phases": [
+      {
+        "name": "functional-sync-100",
+        "targetDeviceCount": 100,
+        "requestsPerDevice": 1,
+        "requestsPerSecond": 10,
+        "maxConcurrency": 10,
+        "showResult": true,
+        "pauseAfterSeconds": 10
+      },
+      {
+        "name": "all-devices-async-once",
+        "targetDeviceCount": 10000,
+        "requestsPerDevice": 1,
+        "requestsPerSecond": 200,
+        "maxConcurrency": 50,
+        "showResult": false,
+        "pauseAfterSeconds": 30
+      },
+      {
+        "name": "sync-concurrency-20",
+        "targetDeviceCount": 200,
+        "requestsPerDevice": 1,
+        "requestsPerSecond": 20,
+        "maxConcurrency": 20,
+        "showResult": true,
+        "pauseAfterSeconds": 20
+      },
+      {
+        "name": "sync-concurrency-50",
+        "targetDeviceCount": 500,
+        "requestsPerDevice": 1,
+        "requestsPerSecond": 50,
+        "maxConcurrency": 50,
+        "showResult": true,
+        "pauseAfterSeconds": 20
+      },
+      {
+        "name": "same-device-queue-1000x5",
+        "targetDeviceCount": 1000,
+        "requestsPerDevice": 5,
+        "requestsPerSecond": 200,
+        "maxConcurrency": 100,
+        "showResult": false,
+        "pauseAfterSeconds": 60
+      },
+      {
+        "name": "same-device-sync-100x5",
+        "targetDeviceCount": 100,
+        "requestsPerDevice": 5,
+        "requestsPerSecond": 20,
+        "maxConcurrency": 20,
+        "showResult": true,
+        "pauseAfterSeconds": 60
+      }
+    ]
+  },
+  "reconnect": {
+    "mode": "exponentialJitter",
+    "initialDelayMilliseconds": 250,
+    "maximumDelaySeconds": 10,
+    "multiplier": 2,
+    "jitterRatio": 0.5,
+    "maximumAttempts": 0
+  },
+  "scenario": {
+    "name": "gather-tcpcenter-reading-10000",
+    "durationSeconds": 1,
+    "phases": [
+      {
+        "name": "canary-100",
+        "kind": "warmup",
+        "durationSeconds": 30,
+        "targetDevicePercentage": 1,
+        "connectionsPerSecond": 25
+      },
+      {
+        "name": "ramp-5000",
+        "kind": "ramp",
+        "durationSeconds": 120,
+        "targetDevicePercentage": 50,
+        "connectionsPerSecond": 200
+      },
+      {
+        "name": "ramp-10000",
+        "kind": "ramp",
+        "durationSeconds": 180,
+        "targetDevicePercentage": 100,
+        "connectionsPerSecond": 300
+      },
+      {
+        "name": "command-steady-10000",
+        "kind": "steady",
+        "durationSeconds": 900,
+        "targetDevicePercentage": 100,
+        "connectionsPerSecond": 300
+      },
+      {
+        "name": "cooldown",
+        "kind": "cooldown",
+        "durationSeconds": 30,
+        "targetDevicePercentage": 0
+      }
+    ]
+  },
+  "reporting": {
+    "outputDirectory": "load-test-results",
+    "sampleIntervalSeconds": 1,
+    "writeConsoleSummary": true
+  },
+  "serverObservation": {
+    "enabled": false
+  },
+  "acceptance": {
+    "minimumConnectionSuccessRate": 0.95,
+    "minimumLoginSuccessRate": 0.95,
+    "minimumFinalOnlineRate": 0.98,
+    "minimumFinalOnlineCount": 9800,
+    "maximumProtocolErrorRate": 0.01,
+    "minimumApiSuccessRate": 0.98,
+    "minimumGatherReadingResponseRate": 0.99,
+    "maximumApiP95Milliseconds": 70000
+  },
+  "distributed": {
+    "runId": "gather-tcpcenter-reading-10k",
+    "shardIndex": 0,
+    "shardCount": 1
+  }
+}

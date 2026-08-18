@@ -2,6 +2,9 @@ using DeviceSocket.LoadTester.Configuration;
 
 namespace DeviceSocket.LoadTester.Tests;
 
+/// <summary>
+/// 为 LoadTester 单元测试创建不访问外部服务且关闭默认验收门槛的最小有效配置。
+/// </summary>
 internal static class TestOptionsFactory
 {
     internal static LoadTestOptions Create(LoadProtocol protocol = LoadProtocol.QGdw3761) => new()

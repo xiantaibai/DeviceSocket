@@ -2,6 +2,9 @@ using DeviceSocket.LoadTester.Configuration;
 
 namespace DeviceSocket.LoadTester.Runtime;
 
+/// <summary>
+/// 以原子快照方式发布当前场景阶段的故障参数，使一万条设备会话切换阶段时无需逐连接加锁。
+/// </summary>
 internal sealed class FaultInjectionController
 {
     private FaultInjectionSnapshot _current = FaultInjectionSnapshot.None;

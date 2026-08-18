@@ -24,13 +24,14 @@ public static class LoadTestConfigurationLoader
         if (string.IsNullOrWhiteSpace(path))
             throw new ArgumentException("配置文件路径不能为空。", nameof(path));
 
-        await using var stream = File.OpenRead(Path.GetFullPath(path));
+        var fullPath = Path.GetFullPath(path);
+        await using var stream = File.OpenRead(fullPath);
         var options = await JsonSerializer.DeserializeAsync<LoadTestOptions>(
             stream,
             SerializerOptions,
             cancellationToken) ?? throw new ConfigurationValidationException(["配置文件内容不能为空。"]);
 
-        ApplyDefaultsAndOverrides(options, overrides);
+        ApplyDefaultsAndOverrides(options, overrides, Path.GetDirectoryName(fullPath)!);
         LoadTestOptionsValidator.ValidateAndThrow(options);
         return options;
     }
@@ -49,13 +50,25 @@ public static class LoadTestConfigurationLoader
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
-    private static void ApplyDefaultsAndOverrides(LoadTestOptions options, RunCommandOverrides overrides)
+    /// <summary>
+    /// 补齐旧配置缺省对象、解析配置文件相对路径并应用当前节点命令行覆盖。
+    /// </summary>
+    /// <param name="options">从 JSON 反序列化得到的配置。</param>
+    /// <param name="overrides">当前节点命令行覆盖。</param>
+    /// <param name="configurationDirectory">配置文件所在的绝对目录。</param>
+    private static void ApplyDefaultsAndOverrides(
+        LoadTestOptions options,
+        RunCommandOverrides overrides,
+        string configurationDirectory)
     {
         options.Target ??= new TargetOptions();
         options.Devices ??= new DeviceOptions();
         options.Connection ??= new ConnectionOptions();
         options.Heartbeat ??= new HeartbeatOptions();
         options.Workload ??= new WorkloadOptions();
+        options.Workload.GatherReadingResponse ??= new GatherReadingResponseOptions();
+        options.CommandWorkload ??= new CommandWorkloadOptions();
+        options.CommandWorkload.Phases ??= [];
         options.Reconnect ??= new ReconnectOptions();
         options.Scenario ??= new ScenarioOptions();
         options.Scenario.Phases ??= [];
@@ -68,6 +81,22 @@ public static class LoadTestConfigurationLoader
         options.Target.Port = options.Target.Port == 0
             ? options.Target.Protocol == LoadProtocol.QGdw3761 ? 5001 : 5002
             : options.Target.Port;
+
+        if (!string.IsNullOrWhiteSpace(options.Devices.DeviceMappingFile) &&
+            !Path.IsPathRooted(options.Devices.DeviceMappingFile))
+        {
+            // 真实设备身份 CSV 跟随场景发布；按场景目录解析才能在本地和多台 Linux/Windows 负载机上得到同一文件。
+            options.Devices.DeviceMappingFile = Path.GetFullPath(
+                Path.Combine(configurationDirectory, options.Devices.DeviceMappingFile));
+        }
+
+        if (!string.IsNullOrWhiteSpace(options.CommandWorkload.DeviceMappingFile) &&
+            !Path.IsPathRooted(options.CommandWorkload.DeviceMappingFile))
+        {
+            // 多机发布时场景文件和 CSV 通常放在同一目录，相对该目录解析可避免受启动工作目录影响。
+            options.CommandWorkload.DeviceMappingFile = Path.GetFullPath(
+                Path.Combine(configurationDirectory, options.CommandWorkload.DeviceMappingFile));
+        }
 
         if (!string.IsNullOrWhiteSpace(overrides.RunId))
             options.Distributed.RunId = overrides.RunId;

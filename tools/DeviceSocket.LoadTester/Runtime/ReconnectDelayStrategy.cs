@@ -2,6 +2,11 @@ using DeviceSocket.LoadTester.Configuration;
 
 namespace DeviceSocket.LoadTester.Runtime;
 
+/// <summary>
+/// 根据固定或指数抖动配置计算单台虚拟设备的下一次重连等待时间，并保证结果不超过配置硬上限。
+/// </summary>
+/// <param name="options">重连模式、初始延迟、倍数、抖动和最大延迟配置。</param>
+/// <param name="random">设备独立随机源，用于稳定复现指数退避抖动。</param>
 internal sealed class ReconnectDelayStrategy(ReconnectOptions options, Random random)
 {
     internal TimeSpan GetDelay(int attempt)

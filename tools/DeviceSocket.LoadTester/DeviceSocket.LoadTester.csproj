@@ -6,6 +6,7 @@
 
   <ItemGroup>
     <None Update="Scenarios\*.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Scenarios\*.csv" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <PropertyGroup>

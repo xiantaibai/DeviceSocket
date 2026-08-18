@@ -17,25 +17,41 @@ public static class LoadTestOptionsValidator
         ArgumentNullException.ThrowIfNull(options);
         var errors = new List<string>();
 
+        if (!Enum.IsDefined(options.Role))
+            errors.Add("role: 仅支持 devicesOnly、apiOnly 或 combined。");
+
         if (string.IsNullOrWhiteSpace(options.Target.Host))
             errors.Add("target.host: 服务器地址不能为空。");
         if (options.Target.Port is <= 0 or > 65535)
             errors.Add("target.port: 端口必须在 1-65535 之间。");
+        if (!Enum.IsDefined(options.Target.Protocol))
+            errors.Add("target.protocol: 通信协议不受支持。");
+        if (!Enum.IsDefined(options.Target.CompatibilityProfile))
+            errors.Add("target.compatibilityProfile: 服务端兼容配置不受支持。");
+        if (options.Target.CompatibilityProfile == ServerCompatibilityProfile.GatherTcpCenter &&
+            options.Target.Protocol != LoadProtocol.QGdw3761)
+        {
+            errors.Add("target.compatibilityProfile: gatherTcpCenter 当前只支持 Q/GDW 376.1 协议。");
+        }
         if (options.Devices.Count <= 0)
             errors.Add("devices.count: 设备总数必须大于 0。");
-        if (options.Devices.AddressStart <= 0)
-            errors.Add("devices.addressStart: 起始地址必须大于 0。");
         if (options.Devices.DuplicateIdentityPercentage is < 0 or > 100)
             errors.Add("devices.duplicateIdentityPercentage: 必须在 0-100 之间。");
         if (!Enum.IsDefined(options.Devices.GenerationMode))
-            errors.Add("devices.generationMode: 仅支持 sequential 或 random。");
+            errors.Add("devices.generationMode: 仅支持 sequential、random 或 csv。");
 
         var duplicateCount = (int)Math.Floor(
             options.Devices.Count * options.Devices.DuplicateIdentityPercentage / 100d);
         var uniqueIdentityCount = Math.Max(1, options.Devices.Count - duplicateCount);
         var requiredAddressOffset = uniqueIdentityCount - 1L;
-        if (options.Target.Protocol == LoadProtocol.QGdw3761)
+        if (options.Devices.GenerationMode == DeviceAddressGenerationMode.Csv)
         {
+            ValidateCsvDeviceSource(options, errors);
+        }
+        else if (options.Target.Protocol == LoadProtocol.QGdw3761)
+        {
+            if (options.Devices.AddressStart <= 0)
+                errors.Add("devices.addressStart: 起始地址必须大于 0。");
             if (string.IsNullOrEmpty(options.Devices.AdministrativeDivision) ||
                 options.Devices.AdministrativeDivision.Length != 4 ||
                 !options.Devices.AdministrativeDivision.All(char.IsDigit))
@@ -70,6 +86,10 @@ public static class LoadTestOptionsValidator
         {
             errors.Add("devices.generationMode: random 当前只支持 Q/GDW 376.1 协议。");
         }
+        else if (options.Devices.AddressStart <= 0)
+        {
+            errors.Add("devices.addressStart: 起始地址必须大于 0。");
+        }
         else if (options.Devices.AddressStart > MaximumDlt645Address ||
                  requiredAddressOffset > MaximumDlt645Address - options.Devices.AddressStart)
         {
@@ -98,6 +118,8 @@ public static class LoadTestOptionsValidator
             if (options.Workload.JitterSeconds < 0 || options.Workload.JitterSeconds >= options.Workload.ReportIntervalSeconds)
                 errors.Add("workload.jitterSeconds: 必须大于等于 0 且小于上报间隔。");
         }
+        ValidateGatherReadingResponse(options, errors);
+        ValidateCommandWorkload(options, errors);
 
         if (options.Reconnect.InitialDelayMilliseconds < 0)
             errors.Add("reconnect.initialDelayMilliseconds: 不能小于 0。");
@@ -128,6 +150,10 @@ public static class LoadTestOptionsValidator
 
         if (options.Reporting.SampleIntervalSeconds <= 0)
             errors.Add("reporting.sampleIntervalSeconds: 必须大于 0。");
+        if (options.Reporting.CheckpointIntervalSeconds <= 0)
+            errors.Add("reporting.checkpointIntervalSeconds: 必须大于 0。");
+        else if (options.Reporting.CheckpointIntervalSeconds < options.Reporting.SampleIntervalSeconds)
+            errors.Add("reporting.checkpointIntervalSeconds: 不能小于 reporting.sampleIntervalSeconds。");
         if (string.IsNullOrWhiteSpace(options.Reporting.OutputDirectory))
             errors.Add("reporting.outputDirectory: 输出目录不能为空。");
         if (options.ServerObservation.Enabled)
@@ -155,6 +181,10 @@ public static class LoadTestOptionsValidator
         ValidateRate(options.Acceptance.MinimumLoginSuccessRate, "acceptance.minimumLoginSuccessRate", errors);
         ValidateRate(options.Acceptance.MinimumFinalOnlineRate, "acceptance.minimumFinalOnlineRate", errors);
         ValidateRate(options.Acceptance.MaximumProtocolErrorRate, "acceptance.maximumProtocolErrorRate", errors);
+        ValidateRate(options.Acceptance.MinimumApiSuccessRate, "acceptance.minimumApiSuccessRate", errors);
+        ValidateRate(options.Acceptance.MinimumGatherReadingResponseRate, "acceptance.minimumGatherReadingResponseRate", errors);
+        if (options.Acceptance.MaximumApiP95Milliseconds is <= 0)
+            errors.Add("acceptance.maximumApiP95Milliseconds: 设置后必须大于 0。");
         if (options.Acceptance.MaximumRecoverySeconds is <= 0)
             errors.Add("acceptance.maximumRecoverySeconds: 设置后必须大于 0。");
         if (options.Acceptance.MinimumFinalOnlineCount is < 0)
@@ -187,6 +217,129 @@ public static class LoadTestOptionsValidator
         }
 
         return errors;
+    }
+
+    /// <summary>
+    /// 校验 Gather 读表业务应答的适用协议、影响比例、延迟和模拟示值范围。
+    /// </summary>
+    /// <param name="options">完整负载配置。</param>
+    /// <param name="errors">接收校验错误的集合。</param>
+    private static void ValidateGatherReadingResponse(LoadTestOptions options, ICollection<string> errors)
+    {
+        var response = options.Workload.GatherReadingResponse;
+        if (!Enum.IsDefined(response.Mode))
+            errors.Add("workload.gatherReadingResponse.mode: 应答模式不受支持。");
+        if (response.AffectedDevicePercentage is < 0 or > 100)
+            errors.Add("workload.gatherReadingResponse.affectedDevicePercentage: 必须在 0-100 之间。");
+        if (response.DelayMilliseconds < 0)
+            errors.Add("workload.gatherReadingResponse.delayMilliseconds: 不能小于 0。");
+        if (response.RateCount is < 0 or > 8)
+            errors.Add("workload.gatherReadingResponse.rateCount: 必须在 0-8 之间。");
+        if (response.BaseReadingKwh is < 0 or > 999_999.9999m)
+            errors.Add("workload.gatherReadingResponse.baseReadingKwh: 必须在 0-999999.9999 kWh 之间。");
+        if (response.DeviceStepKwh < 0)
+            errors.Add("workload.gatherReadingResponse.deviceStepKwh: 不能小于 0。");
+        if (response.Enabled &&
+            options.Target.CompatibilityProfile != ServerCompatibilityProfile.GatherTcpCenter &&
+            response.Mode != GatherReadingResponseMode.Normal)
+        {
+            errors.Add("workload.gatherReadingResponse: 非 normal 模式只适用于 gatherTcpCenter 兼容配置。");
+        }
+    }
+
+    /// <summary>
+    /// 校验 HTTP 指令驱动的角色组合、地址、设备映射、在线门槛和各阶段限流参数。
+    /// </summary>
+    /// <param name="options">完整负载配置。</param>
+    /// <param name="errors">接收校验错误的集合。</param>
+    private static void ValidateCommandWorkload(LoadTestOptions options, ICollection<string> errors)
+    {
+        var command = options.CommandWorkload;
+        var shouldRunApi = options.Role is LoadTestRole.ApiOnly or LoadTestRole.Combined;
+        if (shouldRunApi && !command.Enabled)
+            errors.Add("commandWorkload.enabled: apiOnly 或 combined 角色必须启用 HTTP 指令负载。");
+        if (!command.Enabled)
+            return;
+        if (options.Target.CompatibilityProfile != ServerCompatibilityProfile.GatherTcpCenter ||
+            options.Target.Protocol != LoadProtocol.QGdw3761)
+        {
+            errors.Add("commandWorkload: 当前只支持 Q/GDW 376.1 的 gatherTcpCenter 老服务。");
+        }
+        if (!Uri.TryCreate(command.BaseUrl, UriKind.Absolute, out var baseUri) ||
+            baseUri.Scheme is not ("http" or "https"))
+        {
+            errors.Add("commandWorkload.baseUrl: 必须是绝对 HTTP/HTTPS 地址。");
+        }
+        if (string.IsNullOrWhiteSpace(command.EndpointPath))
+            errors.Add("commandWorkload.endpointPath: 不能为空。");
+
+        var effectiveMappingFile = !string.IsNullOrWhiteSpace(command.DeviceMappingFile)
+            ? command.DeviceMappingFile
+            : options.Devices.GenerationMode == DeviceAddressGenerationMode.Csv
+                ? options.Devices.DeviceMappingFile
+                : null;
+        var hasMappingFile = !string.IsNullOrWhiteSpace(effectiveMappingFile);
+        var hasMeterIdStart = command.MeterIdStart.HasValue;
+        if (hasMappingFile == hasMeterIdStart)
+            errors.Add("commandWorkload: 有效设备映射文件与 meterIdStart 必须且只能设置一个；CSV 设备模式会默认复用 devices.deviceMappingFile。");
+        if (hasMappingFile && !File.Exists(effectiveMappingFile))
+            errors.Add($"commandWorkload.deviceMappingFile: 文件不存在：{effectiveMappingFile}");
+        if (command.MeterIdStart is <= 0)
+            errors.Add("commandWorkload.meterIdStart: 设置后必须大于 0。");
+        ValidatePositiveSeconds(command.RequestTimeoutSeconds, "commandWorkload.requestTimeoutSeconds", errors);
+        ValidateRate(command.RequiredOnlineRate, "commandWorkload.requiredOnlineRate", errors);
+        if (command.RequiredOnlineRate <= 0)
+            errors.Add("commandWorkload.requiredOnlineRate: 必须大于 0。");
+        if (command.OnlineStableSeconds < 0)
+            errors.Add("commandWorkload.onlineStableSeconds: 不能小于 0。");
+        ValidatePositiveSeconds(command.OnlineWaitTimeoutSeconds, "commandWorkload.onlineWaitTimeoutSeconds", errors);
+        if (command.StartDelaySeconds < 0)
+            errors.Add("commandWorkload.startDelaySeconds: 不能小于 0。");
+        if (command.Phases.Count == 0)
+            errors.Add("commandWorkload.phases: 启用 HTTP 指令负载时至少需要一个阶段。");
+        foreach (var phase in command.Phases)
+        {
+            var path = $"commandWorkload.phases[{phase.Name}]";
+            if (string.IsNullOrWhiteSpace(phase.Name))
+                errors.Add("commandWorkload.phases.name: 阶段名称不能为空。");
+            if (phase.TargetDeviceCount < 0 || phase.TargetDeviceCount > options.Devices.Count)
+                errors.Add($"{path}.targetDeviceCount: 必须在 0 到 devices.count 之间，0 表示全部设备。");
+            if (phase.RequestsPerDevice <= 0)
+                errors.Add($"{path}.requestsPerDevice: 必须大于 0。");
+            if (phase.RequestsPerSecond <= 0)
+                errors.Add($"{path}.requestsPerSecond: 必须大于 0。");
+            if (phase.MaxConcurrency <= 0)
+                errors.Add($"{path}.maxConcurrency: 必须大于 0。");
+            if (phase.PauseAfterSeconds < 0)
+                errors.Add($"{path}.pauseAfterSeconds: 不能小于 0。");
+            if (phase.MinimumOnlineCount is < 0 || phase.MinimumOnlineCount > options.Devices.Count)
+                errors.Add($"{path}.minimumOnlineCount: 必须在 0 到 devices.count 之间，空值表示继承全局在线率。");
+            if (phase.OnlineStableSeconds is < 0)
+                errors.Add($"{path}.onlineStableSeconds: 不能小于 0，空值表示继承全局稳定时长。");
+            if (phase.OnlineWaitTimeoutSeconds is <= 0)
+                errors.Add($"{path}.onlineWaitTimeoutSeconds: 设置后必须大于 0，空值表示继承全局等待上限。");
+        }
+    }
+
+    /// <summary>
+    /// 校验 CSV 真实设备模式的协议、文件和身份复用约束；文件内容在设备分配前统一解析并校验。
+    /// </summary>
+    /// <param name="options">完整负载配置。</param>
+    /// <param name="errors">接收校验错误的集合。</param>
+    private static void ValidateCsvDeviceSource(LoadTestOptions options, ICollection<string> errors)
+    {
+        if (options.Target.Protocol != LoadProtocol.QGdw3761)
+            errors.Add("devices.generationMode: csv 当前只支持 Q/GDW 376.1 协议。");
+        if (string.IsNullOrWhiteSpace(options.Devices.DeviceMappingFile))
+        {
+            errors.Add("devices.deviceMappingFile: csv 模式必须设置 meterId,deviceId 映射文件。");
+        }
+        else if (!File.Exists(options.Devices.DeviceMappingFile))
+        {
+            errors.Add($"devices.deviceMappingFile: 文件不存在：{options.Devices.DeviceMappingFile}");
+        }
+        if (options.Devices.DuplicateIdentityPercentage != 0)
+            errors.Add("devices.duplicateIdentityPercentage: csv 模式已显式指定每条设备身份，必须为 0。");
     }
 
     /// <summary>

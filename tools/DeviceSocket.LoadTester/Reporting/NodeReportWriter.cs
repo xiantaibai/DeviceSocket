@@ -63,7 +63,10 @@ internal static class NodeReportWriter
         builder.AppendLine($"- 节点：{report.NodeName}，分片 {report.ShardIndex + 1}/{report.ShardCount}");
         builder.AppendLine($"- 设备：{report.LocalDeviceCount:N0}");
         builder.AppendLine($"- 时间：{report.StartedAtUtc:O} 至 {report.EndedAtUtc:O}");
-        builder.AppendLine($"- 结果：{(report.Acceptance.Passed ? "通过" : "失败")}");
+        builder.AppendLine($"- 运行状态：{FormatRunStatus(report.RunStatus)}");
+        builder.AppendLine($"- 验收结果：{(report.Acceptance.Passed ? "通过" : "失败")}");
+        if (!string.IsNullOrWhiteSpace(report.FailureReason))
+            builder.AppendLine($"- 终止原因：{EscapeMarkdownCell(report.FailureReason)}");
         builder.AppendLine();
         builder.AppendLine("## 核心指标");
         builder.AppendLine();
@@ -78,6 +81,9 @@ internal static class NodeReportWriter
         builder.AppendLine($"| 出站/入站丢包注入 | {metrics.InjectedOutboundDrops:N0}/{metrics.InjectedInboundDrops:N0} |");
         builder.AppendLine($"| 错误校验和/粘包/半包注入 | {metrics.InjectedCorruptFrames:N0}/{metrics.InjectedDuplicateFrames:N0}/{metrics.InjectedFragmentedWrites:N0} |");
         builder.AppendLine($"| 下发应答 | {metrics.DownstreamResponsesSent:N0} |");
+        builder.AppendLine($"| HTTP API 发起/成功/失败/超时 | {metrics.ApiRequestsStarted:N0}/{metrics.ApiRequestsSucceeded:N0}/{metrics.ApiRequestsFailed:N0}/{metrics.ApiRequestTimeouts:N0} |");
+        builder.AppendLine($"| Gather 读表命令收到/已应答/丢弃 | {metrics.GatherReadingCommandsReceived:N0}/{metrics.GatherReadingCommandsResponded:N0}/{metrics.GatherReadingResponsesDropped:N0} |");
+        builder.AppendLine($"| Gather 读表响应帧/业务失败/重复帧 | {metrics.GatherReadingResponsesSent:N0}/{metrics.GatherReadingBusinessFailuresSent:N0}/{metrics.GatherReadingDuplicateResponsesSent:N0} |");
         if (report.GatewayObservation is { } gateway)
         {
             builder.AppendLine($"| Gateway 测试前基线 TCP/认证设备 | {gateway.BaselineTcpConnections?.ToString("N0") ?? "不可用"}/{gateway.BaselineAuthenticatedDevices?.ToString("N0") ?? "不可用"} |");
@@ -94,6 +100,29 @@ internal static class NodeReportWriter
         builder.AppendLine($"| 收/发字节 | {metrics.BytesReceived:N0}/{metrics.BytesSent:N0} |");
         builder.AppendLine($"| 登录延迟 P50/P95/P99 | {metrics.LoginLatency.Percentile(0.50)}/{metrics.LoginLatency.Percentile(0.95)}/{metrics.LoginLatency.Percentile(0.99)} ms |");
         builder.AppendLine($"| 建连延迟 P50/P95/P99 | {metrics.ConnectionLatency.Percentile(0.50)}/{metrics.ConnectionLatency.Percentile(0.95)}/{metrics.ConnectionLatency.Percentile(0.99)} ms |");
+        builder.AppendLine($"| HTTP 端到端延迟 P50/P95/P99 | {metrics.ApiRequestLatency.Percentile(0.50)}/{metrics.ApiRequestLatency.Percentile(0.95)}/{metrics.ApiRequestLatency.Percentile(0.99)} ms |");
+        builder.AppendLine($"| Gather 读表本地响应延迟 P50/P95/P99 | {metrics.GatherReadingResponseLatency.Percentile(0.50)}/{metrics.GatherReadingResponseLatency.Percentile(0.95)}/{metrics.GatherReadingResponseLatency.Percentile(0.99)} ms |");
+        if (report.CommandPhases.Count > 0)
+        {
+            builder.AppendLine();
+            builder.AppendLine("## HTTP 指令阶段");
+            builder.AppendLine();
+            builder.AppendLine("| 阶段 | 状态 | 在线门槛峰值/要求 | 等待 | 本地设备 | 计划请求 | show_result | API 成功/失败/超时 | 读表收到/应答 | 耗时 | 说明 |");
+            builder.AppendLine("| --- | --- | ---: | ---: | ---: | ---: | :---: | ---: | ---: | ---: | --- |");
+            foreach (var phase in report.CommandPhases)
+            {
+                var onlineGate = phase.OnlineGateSatisfied.HasValue
+                    ? $"{phase.MaximumObservedOnlineCount:N0}/{phase.RequiredOnlineCount:N0}"
+                    : "不适用";
+                builder.AppendLine(
+                    $"| {EscapeMarkdownCell(phase.Name)} | {FormatCommandPhaseStatus(phase.Status)} | {onlineGate} | " +
+                    $"{phase.OnlineGateWaitMilliseconds / 1000d:F1} s | {phase.LocalDeviceCount:N0} | {phase.PlannedRequests:N0} | {phase.ShowResult} | " +
+                    $"{phase.ApiRequestsSucceeded:N0}/{phase.ApiRequestsFailed:N0}/{phase.ApiRequestTimeouts:N0} | " +
+                    $"{phase.GatherReadingCommandsReceived:N0}/{phase.GatherReadingCommandsResponded:N0} | " +
+                    $"{(phase.EndedAtUtc - phase.StartedAtUtc).TotalSeconds:F1} s | " +
+                    $"{EscapeMarkdownCell(phase.StatusReason ?? "-")} |");
+            }
+        }
         builder.AppendLine();
         builder.AppendLine("## 验收规则");
         builder.AppendLine();
@@ -117,4 +146,42 @@ internal static class NodeReportWriter
     /// <param name="bytes">字节数。</param>
     /// <returns>保留两位小数的 MiB 文本。</returns>
     private static string FormatBytes(long bytes) => $"{bytes / 1024d / 1024d:F2} MiB";
+
+    /// <summary>
+    /// 将节点运行状态转换为适合中文报告阅读的稳定文本。
+    /// </summary>
+    /// <param name="status">节点运行状态枚举。</param>
+    /// <returns>中文运行状态。</returns>
+    private static string FormatRunStatus(LoadTestRunStatus status) => status switch
+    {
+        LoadTestRunStatus.Passed => "完成并通过",
+        LoadTestRunStatus.Failed => "完成但验收失败",
+        LoadTestRunStatus.CompletedWithSkippedPhases => "完成，但存在跳过阶段",
+        LoadTestRunStatus.Cancelled => "已取消，已生成部分报告",
+        LoadTestRunStatus.Aborted => "异常中止，已生成部分报告",
+        _ => status.ToString()
+    };
+
+    /// <summary>
+    /// 将 HTTP 指令阶段状态转换为中文报告文本。
+    /// </summary>
+    /// <param name="status">HTTP 指令阶段状态。</param>
+    /// <returns>中文阶段状态。</returns>
+    private static string FormatCommandPhaseStatus(CommandPhaseStatus status) => status switch
+    {
+        CommandPhaseStatus.Completed => "已完成",
+        CommandPhaseStatus.Skipped => "已跳过",
+        CommandPhaseStatus.Failed => "失败",
+        _ => status.ToString()
+    };
+
+    /// <summary>
+    /// 转义 Markdown 表格单元格中的换行和竖线，避免异常消息破坏报告表格结构。
+    /// </summary>
+    /// <param name="value">原始单元格文本。</param>
+    /// <returns>可安全写入单行 Markdown 表格的文本。</returns>
+    private static string EscapeMarkdownCell(string value) =>
+        value.Replace("|", "\\|", StringComparison.Ordinal)
+            .Replace("\r", " ", StringComparison.Ordinal)
+            .Replace("\n", " ", StringComparison.Ordinal);
 }

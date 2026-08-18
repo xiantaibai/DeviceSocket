@@ -39,6 +39,16 @@ public sealed record MetricSnapshot
     public long InjectedDuplicateFrames { get; init; }
     public long InjectedFragmentedWrites { get; init; }
     public long DownstreamResponsesSent { get; init; }
+    public long ApiRequestsStarted { get; init; }
+    public long ApiRequestsSucceeded { get; init; }
+    public long ApiRequestsFailed { get; init; }
+    public long ApiRequestTimeouts { get; init; }
+    public long GatherReadingCommandsReceived { get; init; }
+    public long GatherReadingCommandsResponded { get; init; }
+    public long GatherReadingResponsesSent { get; init; }
+    public long GatherReadingResponsesDropped { get; init; }
+    public long GatherReadingBusinessFailuresSent { get; init; }
+    public long GatherReadingDuplicateResponsesSent { get; init; }
     public long OutageCount { get; init; }
     public bool OutageActive { get; init; }
     public long? LastRecoveryMilliseconds { get; init; }
@@ -47,4 +57,6 @@ public sealed record MetricSnapshot
     public HistogramSnapshot LoginLatency { get; init; } = new MergeableHistogram().Snapshot();
     public HistogramSnapshot HeartbeatLatency { get; init; } = new MergeableHistogram().Snapshot();
     public HistogramSnapshot ConnectionScheduleLag { get; init; } = new MergeableHistogram().Snapshot();
+    public HistogramSnapshot ApiRequestLatency { get; init; } = new MergeableHistogram().Snapshot();
+    public HistogramSnapshot GatherReadingResponseLatency { get; init; } = new MergeableHistogram().Snapshot();
 }

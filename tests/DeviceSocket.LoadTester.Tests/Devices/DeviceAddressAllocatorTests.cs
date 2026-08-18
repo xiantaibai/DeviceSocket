@@ -104,6 +104,123 @@ public sealed class DeviceAddressAllocatorTests
     }
 
     /// <summary>
+    /// 验证 CSV 模式按文件行序读取真实老设备编号，并统一转换为规范376.1身份。
+    /// </summary>
+    [Fact]
+    public void QGdwCsvMode_LoadsRealDeviceIdsInFileOrder()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"device-identities-{Guid.NewGuid():N}.csv");
+        try
+        {
+            File.WriteAllText(
+                path,
+                "meterId,deviceId\n101,260810005\n102,3761:3301-12001\n103,2608-10009\n");
+            var options = TestOptionsFactory.Create();
+            options.Devices.Count = 3;
+            options.Devices.GenerationMode = DeviceAddressGenerationMode.Csv;
+            options.Devices.DeviceMappingFile = path;
+
+            var devices = DeviceAddressAllocator.Allocate(options);
+
+            Assert.Equal(
+                ["3761:2608-10005", "3761:3301-12001", "3761:2608-10009"],
+                devices.Select(item => item.DeviceId));
+            Assert.Equal([0, 1, 2], devices.Select(item => item.GlobalOrdinal));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    /// <summary>
+    /// 验证 CSV 数据行全局序号在多分片合并后不重复、不遗漏，并保持原文件顺序。
+    /// </summary>
+    [Fact]
+    public void QGdwCsvMode_ShardsAreDisjointAndComplete()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"device-identities-{Guid.NewGuid():N}.csv");
+        try
+        {
+            File.WriteAllText(
+                path,
+                "meterId,deviceId\n101,260810001\n102,260810004\n103,330112001\n104,260810009\n");
+            var options = TestOptionsFactory.Create();
+            options.Devices.Count = 4;
+            options.Devices.GenerationMode = DeviceAddressGenerationMode.Csv;
+            options.Devices.DeviceMappingFile = path;
+            options.Distributed.ShardCount = 2;
+            var all = new List<VirtualDeviceDescriptor>();
+
+            for (var shard = 0; shard < options.Distributed.ShardCount; shard++)
+            {
+                options.Distributed.ShardIndex = shard;
+                all.AddRange(DeviceAddressAllocator.Allocate(options));
+            }
+
+            Assert.Equal([0, 1, 2, 3], all.Select(item => item.GlobalOrdinal).Order());
+            Assert.Equal(4, all.Select(item => item.DeviceId).Distinct(StringComparer.Ordinal).Count());
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    /// <summary>
+    /// 验证 CSV 有效数据行数与配置设备总数不一致时在分配连接前失败。
+    /// </summary>
+    [Fact]
+    public void QGdwCsvMode_RejectsCountMismatch()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"device-identities-{Guid.NewGuid():N}.csv");
+        try
+        {
+            File.WriteAllText(path, "meterId,deviceId\n101,260810001\n");
+            var options = TestOptionsFactory.Create();
+            options.Devices.Count = 2;
+            options.Devices.GenerationMode = DeviceAddressGenerationMode.Csv;
+            options.Devices.DeviceMappingFile = path;
+
+            var exception = Assert.Throws<ConfigurationValidationException>(
+                () => DeviceAddressAllocator.Allocate(options));
+
+            Assert.Contains("必须完全一致", exception.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    /// <summary>
+    /// 验证同一设备分别使用老编号和规范编号时仍会被识别为重复身份。
+    /// </summary>
+    [Fact]
+    public void QGdwCsvMode_RejectsNormalizedDuplicateDeviceIds()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"device-identities-{Guid.NewGuid():N}.csv");
+        try
+        {
+            File.WriteAllText(
+                path,
+                "meterId,deviceId\n101,260810001\n102,3761:2608-10001\n");
+            var options = TestOptionsFactory.Create();
+            options.Devices.Count = 2;
+            options.Devices.GenerationMode = DeviceAddressGenerationMode.Csv;
+            options.Devices.DeviceMappingFile = path;
+
+            var exception = Assert.Throws<InvalidDataException>(() => DeviceAddressAllocator.Allocate(options));
+
+            Assert.Contains("重复 deviceId", exception.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    /// <summary>
     /// 验证645表地址始终使用十二位十进制格式。
     /// </summary>
     [Fact]
