@@ -177,6 +177,35 @@ public sealed class LoadTestOptionsValidatorTests
     }
 
     /// <summary>
+    /// 验证低 CPU 场景始终保持一万台 TCP 设备，并把所有 HTTP 阶段的全局请求预算限制在一千次以内。
+    /// </summary>
+    [Fact]
+    public async Task LowCpuGatherScenario_KeepsTenThousandConnectionsAndCapsHttpRequestsAtOneThousand()
+    {
+        var path = Path.Combine(
+            AppContext.BaseDirectory,
+            "Scenarios",
+            "gather-tcpcenter-dump-regression-10000-v2-http-1000.json");
+
+        var options = await LoadTestConfigurationLoader.LoadAsync(
+            path,
+            new RunCommandOverrides(),
+            CancellationToken.None);
+        var requestBudget = options.CommandWorkload.Phases.Sum(phase =>
+            (phase.TargetDeviceCount == 0 ? options.Devices.Count : phase.TargetDeviceCount) *
+            phase.RequestsPerDevice);
+
+        Assert.Equal(10_000, options.Devices.Count);
+        Assert.InRange(requestBudget, 1, 1_000);
+        Assert.All(options.CommandWorkload.Phases, phase =>
+        {
+            Assert.InRange(phase.TargetDeviceCount, 1, 1_000);
+            Assert.Equal(1, phase.RequestsPerDevice);
+            Assert.False(phase.ShowResult);
+        });
+    }
+
+    /// <summary>
     /// 验证故障注入概率和断线比例越界时会在运行前被拒绝。
     /// </summary>
     [Fact]

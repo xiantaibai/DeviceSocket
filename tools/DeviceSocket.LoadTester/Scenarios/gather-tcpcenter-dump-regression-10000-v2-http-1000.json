@@ -1,0 +1,278 @@
+{
+  // 低 CPU 测试服务器版本：同一进程维持 10000 台 TCP 设备，但整轮最多只发 1000 个 HTTP 抄读请求。
+  "role": "combined",
+
+  "target": {
+    // Gather.TcpCenter 公司内网地址；运行前按实际测试环境修改。
+    "host": "192.168.111.18",
+    // 老 TCP 服务监听端口。
+    "port": 6666,
+    // 使用 Q/GDW 376.1 模拟集中器登录、心跳和读表应答。
+    "protocol": "qGdw3761",
+    // 启用 Gather 老服务的确认帧和读表命令兼容规则。
+    "compatibilityProfile": "gatherTcpCenter"
+  },
+
+  "devices": {
+    // TCP 虚拟设备仍保持 10000 台，不因 HTTP 请求预算降低而缩小连接规模。
+    "count": 10000,
+    // 使用数据库中已经准备好的真实设备和电表映射。
+    "generationMode": "csv",
+    // 相对路径按当前 JSON 所在目录解析，CSV 必须恰好包含 10000 条 meterId,deviceId 映射。
+    "deviceMappingFile": "gather-device-10000.csv"
+  },
+
+  "connection": {
+    // 平滑建连，避免低性能测试服务器同时承受 TCP 暴风和 HTTP 请求。
+    "startMode": "ramp",
+    // 默认全局建连速率 200 台/秒；具体爬升阶段可以再次覆盖。
+    "connectionsPerSecond": 200,
+    // 单台负载机最多允许 300 台设备同时处于建连或协议登录过程。
+    "maxConcurrentConnecting": 300,
+    // 单次 TCP 建连超时，单位秒。
+    "connectTimeoutSeconds": 5,
+    // 登录确认超时，单位秒。
+    "loginTimeoutSeconds": 5,
+    // 单次 Socket 写入超时，单位秒。
+    "writeTimeoutSeconds": 5,
+    // 禁用 Nagle，使终端小报文及时发出。
+    "noDelay": true
+  },
+
+  "heartbeat": {
+    // 保持一万台终端真实在线，并继续覆盖老服务心跳处理路径。
+    "enabled": true,
+    // 每台设备每 60 秒发送一次心跳。
+    "intervalSeconds": 60,
+    // 正负 10 秒稳定打散心跳，降低低性能服务器的同步峰值。
+    "jitterSeconds": 10,
+    // 心跳确认等待上限，单位秒。
+    "responseTimeoutSeconds": 5
+  },
+
+  "workload": {
+    // 不发送普通周期上报，把服务器资源留给连接、心跳和受控的 HTTP 抄读。
+    "reportsEnabled": false,
+    // reportsEnabled=false 时不生效，保留默认周期便于复制场景。
+    "reportIntervalSeconds": 300,
+    // reportsEnabled=false 时不生效。
+    "jitterSeconds": 30,
+    "gatherReadingResponse": {
+      // 收到老服务读表命令后返回符合 376.1 的终端业务应答。
+      "enabled": true,
+      // 只走正常成功路径，不在本轮混入慢设备或异常设备。
+      "mode": "normal",
+      // 所有实际收到命令的模拟设备都应答。
+      "affectedDevicePercentage": 100,
+      // 模拟终端采集耗时，单位毫秒。
+      "delayMilliseconds": 1000,
+      // 返回四个费率数据项。
+      "rateCount": 4,
+      // 第一台设备基础读数，单位 kWh。
+      "baseReadingKwh": 1000,
+      // 相邻设备读数递增量，单位 kWh。
+      "deviceStepKwh": 0.01
+    }
+  },
+
+  "commandWorkload": {
+    // 开启老业务 API 调用；HTTP 请求与 TCP 收包循环相互独立。
+    "enabled": true,
+    // Gather.Control.Api 根地址，必须与目标 TCP 服务属于同一套测试环境。
+    "baseUrl": "http://192.168.111.18:9011",
+    // 老读表接口相对路径。
+    "endpointPath": "/api/ammeter/reading",
+    // 测试环境需要鉴权时使用该请求头名称。
+    "authorizationHeaderName": "gather-authorize-key",
+    // 空值表示本场景不发送鉴权头；正式环境可改为 GATHER_AUTHORIZE_KEY 并在进程环境变量中设置密钥。
+    "authorizationKeyEnvironmentVariable": "",
+    // 请求体 oper_uid，按测试环境审计要求调整。
+    "operatorUserId": 0,
+    // 老项目 OperationSource.Test 的枚举值。
+    "operationSource": 6,
+    // 普通 376.1 抄读模式。
+    "readingModel": 0,
+    // 默认读表代码。
+    "readingCode": 0,
+    // 单次 HTTP 请求超时，单位秒；当前异步受理模式通常会远早于该值返回。
+    "requestTimeoutSeconds": 70,
+    // 阶段没有明确 minimumOnlineCount 时使用的默认在线率；当前阶段已配置明确数量。
+    "requiredOnlineRate": 0.98,
+    // 默认在线稳定时间，单位秒。
+    "onlineStableSeconds": 20,
+    // 默认在线等待上限，单位秒。
+    "onlineWaitTimeoutSeconds": 600,
+    // combined 模式由真实在线门槛控制，不再额外固定等待。
+    "startDelaySeconds": 0,
+    "phases": [
+      {
+        // 本场景只有一个 HTTP 阶段：1000 台设备各请求一次，因此整轮 HTTP 请求总数严格等于 1000。
+        // 需要更低压力时只修改 targetDeviceCount 为 100 或 500，并保持 requestsPerDevice=1。
+        // 服务器仍有压力时先降低 requestsPerSecond，再降低 maxConcurrency；不要通过增加 requestsPerDevice 调压。
+        "name": "http-reading-1000-async-once",
+        // HTTP 最多覆盖前 1000 台设备；其余 9000 台只保持 TCP 在线和心跳。
+        "targetDeviceCount": 1000,
+        // 每台只发一次，保证总请求预算不会放大。
+        "requestsPerDevice": 1,
+        // 全局每秒最多 5 个 HTTP 抄读请求，预计约 200 秒提交完 1000 个请求。
+        "requestsPerSecond": 5,
+        // 全局最多 5 个在途 HTTP 请求，限制低性能服务器的瞬时业务压力。
+        "maxConcurrency": 5,
+        // false 表示 API 异步受理，不让 1000 个 HTTP 请求同步占用线程等待设备结果；设备仍会正常返回 TCP 业务应答。
+        "showResult": false,
+        // 请求提交结束后等待 60 秒，让服务端命令队列和终端应答排空。
+        "pauseAfterSeconds": 60,
+        // 至少 1000 台协议在线后才开始 HTTP 阶段。
+        "minimumOnlineCount": 1000,
+        // 在线门槛连续保持 20 秒才放行。
+        "onlineStableSeconds": 20,
+        // 最长等待在线 600 秒；一万台未完全上线也不影响只对前 1000 台做受控抄读。
+        "onlineWaitTimeoutSeconds": 600,
+        // 在线不足时跳过 HTTP，但继续完成一万台 TCP、断线和恢复测试并生成报告。
+        "onlineGateFailureAction": "skipPhase"
+      }
+    ]
+  },
+
+  "reconnect": {
+    // 指数退避并加入抖动，防止一万台设备在服务端性能较差时反复同步冲击。
+    "mode": "exponentialJitter",
+    // 第一次重连最短等待 250 毫秒。
+    "initialDelayMilliseconds": 250,
+    // 连续失败时单次最长等待 10 秒。
+    "maximumDelaySeconds": 10,
+    // 每次失败把基础退避扩大两倍。
+    "multiplier": 2,
+    // 正负 50% 抖动用于打散设备重连。
+    "jitterRatio": 0.5,
+    // 0 表示场景期间持续重连，不限制次数。
+    "maximumAttempts": 0
+  },
+
+  "scenario": {
+    // 独立名称用于和原始全量 HTTP V2 场景区分。
+    "name": "gather-tcpcenter-dump-regression-10000-v2-http-1000",
+    // 配置 phases 后该字段仅作兼容占位。
+    "durationSeconds": 1,
+    "phases": [
+      {
+        // 先用 100 台验证地址、登录和网络。
+        "name": "canary-100",
+        "kind": "warmup",
+        "durationSeconds": 30,
+        "targetDevicePercentage": 1,
+        "connectionsPerSecond": 25
+      },
+      {
+        // 平滑提升到 5000 台，降低低性能测试服务器的连接尖峰。
+        "name": "ramp-5000",
+        "kind": "ramp",
+        "durationSeconds": 240,
+        "targetDevicePercentage": 50,
+        "connectionsPerSecond": 100
+      },
+      {
+        // 5000 台保持五分钟，观察连接和多轮心跳。
+        "name": "steady-5000",
+        "kind": "steady",
+        "durationSeconds": 300,
+        "targetDevicePercentage": 50,
+        "connectionsPerSecond": 100
+      },
+      {
+        // 再平滑提升到 10000 台；HTTP 请求仍只覆盖最多 1000 台。
+        "name": "ramp-10000",
+        "kind": "ramp",
+        "durationSeconds": 300,
+        "targetDevicePercentage": 100,
+        "connectionsPerSecond": 100
+      },
+      {
+        // 一万台保持十五分钟，覆盖心跳稳态并为 HTTP 和终端应答留出充足时间。
+        "name": "steady-10000",
+        "kind": "steady",
+        "durationSeconds": 900,
+        "targetDevicePercentage": 100,
+        "connectionsPerSecond": 100
+      },
+      {
+        // 一次性断开全部设备，继续保留原 V2 的服务重启/网络中断恢复测试。
+        "name": "disconnect-all-10000",
+        "kind": "fault",
+        "durationSeconds": 180,
+        "targetDevicePercentage": 100,
+        "faults": {
+          // 全部当前设备参与主动断线。
+          "disconnectPercentage": 100,
+          // 一批断开 10000 台，制造全量连接失效。
+          "disconnectBatchSize": 10000,
+          // 批次间不等待。
+          "disconnectIntervalMilliseconds": 0
+        }
+      },
+      {
+        // 保持一万台目标并观察十分钟恢复情况。
+        "name": "recovery-10000",
+        "kind": "recovery",
+        "durationSeconds": 600,
+        "targetDevicePercentage": 100,
+        "connectionsPerSecond": 100
+      },
+      {
+        // 正常关闭全部虚拟设备并等待资源释放。
+        "name": "cooldown",
+        "kind": "cooldown",
+        "durationSeconds": 30,
+        "targetDevicePercentage": 0
+      }
+    ]
+  },
+
+  "reporting": {
+    // 报告根目录，最终按 RunId 和分片号创建子目录。
+    "outputDirectory": "load-test-results",
+    // 每秒采集一次连接、HTTP、终端应答和负载机资源指标。
+    "sampleIntervalSeconds": 1,
+    // 每十秒原子覆盖异常恢复检查点。
+    "checkpointIntervalSeconds": 10,
+    // 输出控制台实时摘要。
+    "writeConsoleSummary": true
+  },
+
+  "serverObservation": {
+    // Gather 老服务没有 DeviceSocket Gateway 状态接口，服务端 CPU 需要用 PerfMon 或其他监控单独采集。
+    "enabled": false
+  },
+
+  "acceptance": {
+    // 全部连接尝试成功率不得低于 95%。
+    "minimumConnectionSuccessRate": 0.95,
+    // 协议登录成功率不得低于 95%。
+    "minimumLoginSuccessRate": 0.95,
+    // 恢复阶段最终在线率不得低于 98%。
+    "minimumFinalOnlineRate": 0.98,
+    // 一万台目标下最终至少 9800 台在线。
+    "minimumFinalOnlineCount": 9800,
+    // 非法协议帧率不得超过 1%。
+    "maximumProtocolErrorRate": 0.01,
+    // 全断后恢复到目标在线率最长 180 秒；低性能服务器版本适当放宽恢复窗口。
+    "maximumRecoverySeconds": 180,
+    // 全断场景至少产生一万次重连调度。
+    "minimumReconnects": 10000,
+    // 已实际执行的最多 1000 个 HTTP 请求业务成功率不得低于 95%。
+    "minimumApiSuccessRate": 0.95,
+    // 收到读表命令后的终端应答率不得低于 95%。
+    "minimumGatherReadingResponseRate": 0.95,
+    // HTTP P95 不得超过请求超时上限，单位毫秒。
+    "maximumApiP95Milliseconds": 70000
+  },
+
+  "distributed": {
+    // 默认运行编号；正式改造前后测试建议通过 --run-id 覆盖。
+    "runId": "gather-tcpcenter-dump-regression-10000-v2-http-1000",
+    // 单机分片编号固定为 0。
+    "shardIndex": 0,
+    // 单机运行固定为 1；多机时所有节点必须使用相同值和相同 CSV。
+    "shardCount": 1
+  }
+}

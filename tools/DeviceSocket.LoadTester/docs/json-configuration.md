@@ -308,6 +308,7 @@ meterId,deviceId
 | `gather-tcpcenter-storm-5000-10000.json` | Gather 老服务 5,000～10,000 台突发连接和恢复 |
 | `gather-tcpcenter-reading-10000.json` | 一万台在线后调用老读表 API |
 | `gather-tcpcenter-dump-regression-10000-v2.json` | 改造前后 Dump 回归、连接、HTTP、多命令阻塞和断线恢复综合对比 |
+| `gather-tcpcenter-dump-regression-10000-v2-http-1000.json` | 低 CPU 测试服务器：保持一万台 TCP，但整轮最多 1,000 次、默认 5 RPS 的 HTTP 抄读 |
 | `duplicate-login.json` | 重复身份、Session 替换和旧连接清理 |
 | `protocol-chaos-3761.json` | 丢包、非法校验、半包和粘包异常路径 |
 | `capacity-limit-645.json` | 645 地址空间和容量边界 |

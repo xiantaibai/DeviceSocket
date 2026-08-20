@@ -167,6 +167,18 @@ dotnet run --project tools\DeviceSocket.LoadTester\DeviceSocket.LoadTester.cspro
 
 改造后只替换 RunId，例如 `gather-dump-after-r1`，其余场景、设备 CSV、服务端配置和负载机必须保持不变。建议改造前后各运行三轮，正式对比使用中位数并保留最差一轮。
 
+### 低 CPU 服务器：10,000 台连接、最多 1,000 次 HTTP 抄读
+
+`gather-tcpcenter-dump-regression-10000-v2-http-1000.json` 保留 V2 的 10,000 台 TCP、心跳、全断和恢复流程，但整轮只有一个 HTTP 阶段：1,000 台设备各抄读一次，因此请求总量严格为 1,000。默认限速 5 请求/秒、最大并发 5，并使用 `showResult=false` 异步受理，降低测试服务器的 HTTP 线程和同步等待压力。
+
+需要临时降到 100 或 500 次时，只修改该阶段的 `targetDeviceCount` 并保持 `requestsPerDevice=1`；需要调节提交速度时修改 `requestsPerSecond` 和 `maxConcurrency`。整轮请求预算计算公式为所有 HTTP 阶段的 `targetDeviceCount × requestsPerDevice` 之和，不要通过增加 `requestsPerDevice` 调高速度。
+
+```powershell
+dotnet run --project tools\DeviceSocket.LoadTester\DeviceSocket.LoadTester.csproj -- `
+  run --config tools\DeviceSocket.LoadTester\Scenarios\gather-tcpcenter-dump-regression-10000-v2-http-1000.json `
+  --run-id gather-lowcpu-before-r1
+```
+
 ## 多负载机运行
 
 同一轮测试的所有节点必须使用相同配置、`RunId`、`ShardCount` 和 UTC 启动时间，只修改 `ShardIndex`：
