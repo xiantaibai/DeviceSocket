@@ -166,6 +166,7 @@ meterId,deviceId
 | --- | --- | --- | --- | --- |
 | `commandWorkload.enabled` | bool | `false` | 是否执行 HTTP 指令阶段；`apiOnly`/`combined` 必须为 true | 只测试连接时关闭，测试服务端下发时开启 |
 | `commandWorkload.baseUrl` | string | 空 | Gather.Control.Api 的绝对 HTTP/HTTPS 根地址 | 例如 `http://192.168.111.18:9011`，不是 TCP 地址 |
+| `commandWorkload.targetDeviceSource` | enum | `fixedOrdinal` | `fixedOrdinal` 按 GlobalOrdinal 固定截取 HTTP 目标设备；`onlineRegistry` 从本进程 TCP 会话的全部在线设备快照中按阶段数量选取目标，只允许与 `combined` 角色组合 | 需要保证 HTTP 只请求当前真正在线的设备时使用 `onlineRegistry`；`apiOnly` 保持 `fixedOrdinal` |
 | `commandWorkload.endpointPath` | string | `/api/ammeter/reading` | POST 接口相对路径，不能为空 | 老服务路由有差异时覆盖 |
 | `commandWorkload.authorizationHeaderName` | string | `gather-authorize-key` | 鉴权请求头名称；与环境变量名任一为空时不发送鉴权头 | 正式环境通常保持默认名称 |
 | `commandWorkload.authorizationKeyEnvironmentVariable` | string | `GATHER_AUTHORIZE_KEY` | 保存鉴权值的环境变量名；配置了头名和变量名但环境变量缺失时终止并出中止报告 | 密钥不写入 JSON、控制台或报告 |
@@ -176,7 +177,7 @@ meterId,deviceId
 | `commandWorkload.readingModel` | int | `0` | 请求体 `reading_model`，默认普通 Q/GDW 376.1 抄读 | 测试其他抄读模式时按老 API 枚举填写 |
 | `commandWorkload.readingCode` | int | `0` | 请求体 `readingCode`，原样透传给老 API | 需要指定读数项时按业务约定填写 |
 | `commandWorkload.requestTimeoutSeconds` | int | `70` | 单次 HTTP 端到端超时秒数，必须大于 0 | `showResult=true` 时应大于老 API 约 60 秒的设备结果等待上限 |
-| `commandWorkload.requiredOnlineRate` | double | `0.98` | 0～1 且大于 0；阶段未配置明确在线数时使用本地在线率门槛 | 普通全量阶段要求 98% 在线再发命令 |
+| `commandWorkload.requiredOnlineRate` | double | `0.98` | 0～1 且大于 0；阶段未配置明确在线数时，按 `targetDeviceCount × requiredOnlineRate` 计算在线门槛；`onlineRegistry` 可由任意当前在线设备满足阶段配额 | 普通全量阶段要求 98% 在线再发命令 |
 | `commandWorkload.onlineStableSeconds` | int | `30` | 在线门槛连续保持秒数，不能小于 0；0 表示达到即放行 | 避免刚上线又掉线时提前开始 API 压测 |
 | `commandWorkload.onlineWaitTimeoutSeconds` | int | `600` | 等待稳定在线的最长秒数，必须大于 0 | 一万台上线较慢时可放大；超时动作由阶段决定 |
 | `commandWorkload.startDelaySeconds` | int | `0` | HTTP 工作负载启动前额外等待秒数，不能小于 0 | `apiOnly` 部署时等待另一台设备负载机先上线 |
@@ -184,18 +185,20 @@ meterId,deviceId
 
 有效设备映射与 `meterIdStart` 必须二选一。CSV 设备模式会自动把 `devices.deviceMappingFile` 当作有效 HTTP 映射，因此这时不要再设置 `meterIdStart`。
 
+`targetDeviceSource=onlineRegistry` 时，工具先等待本节点在线设备达到阶段配额，再对注册表做一次快照，并从全部当前在线设备中按 GlobalOrdinal 稳定排序选出 `targetDeviceCount` 对应的本地数量；因此固定序号靠前的设备离线时，会由其他在线设备补足。进入队列前和真正发送 HTTP 前还会各核对一次在线状态，已离线请求以及快照时未补足的计划请求都会计入 `ApiRequestsSkippedOffline`，不会调用离线集中器对应的 API。
+
 ### HTTP 阶段：`commandWorkload.phases[]`
 
 | 字段 | 类型 | 默认值 | 意义与约束 | 使用场景 |
 | --- | --- | --- | --- | --- |
 | `commandWorkload.phases[].name` | string | 空 | 阶段名称，不能为空，写入控制台和报告 | 使用 `functional-100`、`all-10000` 等可识别名称 |
-| `commandWorkload.phases[].targetDeviceCount` | int | `0` | 参与阶段的全局设备数，0 表示全部，不能超过 `devices.count` | 先 100、1000、5000 再扩至 10000 |
+| `commandWorkload.phases[].targetDeviceCount` | int | `0` | 参与阶段的全局设备数，0 表示全部，不能超过 `devices.count`；`onlineRegistry` 下表示从当前在线快照中选取的数量，不限定固定序号前缀 | 先 100、1000、5000 再扩至 10000 |
 | `commandWorkload.phases[].requestsPerDevice` | int | `1` | 每台目标设备发送的命令数，必须大于 0 | 大于 1 用于验证同设备连续命令是否排队阻塞 |
 | `commandWorkload.phases[].requestsPerSecond` | int | `10` | 所有分片合计请求数/秒，必须大于 0 | 控制业务 API 吞吐，逐级寻找容量拐点 |
 | `commandWorkload.phases[].maxConcurrency` | int | `10` | 所有分片合计最大在途 HTTP 请求数，必须大于 0 | `showResult=true` 时限制同步等待请求占用 |
 | `commandWorkload.phases[].showResult` | bool | `false` | false 表示 API 快速受理；true 表示 API 同步等待设备业务结果 | false 测下发吞吐，true 测端到端应答和阻塞风险 |
 | `commandWorkload.phases[].pauseAfterSeconds` | int | `0` | 阶段结束后的等待秒数，不能小于 0；0 表示立即进入下一阶段 | 留出命令队列和服务端资源回落时间 |
-| `commandWorkload.phases[].minimumOnlineCount` | int/null | `null` | 阶段要求的全局在线数；null 按 `requiredOnlineRate` 计算，0 表示不等待 | 小规模阶段设精确门槛，全量阶段可设 9800 |
+| `commandWorkload.phases[].minimumOnlineCount` | int/null | `null` | 阶段要求的全局在线数；null 按 `requiredOnlineRate` 计算，0 表示不等待，不能大于该阶段有效 `targetDeviceCount`。`onlineRegistry` 下任意在线设备均可满足门槛 | 小规模阶段设精确门槛，全量阶段可设 9800 |
 | `commandWorkload.phases[].onlineStableSeconds` | int/null | `null` | null 继承全局稳定时长，0 表示达到在线数立即放行 | 为功能冒烟设置较短稳定时间，为全量阶段设置较长时间 |
 | `commandWorkload.phases[].onlineWaitTimeoutSeconds` | int/null | `null` | null 继承全局等待上限；设置后必须大于 0 | 不同规模使用不同上线等待时间 |
 | `commandWorkload.phases[].onlineGateFailureAction` | enum | `skipPhase` | `skipPhase` 跳过并继续出报告；`runPhase` 在线不足仍执行；`abortRun` 终止本轮并出部分报告 | 正式回归推荐 skipPhase；诊断离线请求才用 runPhase；严格前置条件用 abortRun |
@@ -281,6 +284,7 @@ meterId,deviceId
 | `acceptance.minimumObservedAuthenticatedDevices` | int/null | `null` | 服务端观测到的本轮新增认证设备峰值下限 | 校验客户端认为在线与服务端认证数一致；必须启用 serverObservation |
 | `acceptance.maximumObservedAuthenticatedDevices` | int/null | `null` | 服务端观测到的本轮新增认证设备峰值上限 | 限制重复 Session 或连接泄漏；必须启用 serverObservation |
 | `acceptance.minimumApiSuccessRate` | double/null | `null` | HTTP 状态和响应体 `success=true` 的业务成功率下限 | HTTP 指令负载验收 |
+| `acceptance.minimumApiTargetCoverageRate` | double/null | `null` | 取值 0～1；实际发起 HTTP 请求数除以“已发起 + 因设备离线跳过”的计划请求数，空值不验收 | 防止只执行少量在线目标时 `minimumApiSuccessRate` 仍显示很高 |
 | `acceptance.minimumGatherReadingResponseRate` | double/null | `null` | 模拟终端已应答读表命令数/收到读表命令数的下限 | 端到端设备消息应答验收 |
 | `acceptance.maximumApiP95Milliseconds` | long/null | `null` | HTTP 端到端延迟 P95 上限毫秒数，设置后必须大于 0 | 检测同步等待、队列阻塞和服务端卡顿 |
 

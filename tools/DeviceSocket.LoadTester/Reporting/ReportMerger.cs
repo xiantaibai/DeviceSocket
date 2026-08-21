@@ -189,6 +189,7 @@ internal static class ReportMerger
                     options.CommandWorkload.OnlineStableSeconds,
                     options.CommandWorkload.OnlineWaitTimeoutSeconds,
                     options.CommandWorkload.StartDelaySeconds,
+                    options.CommandWorkload.TargetDeviceSource,
                     options.CommandWorkload.Phases
                 },
                 options.Reconnect,

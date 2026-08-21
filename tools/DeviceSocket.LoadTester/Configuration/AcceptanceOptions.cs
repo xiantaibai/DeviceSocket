@@ -61,6 +61,12 @@ public sealed class AcceptanceOptions
     public double? MinimumApiSuccessRate { get; set; }
 
     /// <summary>
+    /// 获取或设置 <c>acceptance.minimumApiTargetCoverageRate</c>；取值 0～1，默认空表示不验收，
+    /// 按实际发起 HTTP 请求数除以“已发起请求数 + 因设备离线跳过请求数”计算，防止只统计少量在线设备时业务成功率虚高。
+    /// </summary>
+    public double? MinimumApiTargetCoverageRate { get; set; }
+
+    /// <summary>
     /// 获取或设置 <c>acceptance.minimumGatherReadingResponseRate</c>；取值 0～1，默认空表示不验收，按模拟终端已应答读表命令数除以收到的读表命令数计算。
     /// </summary>
     public double? MinimumGatherReadingResponseRate { get; set; }

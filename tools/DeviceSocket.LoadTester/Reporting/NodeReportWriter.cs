@@ -82,6 +82,7 @@ internal static class NodeReportWriter
         builder.AppendLine($"| 错误校验和/粘包/半包注入 | {metrics.InjectedCorruptFrames:N0}/{metrics.InjectedDuplicateFrames:N0}/{metrics.InjectedFragmentedWrites:N0} |");
         builder.AppendLine($"| 下发应答 | {metrics.DownstreamResponsesSent:N0} |");
         builder.AppendLine($"| HTTP API 发起/成功/失败/超时 | {metrics.ApiRequestsStarted:N0}/{metrics.ApiRequestsSucceeded:N0}/{metrics.ApiRequestsFailed:N0}/{metrics.ApiRequestTimeouts:N0} |");
+        builder.AppendLine($"| HTTP 目标设备累计要求/在线/离线跳过 | {metrics.ApiTargetsRequired:N0}/{metrics.ApiTargetsOnline:N0}/{metrics.ApiRequestsSkippedOffline:N0} |");
         builder.AppendLine($"| Gather 读表命令收到/已应答/丢弃 | {metrics.GatherReadingCommandsReceived:N0}/{metrics.GatherReadingCommandsResponded:N0}/{metrics.GatherReadingResponsesDropped:N0} |");
         builder.AppendLine($"| Gather 读表响应帧/业务失败/重复帧 | {metrics.GatherReadingResponsesSent:N0}/{metrics.GatherReadingBusinessFailuresSent:N0}/{metrics.GatherReadingDuplicateResponsesSent:N0} |");
         if (report.GatewayObservation is { } gateway)
@@ -107,8 +108,8 @@ internal static class NodeReportWriter
             builder.AppendLine();
             builder.AppendLine("## HTTP 指令阶段");
             builder.AppendLine();
-            builder.AppendLine("| 阶段 | 状态 | 在线门槛峰值/要求 | 等待 | 本地设备 | 计划请求 | show_result | API 成功/失败/超时 | 读表收到/应答 | 耗时 | 说明 |");
-            builder.AppendLine("| --- | --- | ---: | ---: | ---: | ---: | :---: | ---: | ---: | ---: | --- |");
+            builder.AppendLine("| 阶段 | 状态 | 在线门槛峰值/要求 | 等待 | 本地设备 | 计划请求 | show_result | 目标在线/要求 | 离线跳过 | API 成功/失败/超时 | 读表收到/应答 | 耗时 | 说明 |");
+            builder.AppendLine("| --- | --- | ---: | ---: | ---: | ---: | :---: | ---: | ---: | ---: | ---: | ---: | --- |");
             foreach (var phase in report.CommandPhases)
             {
                 var onlineGate = phase.OnlineGateSatisfied.HasValue
@@ -117,6 +118,7 @@ internal static class NodeReportWriter
                 builder.AppendLine(
                     $"| {EscapeMarkdownCell(phase.Name)} | {FormatCommandPhaseStatus(phase.Status)} | {onlineGate} | " +
                     $"{phase.OnlineGateWaitMilliseconds / 1000d:F1} s | {phase.LocalDeviceCount:N0} | {phase.PlannedRequests:N0} | {phase.ShowResult} | " +
+                    $"{phase.ApiTargetsOnline:N0}/{phase.ApiTargetsRequired:N0} | {phase.ApiRequestsSkippedOffline:N0} | " +
                     $"{phase.ApiRequestsSucceeded:N0}/{phase.ApiRequestsFailed:N0}/{phase.ApiRequestTimeouts:N0} | " +
                     $"{phase.GatherReadingCommandsReceived:N0}/{phase.GatherReadingCommandsResponded:N0} | " +
                     $"{(phase.EndedAtUtc - phase.StartedAtUtc).TotalSeconds:F1} s | " +

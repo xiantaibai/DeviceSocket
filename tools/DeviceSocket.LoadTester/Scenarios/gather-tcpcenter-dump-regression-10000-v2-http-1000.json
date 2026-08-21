@@ -76,6 +76,8 @@
   },
 
   "commandWorkload": {
+    // 从本进程真正在线的一万台设备中选择阶段目标，避免固定前 1000 台中有离线设备时无效调用或请求缺口。
+    "targetDeviceSource": "onlineRegistry",
     // 开启老业务 API 调用；HTTP 请求与 TCP 收包循环相互独立。
     "enabled": true,
     // Gather.Control.Api 根地址，必须与目标 TCP 服务属于同一套测试环境。
@@ -110,7 +112,7 @@
         // 需要更低压力时只修改 targetDeviceCount 为 100 或 500，并保持 requestsPerDevice=1。
         // 服务器仍有压力时先降低 requestsPerSecond，再降低 maxConcurrency；不要通过增加 requestsPerDevice 调压。
         "name": "http-reading-1000-async-once",
-        // HTTP 最多覆盖前 1000 台设备；其余 9000 台只保持 TCP 在线和心跳。
+        // HTTP 从当前在线设备中最多选择 1000 台；其余设备只保持 TCP 在线和心跳。
         "targetDeviceCount": 1000,
         // 每台只发一次，保证总请求预算不会放大。
         "requestsPerDevice": 1,
@@ -126,7 +128,7 @@
         "minimumOnlineCount": 1000,
         // 在线门槛连续保持 20 秒才放行。
         "onlineStableSeconds": 20,
-        // 最长等待在线 600 秒；一万台未完全上线也不影响只对前 1000 台做受控抄读。
+        // 最长等待在线 600 秒；一万台未完全上线也不影响从任意在线设备中选择 1000 台做受控抄读。
         "onlineWaitTimeoutSeconds": 600,
         // 在线不足时跳过 HTTP，但继续完成一万台 TCP、断线和恢复测试并生成报告。
         "onlineGateFailureAction": "skipPhase"
@@ -261,6 +263,8 @@
     "minimumReconnects": 10000,
     // 已实际执行的最多 1000 个 HTTP 请求业务成功率不得低于 95%。
     "minimumApiSuccessRate": 0.95,
+    // 计划的一千个请求至少 98% 必须实际发出，设备离线跳过不能被业务成功率掩盖。
+    "minimumApiTargetCoverageRate": 0.98,
     // 收到读表命令后的终端应答率不得低于 95%。
     "minimumGatherReadingResponseRate": 0.95,
     // HTTP P95 不得超过请求超时上限，单位毫秒。

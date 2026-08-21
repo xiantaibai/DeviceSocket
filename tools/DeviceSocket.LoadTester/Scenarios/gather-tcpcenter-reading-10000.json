@@ -41,6 +41,7 @@
     }
   },
   "commandWorkload": {
+    "targetDeviceSource": "onlineRegistry",
     "enabled": true,
     "baseUrl": "http://192.168.111.18:9011",
     "endpointPath": "/api/ammeter/reading",
@@ -175,6 +176,7 @@
     "minimumFinalOnlineCount": 9800,
     "maximumProtocolErrorRate": 0.01,
     "minimumApiSuccessRate": 0.98,
+    "minimumApiTargetCoverageRate": 0.98,
     "minimumGatherReadingResponseRate": 0.99,
     "maximumApiP95Milliseconds": 70000
   },

@@ -37,6 +37,12 @@ public sealed record CommandPhaseResult
     public required long ApiRequestsFailed { get; init; }
     /// <summary>获取阶段内 API 超时增量。</summary>
     public required long ApiRequestTimeouts { get; init; }
+    /// <summary>获取 onlineRegistry 阶段在本节点计划覆盖的目标设备数；fixedOrdinal 来源保持为零。</summary>
+    public int ApiTargetsRequired { get; init; }
+    /// <summary>获取 onlineRegistry 阶段开始时从在线快照中实际选出的目标设备数；fixedOrdinal 来源保持为零。</summary>
+    public int ApiTargetsOnline { get; init; }
+    /// <summary>获取因在线目标未补足或发送前设备已离线而主动跳过的 HTTP 请求增量。</summary>
+    public long ApiRequestsSkippedOffline { get; init; }
     /// <summary>获取阶段及排空窗口内收到的 Gather 读表命令增量。</summary>
     public required long GatherReadingCommandsReceived { get; init; }
     /// <summary>获取阶段及排空窗口内完成业务应答的 Gather 读表命令增量。</summary>

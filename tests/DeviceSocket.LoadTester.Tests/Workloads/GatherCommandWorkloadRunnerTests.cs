@@ -6,6 +6,7 @@ using DeviceSocket.LoadTester.Configuration;
 using DeviceSocket.LoadTester.Devices;
 using DeviceSocket.LoadTester.Metrics;
 using DeviceSocket.LoadTester.Reporting;
+using DeviceSocket.LoadTester.Runtime;
 using DeviceSocket.LoadTester.Workloads.Gather;
 
 namespace DeviceSocket.LoadTester.Tests.Workloads;
@@ -72,6 +73,192 @@ public sealed class GatherCommandWorkloadRunnerTests
         {
             listener.Stop();
         }
+    }
+
+    /// <summary>
+    /// 验证 onlineRegistry 会用固定序号范围之外的在线设备补足阶段数量，而不是只过滤前 N 台设备。
+    /// </summary>
+    [Fact]
+    public async Task OnlineRegistry_ReplacesOfflineFixedPrefixWithAnotherOnlineDevice()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            var options = TestOptionsFactory.Create();
+            options.Role = LoadTestRole.Combined;
+            options.Target.CompatibilityProfile = ServerCompatibilityProfile.GatherTcpCenter;
+            options.Devices.Count = 2;
+            options.CommandWorkload = new CommandWorkloadOptions
+            {
+                Enabled = true,
+                BaseUrl = $"http://127.0.0.1:{port}",
+                AuthorizationHeaderName = string.Empty,
+                MeterIdStart = 7_001,
+                TargetDeviceSource = CommandTargetSource.OnlineRegistry,
+                OnlineStableSeconds = 0,
+                OnlineWaitTimeoutSeconds = 1,
+                Phases =
+                [
+                    new CommandPhaseOptions
+                    {
+                        Name = "replace-offline-prefix",
+                        TargetDeviceCount = 1,
+                        RequestsPerDevice = 1,
+                        RequestsPerSecond = 100,
+                        MaxConcurrency = 1,
+                        MinimumOnlineCount = 1,
+                        OnlineStableSeconds = 0,
+                        OnlineWaitTimeoutSeconds = 1
+                    }
+                ]
+            };
+            var devices = DeviceAddressAllocator.Allocate(options);
+            var metrics = new LoadTestMetrics();
+            var onlineRegistry = new DeviceOnlineRegistry();
+            onlineRegistry.RegisterOnline(1);
+            var serverTask = ServeOneSuccessAsync(listener);
+            using var runner = new GatherCommandWorkloadRunner(options, devices, metrics, onlineRegistry);
+
+            await runner.RunAsync(waitForOnline: true, CancellationToken.None);
+            var requestBody = await serverTask;
+
+            using var document = JsonDocument.Parse(requestBody);
+            Assert.Equal(7_002, document.RootElement.GetProperty("data").GetProperty("meter_id").GetInt32());
+            var snapshot = metrics.Snapshot(DateTimeOffset.UtcNow);
+            Assert.Equal(1, snapshot.ApiTargetsRequired);
+            Assert.Equal(1, snapshot.ApiTargetsOnline);
+            Assert.Equal(0, snapshot.ApiRequestsSkippedOffline);
+            Assert.Equal(1, snapshot.ApiRequestsStarted);
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
+    /// <summary>
+    /// 验证 onlineRegistry 来源只会请求注册表中的在线设备，离线候选被跳过并单独计量。
+    /// </summary>
+    [Fact]
+    public async Task OnlineRegistry_SkipsOfflineTargetAndRequestsOnlineDevice()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            var options = TestOptionsFactory.Create();
+            options.Role = LoadTestRole.Combined;
+            options.Target.CompatibilityProfile = ServerCompatibilityProfile.GatherTcpCenter;
+            options.Devices.Count = 2;
+            options.CommandWorkload = new CommandWorkloadOptions
+            {
+                Enabled = true,
+                BaseUrl = $"http://127.0.0.1:{port}",
+                AuthorizationHeaderName = string.Empty,
+                MeterIdStart = 7_001,
+                TargetDeviceSource = CommandTargetSource.OnlineRegistry,
+                OnlineStableSeconds = 0,
+                OnlineWaitTimeoutSeconds = 1,
+                Phases =
+                [
+                    new CommandPhaseOptions
+                    {
+                        Name = "online-targets",
+                        TargetDeviceCount = 2,
+                        RequestsPerDevice = 1,
+                        RequestsPerSecond = 100,
+                        MaxConcurrency = 1,
+                        MinimumOnlineCount = 0,
+                        OnlineStableSeconds = 0,
+                        OnlineWaitTimeoutSeconds = 1,
+                        OnlineGateFailureAction = OnlineGateFailureAction.RunPhase
+                    }
+                ]
+            };
+            var devices = DeviceAddressAllocator.Allocate(options);
+            var metrics = new LoadTestMetrics();
+            var onlineRegistry = new DeviceOnlineRegistry();
+            onlineRegistry.RegisterOnline(1);
+            var serverTask = ServeOneSuccessAsync(listener);
+            using var runner = new GatherCommandWorkloadRunner(options, devices, metrics, onlineRegistry);
+
+            await runner.RunAsync(waitForOnline: true, CancellationToken.None);
+            var requestBody = await serverTask;
+
+            using var document = JsonDocument.Parse(requestBody);
+            Assert.Equal(7_002, document.RootElement.GetProperty("data").GetProperty("meter_id").GetInt32());
+            var snapshot = metrics.Snapshot(DateTimeOffset.UtcNow);
+            Assert.Equal(2, snapshot.ApiTargetsRequired);
+            Assert.Equal(1, snapshot.ApiTargetsOnline);
+            Assert.Equal(1, snapshot.ApiRequestsSkippedOffline);
+            Assert.Equal(1, snapshot.ApiRequestsStarted);
+            Assert.Equal(1, snapshot.ApiRequestsSucceeded);
+            Assert.Equal(0, snapshot.ApiRequestsFailed);
+            var phase = Assert.Single(runner.Results);
+            Assert.Equal(2, phase.ApiTargetsRequired);
+            Assert.Equal(1, phase.ApiTargetsOnline);
+            Assert.Equal(1, phase.ApiRequestsSkippedOffline);
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
+    /// <summary>
+    /// 验证设备在进入有界队列后离线时，消费者会在真正调用 HTTP API 前再次拦截并记录跳过。
+    /// </summary>
+    [Fact]
+    public async Task OnlineRegistry_DeviceDisconnectsAfterQueue_DoesNotSendHttpRequest()
+    {
+        var options = TestOptionsFactory.Create();
+        options.Role = LoadTestRole.Combined;
+        options.Target.CompatibilityProfile = ServerCompatibilityProfile.GatherTcpCenter;
+        options.Devices.Count = 1;
+        options.CommandWorkload = new CommandWorkloadOptions
+        {
+            Enabled = true,
+            BaseUrl = "http://127.0.0.1:1",
+            AuthorizationHeaderName = string.Empty,
+            MeterIdStart = 7_001,
+            TargetDeviceSource = CommandTargetSource.OnlineRegistry,
+            OnlineStableSeconds = 0,
+            OnlineWaitTimeoutSeconds = 1,
+            Phases =
+            [
+                new CommandPhaseOptions
+                {
+                    Name = "disconnect-after-queue",
+                    TargetDeviceCount = 1,
+                    RequestsPerDevice = 1,
+                    RequestsPerSecond = 100,
+                    MaxConcurrency = 1,
+                    MinimumOnlineCount = 0,
+                    OnlineStableSeconds = 0,
+                    OnlineWaitTimeoutSeconds = 1,
+                    OnlineGateFailureAction = OnlineGateFailureAction.RunPhase
+                }
+            ]
+        };
+        var devices = DeviceAddressAllocator.Allocate(options);
+        var metrics = new LoadTestMetrics();
+        using var runner = new GatherCommandWorkloadRunner(
+            options,
+            devices,
+            metrics,
+            new DisconnectAfterFirstEligibilityRegistry());
+
+        await runner.RunAsync(waitForOnline: true, CancellationToken.None);
+
+        var snapshot = metrics.Snapshot(DateTimeOffset.UtcNow);
+        Assert.Equal(0, snapshot.ApiRequestsStarted);
+        Assert.Equal(1, snapshot.ApiRequestsSkippedOffline);
+        var phase = Assert.Single(runner.Results);
+        Assert.Equal(1, phase.ApiTargetsOnline);
+        Assert.Equal(1, phase.ApiRequestsSkippedOffline);
     }
 
     /// <summary>
@@ -161,4 +348,32 @@ public sealed class GatherCommandWorkloadRunnerTests
     /// <param name="input">当前已接收字节。</param>
     /// <returns>CRLFCRLF 起始偏移；尚未接收完整时返回 -1。</returns>
     private static int FindHeaderEnd(ReadOnlySpan<byte> input) => input.IndexOf("\r\n\r\n"u8);
+
+    /// <summary>
+    /// 在阶段快照和第一次入队检查时报告在线，第二次发送检查时报告离线，用于稳定复现排队期间断线。
+    /// </summary>
+    private sealed class DisconnectAfterFirstEligibilityRegistry : IDeviceOnlineRegistry
+    {
+        private int _eligibilityChecks;
+
+        /// <inheritdoc />
+        public int Count => 1;
+
+        /// <inheritdoc />
+        public void RegisterOnline(int globalOrdinal)
+        {
+        }
+
+        /// <inheritdoc />
+        public void UnregisterOnline(int globalOrdinal)
+        {
+        }
+
+        /// <inheritdoc />
+        public bool IsOnline(int globalOrdinal) =>
+            globalOrdinal == 0 && Interlocked.Increment(ref _eligibilityChecks) == 1;
+
+        /// <inheritdoc />
+        public IReadOnlyList<int> GetOnlineOrdinalsSnapshot() => [0];
+    }
 }

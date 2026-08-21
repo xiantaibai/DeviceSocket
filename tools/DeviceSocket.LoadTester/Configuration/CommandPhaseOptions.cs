@@ -11,7 +11,8 @@ public sealed class CommandPhaseOptions
     public string Name { get; set; } = string.Empty;
 
     /// <summary>
-    /// 获取或设置 <c>commandWorkload.phases[].targetDeviceCount</c>；单位为全局设备数，默认 0 表示本轮全部设备。
+    /// 获取或设置 <c>commandWorkload.phases[].targetDeviceCount</c>；单位为全局设备数，默认 0 表示本轮全部设备；
+    /// <c>targetDeviceSource=onlineRegistry</c> 时该值表示从当前在线注册表选取的数量，不限定为固定序号前缀。
     /// </summary>
     public int TargetDeviceCount { get; set; }
 
@@ -42,7 +43,8 @@ public sealed class CommandPhaseOptions
 
     /// <summary>
     /// 获取或设置 <c>commandWorkload.phases[].minimumOnlineCount</c>；单位为当前分片对应的全局设备数，默认空表示按
-    /// <c>commandWorkload.requiredOnlineRate</c> 计算门槛，零表示当前阶段不要求设备在线，不能大于 <c>devices.count</c>。
+    /// <c>commandWorkload.requiredOnlineRate</c> 计算门槛，零表示当前阶段不要求设备在线，不能大于当前阶段目标数。
+    /// <c>commandWorkload.targetDeviceSource=onlineRegistry</c> 时本节点任意在线设备都可用于满足该门槛；
     /// 多机分片运行时工具会按全局设备序号换算为当前分片应达到的本地在线数。
     /// </summary>
     public int? MinimumOnlineCount { get; set; }

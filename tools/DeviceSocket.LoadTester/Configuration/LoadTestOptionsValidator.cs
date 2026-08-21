@@ -182,6 +182,10 @@ public static class LoadTestOptionsValidator
         ValidateRate(options.Acceptance.MinimumFinalOnlineRate, "acceptance.minimumFinalOnlineRate", errors);
         ValidateRate(options.Acceptance.MaximumProtocolErrorRate, "acceptance.maximumProtocolErrorRate", errors);
         ValidateRate(options.Acceptance.MinimumApiSuccessRate, "acceptance.minimumApiSuccessRate", errors);
+        ValidateRate(
+            options.Acceptance.MinimumApiTargetCoverageRate,
+            "acceptance.minimumApiTargetCoverageRate",
+            errors);
         ValidateRate(options.Acceptance.MinimumGatherReadingResponseRate, "acceptance.minimumGatherReadingResponseRate", errors);
         if (options.Acceptance.MaximumApiP95Milliseconds is <= 0)
             errors.Add("acceptance.maximumApiP95Milliseconds: 设置后必须大于 0。");
@@ -260,6 +264,13 @@ public static class LoadTestOptionsValidator
             errors.Add("commandWorkload.enabled: apiOnly 或 combined 角色必须启用 HTTP 指令负载。");
         if (!command.Enabled)
             return;
+        if (!Enum.IsDefined(command.TargetDeviceSource))
+            errors.Add("commandWorkload.targetDeviceSource: 仅支持 fixedOrdinal 或 onlineRegistry。");
+        if (command.TargetDeviceSource == CommandTargetSource.OnlineRegistry &&
+            options.Role != LoadTestRole.Combined)
+        {
+            errors.Add("commandWorkload.targetDeviceSource: onlineRegistry 只支持 combined 角色。");
+        }
         if (options.Target.CompatibilityProfile != ServerCompatibilityProfile.GatherTcpCenter ||
             options.Target.Protocol != LoadProtocol.QGdw3761)
         {
@@ -312,8 +323,15 @@ public static class LoadTestOptionsValidator
                 errors.Add($"{path}.maxConcurrency: 必须大于 0。");
             if (phase.PauseAfterSeconds < 0)
                 errors.Add($"{path}.pauseAfterSeconds: 不能小于 0。");
-            if (phase.MinimumOnlineCount is < 0 || phase.MinimumOnlineCount > options.Devices.Count)
-                errors.Add($"{path}.minimumOnlineCount: 必须在 0 到 devices.count 之间，空值表示继承全局在线率。");
+            var effectiveTargetCount = phase.TargetDeviceCount == 0
+                ? options.Devices.Count
+                : phase.TargetDeviceCount;
+            if (phase.MinimumOnlineCount is < 0 || phase.MinimumOnlineCount > effectiveTargetCount)
+            {
+                errors.Add(
+                    $"{path}.minimumOnlineCount: 必须在 0 到当前阶段 targetDeviceCount 之间，" +
+                    "空值表示继承全局在线率。");
+            }
             if (phase.OnlineStableSeconds is < 0)
                 errors.Add($"{path}.onlineStableSeconds: 不能小于 0，空值表示继承全局稳定时长。");
             if (phase.OnlineWaitTimeoutSeconds is <= 0)

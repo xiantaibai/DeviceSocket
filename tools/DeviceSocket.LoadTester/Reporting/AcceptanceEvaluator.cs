@@ -43,6 +43,13 @@ public static class AcceptanceEvaluator
         if (role != LoadTestRole.DevicesOnly)
         {
             AddMinimum(checks, "apiSuccessRate", Rate(metrics.ApiRequestsSucceeded, metrics.ApiRequestsStarted), options.MinimumApiSuccessRate);
+            AddMinimum(
+                checks,
+                "apiTargetCoverageRate",
+                Rate(
+                    metrics.ApiRequestsStarted,
+                    checked(metrics.ApiRequestsStarted + metrics.ApiRequestsSkippedOffline)),
+                options.MinimumApiTargetCoverageRate);
             AddMaximum(
                 checks,
                 "apiP95Milliseconds",

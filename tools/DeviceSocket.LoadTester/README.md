@@ -21,7 +21,7 @@
 - 每秒 JSONL 时间序列、节点 JSON/CSV/Markdown 报告。
 - 可合并延迟直方图及多节点汇总报告。
 - 配置化成功率、在线率、协议错误率和恢复时间验收门槛。
-- 报告独立统计 API 成功/失败/超时与 P95、读表命令收到/应答/丢弃及业务失败/重复响应。
+- 报告独立统计 API 成功/失败/超时与 P95、在线目标及离线跳过、读表命令收到/应答/丢弃及业务失败/重复响应。
 
 ## 本地运行
 
@@ -219,6 +219,7 @@ DeviceSocket.LoadTester report merge --input collected\soak-001 --output collect
 - `heartbeat`：心跳间隔、抖动和确认超时。
 - `workload`：额外周期上报和 `gatherReadingResponse` 读表业务响应/故障模型；376.1 常规在线维持仍使用协议心跳。
 - `commandWorkload`：老读表 API 地址、鉴权环境变量名、真实电表映射、在线稳定门槛、请求超时和 HTTP 阶段。
+- `commandWorkload.targetDeviceSource`：默认 `fixedOrdinal`，按 GlobalOrdinal 固定截取 HTTP 目标；`combined` 角色可设置为 `onlineRegistry`，从本进程全部在线设备中按阶段数量选取目标，固定前缀设备离线时由其他在线设备补足，排队期间离线的请求会跳过并记录 `ApiRequestsSkippedOffline`。
 - `commandWorkload.phases`：目标全局设备数、每设备命令数、所有分片合计 RPS/并发、`showResult`、阶段后排空等待和可选阶段在线门槛。工具会按 `shardCount` 自动分摊 RPS、并发和要求在线数。
 - `commandWorkload.phases[].minimumOnlineCount`：阶段要求的全局在线设备数；空值继承 `requiredOnlineRate`，0 表示不等待。多机分片会按稳定全局序号换算成本地门槛。
 - `commandWorkload.phases[].onlineStableSeconds`：阶段门槛需要连续保持的秒数；空值继承全局配置，0 表示达到数量后立即放行。

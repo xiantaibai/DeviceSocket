@@ -76,6 +76,8 @@
   },
 
   "commandWorkload": {
+    // 从本进程真正在线的全部设备中按阶段数量选择目标，不再固定使用 GlobalOrdinal 的前 N 台。
+    "targetDeviceSource": "onlineRegistry",
     // 启用独立 HTTP 工作队列调用老业务读表接口；HTTP 与 TCP 接收循环互不复用工作队列。
     "enabled": true,
     // 老 Gather.Control.Api 根地址，正式执行前确认该地址与待测 TCP 服务属于同一套环境。
@@ -96,7 +98,7 @@
     "readingCode": 0,
     // 单次 HTTP 请求最大等待 70 秒，覆盖老 API 最长 60 秒同步业务等待。
     "requestTimeoutSeconds": 70,
-    // 阶段未配置 minimumOnlineCount 时，按本地设备数的 98% 计算默认在线门槛。
+    // 阶段未配置 minimumOnlineCount 时，按该阶段计划目标数的 98% 计算默认在线门槛。
     "requiredOnlineRate": 0.98,
     // 阶段未覆盖时必须连续满足在线门槛 30 秒才开始请求，避免刚达到峰值就立刻下发。
     "onlineStableSeconds": 30,
@@ -170,7 +172,7 @@
         "maxConcurrency": 20,
         "showResult": true,
         "pauseAfterSeconds": 60,
-        "minimumOnlineCount": 1000,
+        "minimumOnlineCount": 100,
         "onlineStableSeconds": 20,
         "onlineWaitTimeoutSeconds": 300,
         "onlineGateFailureAction": "skipPhase"
@@ -316,6 +318,8 @@
     "minimumReconnects": 10000,
     // 已实际执行的 HTTP 请求业务成功率最低 98%；被在线门槛跳过的阶段单独按运行状态判定失败。
     "minimumApiSuccessRate": 0.98,
+    // 计划请求中至少 98% 必须实际发出，设备在选择或排队期间离线造成的跳过会降低该覆盖率。
+    "minimumApiTargetCoverageRate": 0.98,
     // 收到老服务读表下发后成功发送终端应答的比例最低 99%。
     "minimumGatherReadingResponseRate": 0.99,
     // HTTP 端到端 P95 最长 70 秒，与单请求超时保持一致，超过即判定业务链路阻塞。

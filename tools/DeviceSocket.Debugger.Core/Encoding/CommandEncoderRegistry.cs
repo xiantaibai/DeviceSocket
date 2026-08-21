@@ -3,6 +3,7 @@ using DeviceSocket.Core.Protocols.Common;
 using DeviceSocket.Core.Protocols.Dlt645;
 using DeviceSocket.Core.Protocols.QGdw3761;
 using DeviceSocket.Debugger.Core.CommandSets.Models;
+using DeviceSocket.Debugger.Core.Protocols.QGdw3761;
 
 namespace DeviceSocket.Debugger.Core.Encoding;
 
@@ -12,6 +13,7 @@ namespace DeviceSocket.Debugger.Core.Encoding;
 public sealed class CommandEncoderRegistry
 {
     private const string QGdw3761LinkEncoder = "qgdw3761.link";
+    private const string QGdw3761GatherReadingResponseEncoder = "qgdw3761.gatherReadingResponse";
     private const string Dlt645FrameEncoder = "dlt645.frame";
     private readonly DeclarativeLayoutEncoder _layoutEncoder = new();
 
@@ -40,13 +42,16 @@ public sealed class CommandEncoderRegistry
         if (command.Mode.Equals("raw", StringComparison.OrdinalIgnoreCase))
             return BuildRaw(command, effectiveValues);
 
-        return command.Encoder.ToLowerInvariant() switch
-        {
-            QGdw3761LinkEncoder => BuildQGdw3761Link(effectiveValues),
-            Dlt645FrameEncoder => BuildDlt645Frame(effectiveValues),
-            _ => throw new InvalidOperationException(
-                $"编码器“{command.Encoder}”不在安全白名单中，当前支持 {QGdw3761LinkEncoder}、{Dlt645FrameEncoder}。")
-        };
+        var encoder = command.Encoder.Trim();
+        if (encoder.Equals(QGdw3761LinkEncoder, StringComparison.OrdinalIgnoreCase))
+            return BuildQGdw3761Link(effectiveValues);
+        if (encoder.Equals(QGdw3761GatherReadingResponseEncoder, StringComparison.OrdinalIgnoreCase))
+            return BuildQGdw3761GatherReadingResponse(effectiveValues);
+        if (encoder.Equals(Dlt645FrameEncoder, StringComparison.OrdinalIgnoreCase))
+            return BuildDlt645Frame(effectiveValues);
+
+        throw new InvalidOperationException(
+            $"编码器“{command.Encoder}”不在安全白名单中，当前支持 {QGdw3761LinkEncoder}、{QGdw3761GatherReadingResponseEncoder}、{Dlt645FrameEncoder}。");
     }
 
     private static CommandBuildResult BuildRaw(
@@ -102,6 +107,65 @@ public sealed class CommandEncoderRegistry
         return new CommandBuildResult(
             frame,
             $"376.1 {kind}，设备 3761:{division}-{terminalAddress:D5}，SEQ={sequence}");
+    }
+
+    private static CommandBuildResult BuildQGdw3761GatherReadingResponse(
+        IReadOnlyDictionary<string, string> values)
+    {
+        var division = GetValue(values, "administrativeDivision");
+        var terminalAddress = ParseUInt16(GetValue(values, "terminalAddress"), "终端地址");
+        var masterStationAddress = ParseByte(GetValue(values, "masterStationAddress"), "主站地址");
+        if (masterStationAddress > 127)
+            throw new FormatException("主站地址必须在 0-127 之间。");
+
+        var groupAddressText = GetValue(values, "groupAddress", "false");
+        if (!bool.TryParse(groupAddressText, out var groupAddress))
+            throw new FormatException($"群地址标志“{groupAddressText}”无效，应填写 true 或 false。");
+
+        var sequence = ParseByte(GetValue(values, "sequence", "0"), "帧序号");
+        if (sequence > 15)
+            throw new FormatException("帧序号必须在 0-15 之间。");
+
+        var measurementPoint = ParseInt32(GetValue(values, "measurementPoint", "0"), "测量点");
+        if (measurementPoint is < 0 or > 2040)
+            throw new FormatException("测量点必须在 0-2040 之间，0 表示终端自身。");
+
+        var rateCount = ParseInt32(GetValue(values, "rateCount", "4"), "费率示值数量");
+        if (rateCount is < 0 or > 8)
+            throw new FormatException("费率示值数量必须在 0-8 之间。");
+
+        var totalReadingKwh = ParseDecimal(GetValue(values, "totalReadingKwh"), "总电能示值");
+        if (totalReadingKwh is < 0m or > 999_999.9999m)
+            throw new FormatException("总电能示值必须在 0-999999.9999 kWh 之间。");
+
+        var readingTime = DateTimeOffset.Now;
+        var readingTimeText = GetValue(values, "readingTime", string.Empty);
+        if (!string.IsNullOrWhiteSpace(readingTimeText))
+        {
+            if (!DateTimeOffset.TryParse(readingTimeText, CultureInfo.CurrentCulture, DateTimeStyles.AssumeLocal, out readingTime))
+                throw new FormatException("抄表时间格式无效，请使用 yyyy-MM-dd HH:mm:ss 或留空使用当前时间。");
+        }
+
+        var businessErrorText = GetValue(values, "businessError", "false");
+        if (!bool.TryParse(businessErrorText, out var businessError))
+            throw new FormatException($"业务失败标志“{businessErrorText}”无效，应填写 true 或 false。");
+
+        var frame = QGdw3761ReadingResponseEncoder.Create(
+            division,
+            terminalAddress,
+            masterStationAddress,
+            groupAddress,
+            sequence,
+            measurementPoint,
+            rateCount,
+            totalReadingKwh,
+            readingTime,
+            businessError);
+        return new CommandBuildResult(
+            frame,
+            $"376.1 AFN=0CH/F129 抄读回复，设备 3761:{division}-{terminalAddress:D5}，" +
+            $"PN={measurementPoint}，SEQ={sequence}，费率示值 {rateCount} 个，" +
+            $"总示值 {totalReadingKwh:0.0000} kWh{(businessError ? "，业务失败" : string.Empty)}");
     }
 
     private static CommandBuildResult BuildDlt645Frame(IReadOnlyDictionary<string, string> values)
@@ -162,6 +226,13 @@ public sealed class CommandEncoderRegistry
         if (int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
             return parsed;
         throw new FormatException($"{displayName}“{value}”无效，应为十进制整数。");
+    }
+
+    private static decimal ParseDecimal(string value, string displayName)
+    {
+        if (decimal.TryParse(value.Trim(), NumberStyles.Number, CultureInfo.InvariantCulture, out var parsed))
+            return parsed;
+        throw new FormatException($"{displayName}“{value}”无效，应为十进制数值。");
     }
 
     private static bool TryParseUnsigned(string value, uint maximum, out uint parsed)

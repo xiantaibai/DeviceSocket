@@ -6,6 +6,13 @@ namespace DeviceSocket.LoadTester.Configuration;
 public sealed class CommandWorkloadOptions
 {
     /// <summary>
+    /// 获取或设置 <c>commandWorkload.targetDeviceSource</c>；默认 <c>fixedOrdinal</c>，
+    /// 表示保持当前按 GlobalOrdinal 固定截取 HTTP 目标设备的行为；
+    /// <c>onlineRegistry</c> 表示从本进程 TCP 会话的全部在线设备中按阶段数量选择目标，只允许与 combined 角色组合。
+    /// </summary>
+    public CommandTargetSource TargetDeviceSource { get; set; } = CommandTargetSource.FixedOrdinal;
+
+    /// <summary>
     /// 获取或设置 <c>commandWorkload.enabled</c>；默认 false，启用后非 devicesOnly 角色会执行 HTTP 指令阶段。
     /// </summary>
     public bool Enabled { get; set; }
@@ -66,7 +73,8 @@ public sealed class CommandWorkloadOptions
     public int RequestTimeoutSeconds { get; set; } = 70;
 
     /// <summary>
-    /// 获取或设置 <c>commandWorkload.requiredOnlineRate</c>；默认 0.98，combined 角色达到该本地设备在线率后才允许开始 HTTP 压测。
+    /// 获取或设置 <c>commandWorkload.requiredOnlineRate</c>；默认 0.98，combined 角色达到该在线率后才允许开始 HTTP 压测；
+    /// <c>targetDeviceSource=onlineRegistry</c> 时在线率按阶段计划目标数计算，可由本节点任意在线设备满足。
     /// </summary>
     public double RequiredOnlineRate { get; set; } = 0.98;
 

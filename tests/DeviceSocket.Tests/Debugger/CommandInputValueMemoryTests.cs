@@ -47,6 +47,33 @@ public sealed class CommandInputValueMemoryTests
     }
 
     /// <summary>
+    /// 验证参数记忆可以导出为快照并在新实例中恢复，用于退出时持久化和下次启动回填。
+    /// </summary>
+    [Fact]
+    public void SnapshotAndRestore_RoundTripsProtocolValues()
+    {
+        var source = new CommandInputValueMemory();
+        source.Remember(DeviceProtocol.QGdw3761, "administrativeDivision", "3210");
+        source.Remember(DeviceProtocol.QGdw3761, "terminalAddress", "7340");
+
+        var target = new CommandInputValueMemory();
+        target.Restore(
+            DeviceProtocol.QGdw3761,
+            source.Snapshot()[DeviceProtocol.QGdw3761]);
+
+        Assert.Equal(
+            "3210",
+            target.Resolve(
+                DeviceProtocol.QGdw3761,
+                CreateDefinition("administrativeDivision", "0000")));
+        Assert.Equal(
+            "7340",
+            target.Resolve(
+                DeviceProtocol.QGdw3761,
+                CreateDefinition("terminalAddress", "0")));
+    }
+
+    /// <summary>
     /// 创建测试使用的最小输入项定义。
     /// </summary>
     /// <param name="key">输入参数键。</param>

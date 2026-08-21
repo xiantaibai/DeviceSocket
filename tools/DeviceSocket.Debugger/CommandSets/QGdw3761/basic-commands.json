@@ -47,7 +47,7 @@
         {
           "id": "qgdw3761.heartbeat",
           "name": "心跳",
-          "description": "生成 AFN=02H、F3 的心跳上行报文；时间留空时使用本机当前时间。",
+          "description": "生成 AFN=02H、F3 的心跳上行报文；时间留空时使用本机当前时间。选中后可使用上方定时发送配置，默认每 120 秒发送一次。",
           "mode": "codec",
           "encoder": "qgdw3761.link",
           "fixedValues": {
@@ -119,6 +119,97 @@
               "type": "number",
               "default": "3",
               "description": "低 4 位序号，范围 0-15。"
+            }
+          ],
+          "response": {
+            "decoder": "qgdw3761",
+            "timeoutMs": 5000
+          }
+        }
+      ]
+    },
+    {
+      "name": "设备抄读应答",
+      "commands": [
+        {
+          "id": "qgdw3761.gather-reading-response",
+          "name": "抄读回复（AFN=0CH/F129）",
+          "description": "参考 LoadTester 生成 Gather 老服务可解析的读表业务响应；可粘贴下发报文自动回填地址、MSA、PN 和 RSEQ，也可手动调整参数后生成。",
+          "mode": "codec",
+          "encoder": "qgdw3761.gatherReadingResponse",
+          "inputs": [
+            {
+              "key": "administrativeDivision",
+              "label": "行政区划码",
+              "type": "text",
+              "default": "0000",
+              "description": "4 位 BCD，例如 2608。"
+            },
+            {
+              "key": "terminalAddress",
+              "label": "终端地址",
+              "type": "number",
+              "default": "0",
+              "description": "十进制 0-65535。"
+            },
+            {
+              "key": "masterStationAddress",
+              "label": "主站地址 MSA",
+              "type": "number",
+              "default": "0",
+              "description": "写入 A3 的 D1-D7，范围 0-127。"
+            },
+            {
+              "key": "groupAddress",
+              "label": "群地址标志",
+              "type": "select",
+              "default": "false",
+              "options": ["false", "true"],
+              "description": "写入 A3 的 D0；false 表示单址，true 表示群地址。"
+            },
+            {
+              "key": "sequence",
+              "label": "帧序号 RSEQ",
+              "type": "number",
+              "default": "1",
+              "description": "回复 SEQ 低 4 位，范围 0-15。"
+            },
+            {
+              "key": "measurementPoint",
+              "label": "测量点 PN",
+              "type": "number",
+              "default": "0",
+              "description": "0 表示终端自身，1-2040 按协议位图编码 DA1/DA2。"
+            },
+            {
+              "key": "readingTime",
+              "label": "抄表时间",
+              "type": "datetime",
+              "default": "",
+              "required": false,
+              "description": "yyyy-MM-dd HH:mm:ss；留空使用当前时间。"
+            },
+            {
+              "key": "rateCount",
+              "label": "费率示值数量",
+              "type": "number",
+              "default": "4",
+              "description": "返回业务帧携带的费率示值数量，范围 0-8。"
+            },
+            {
+              "key": "totalReadingKwh",
+              "label": "总电能示值",
+              "type": "text",
+              "default": "1000.0000",
+              "description": "单位 kWh，范围 0-999999.9999；费率示值按总示值均分。"
+            },
+            {
+              "key": "businessError",
+              "label": "业务失败",
+              "type": "select",
+              "default": "false",
+              "options": ["false", "true"],
+              "description": "true 时使用 EEH 填充 A14，模拟业务失败响应。"
             }
           ],
           "response": {

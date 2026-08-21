@@ -1,4 +1,5 @@
 using DeviceSocket.Core.Protocols.Common;
+using DeviceSocket.Core.Protocols.QGdw3761;
 using DeviceSocket.Debugger.Core.CommandSets.Models;
 using DeviceSocket.Debugger.Core.Encoding;
 
@@ -141,5 +142,89 @@ public sealed class CommandEncoderRegistryTests
         Assert.Equal(
             "68 12 90 78 56 34 12 68 11 04 33 33 34 33 68 16",
             HexCodec.ToHex(result.Bytes, true));
+    }
+
+    /// <summary>
+    /// 验证 376.1 抄读回复按 LoadTester 规则保留地址、PN 和 RSEQ，并生成可解析的业务帧。
+    /// </summary>
+    [Fact]
+    public void QGdw3761GatherReadingResponse_BuildsParsableBusinessFrame()
+    {
+        var command = new CommandDefinition
+        {
+            Id = "reading-response",
+            Name = "抄读回复",
+            Encoder = "qgdw3761.gatherReadingResponse"
+        };
+        var values = new Dictionary<string, string>
+        {
+            ["administrativeDivision"] = "2608",
+            ["terminalAddress"] = "1234",
+            ["masterStationAddress"] = "37",
+            ["groupAddress"] = "false",
+            ["sequence"] = "9",
+            ["measurementPoint"] = "10",
+            ["readingTime"] = "2024-01-02 03:04:05",
+            ["rateCount"] = "4",
+            ["totalReadingKwh"] = "1234.5678",
+            ["businessError"] = "false"
+        };
+
+        var result = new CommandEncoderRegistry().Build(command, values);
+        var read = QGdw3761Codec.ReadCompleteFrame(result.Bytes);
+        var frame = Assert.IsType<QGdw3761Frame>(read.Package);
+
+        Assert.True(frame.IsValid);
+        Assert.Equal(0x88, frame.Control);
+        Assert.True(frame.IsUpstream);
+        Assert.False(frame.IsPrimaryMessage);
+        Assert.Equal("2608", frame.AdministrativeDivision);
+        Assert.Equal(1234, frame.TerminalAddress);
+        Assert.Equal(37, frame.MasterStationAddress);
+        Assert.Equal(0x0C, frame.Afn);
+        Assert.Equal(9, frame.Sequence);
+        Assert.Equal([129], frame.Functions);
+        Assert.Equal([10], frame.Points);
+        Assert.Equal(31, frame.DataUnitPayload.Length);
+        Assert.Equal(new byte[] { 0x04, 0x03, 0x02, 0x01, 0x24 }, frame.DataUnitPayload[..5]);
+        Assert.Equal(4, frame.DataUnitPayload[5]);
+        Assert.Equal(new byte[] { 0x78, 0x56, 0x34, 0x12, 0x00 }, frame.DataUnitPayload[6..11]);
+    }
+
+    /// <summary>
+    /// 验证业务失败模式与 LoadTester 一致，用 EEH 填充总示值和各费率示值。
+    /// </summary>
+    [Fact]
+    public void QGdw3761GatherReadingResponse_BusinessErrorFillsA14WithEe()
+    {
+        var command = new CommandDefinition
+        {
+            Id = "reading-response-error",
+            Name = "抄读失败回复",
+            Encoder = "qgdw3761.gatherReadingResponse"
+        };
+        var values = new Dictionary<string, string>
+        {
+            ["administrativeDivision"] = "3301",
+            ["terminalAddress"] = "1",
+            ["masterStationAddress"] = "2",
+            ["groupAddress"] = "false",
+            ["sequence"] = "3",
+            ["measurementPoint"] = "0",
+            ["readingTime"] = "2024-05-06 07:08:09",
+            ["rateCount"] = "2",
+            ["totalReadingKwh"] = "1",
+            ["businessError"] = "true"
+        };
+
+        var result = new CommandEncoderRegistry().Build(command, values);
+        var frame = Assert.IsType<QGdw3761Frame>(
+            QGdw3761Codec.ReadCompleteFrame(result.Bytes).Package);
+
+        Assert.True(frame.IsValid);
+        Assert.Equal(2, frame.DataUnitPayload[5]);
+        Assert.Equal(
+            Enumerable.Repeat((byte)0xEE, 15).ToArray(),
+            frame.DataUnitPayload[6..21]);
     }
 }

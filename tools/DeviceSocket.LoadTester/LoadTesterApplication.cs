@@ -116,6 +116,7 @@ internal static class LoadTesterApplication
 
         var outputDirectory = GetNodeOutputDirectory(options);
         var metrics = new LoadTestMetrics();
+        var onlineRegistry = new DeviceOnlineRegistry();
         var protocol = LoadTestProtocolFactory.Create(options);
         var initialRate = options.Connection.StartMode == ConnectionStartMode.Burst
             ? 0
@@ -130,6 +131,7 @@ internal static class LoadTesterApplication
                 devices,
                 protocol,
                 metrics,
+                onlineRegistry,
                 pacer,
                 connectionGate,
                 faultController);
@@ -147,7 +149,14 @@ internal static class LoadTesterApplication
         {
             commandRunner = options.Role == LoadTestRole.DevicesOnly || !options.CommandWorkload.Enabled
                 ? null
-                : new GatherCommandWorkloadRunner(options, devices, metrics);
+                : new GatherCommandWorkloadRunner(
+                    options,
+                    devices,
+                    metrics,
+                    options.Role == LoadTestRole.Combined &&
+                    options.CommandWorkload.TargetDeviceSource == CommandTargetSource.OnlineRegistry
+                        ? onlineRegistry
+                        : null);
             // 多节点必须在统一启动时刻之前各自完成基线采样，避免先启动的分片进入后启动分片的环境基线。
             await reporter.CaptureBaselineAsync(cancellationToken);
             await WaitForScheduledStartAsync(options.Distributed.StartAtUtc, cancellationToken);

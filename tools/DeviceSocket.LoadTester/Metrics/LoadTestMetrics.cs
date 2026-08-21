@@ -52,6 +52,9 @@ public sealed class LoadTestMetrics
     private long _apiRequestsSucceeded;
     private long _apiRequestsFailed;
     private long _apiRequestTimeouts;
+    private long _apiTargetsRequired;
+    private long _apiTargetsOnline;
+    private long _apiRequestsSkippedOffline;
     private long _gatherReadingCommandsReceived;
     private long _gatherReadingCommandsResponded;
     private long _gatherReadingResponsesSent;
@@ -267,6 +270,28 @@ public sealed class LoadTestMetrics
         ApiRequestCompleted(false, latency, "API_TIMEOUT");
     }
 
+    /// <summary>
+    /// 记录一个 HTTP 指令阶段的目标设备数及阶段开始时其中在线设备数；onlineRegistry 之外的来源会写入零值。
+    /// </summary>
+    /// <param name="required">本分片计划覆盖的目标设备数。</param>
+    /// <param name="online">本分片目标设备中当前在线的数量。</param>
+    public void ApiTargetsObserved(int required, int online)
+    {
+        Interlocked.Add(ref _apiTargetsRequired, required);
+        Interlocked.Add(ref _apiTargetsOnline, online);
+    }
+
+    /// <summary>
+    /// 记录因阶段目标不足或发送前设备已经离线而主动跳过的 HTTP 读表请求数。
+    /// </summary>
+    /// <param name="count">本次跳过的计划请求数，默认一条；必须大于等于零。</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="count"/> 小于零。</exception>
+    public void ApiRequestSkippedOffline(long count = 1)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(count);
+        Interlocked.Add(ref _apiRequestsSkippedOffline, count);
+    }
+
     /// <summary>记录虚拟设备收到一条 Gather AFN=0CH/F129 读表命令。</summary>
     public void GatherReadingCommandReceived() => Interlocked.Increment(ref _gatherReadingCommandsReceived);
 
@@ -352,6 +377,9 @@ public sealed class LoadTestMetrics
             ApiRequestsSucceeded = Interlocked.Read(ref _apiRequestsSucceeded),
             ApiRequestsFailed = Interlocked.Read(ref _apiRequestsFailed),
             ApiRequestTimeouts = Interlocked.Read(ref _apiRequestTimeouts),
+            ApiTargetsRequired = Interlocked.Read(ref _apiTargetsRequired),
+            ApiTargetsOnline = Interlocked.Read(ref _apiTargetsOnline),
+            ApiRequestsSkippedOffline = Interlocked.Read(ref _apiRequestsSkippedOffline),
             GatherReadingCommandsReceived = Interlocked.Read(ref _gatherReadingCommandsReceived),
             GatherReadingCommandsResponded = Interlocked.Read(ref _gatherReadingCommandsResponded),
             GatherReadingResponsesSent = Interlocked.Read(ref _gatherReadingResponsesSent),

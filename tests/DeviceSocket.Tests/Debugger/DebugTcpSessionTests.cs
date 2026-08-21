@@ -49,6 +49,12 @@ public sealed class DebugTcpSessionTests
 
         Assert.Contains("376.1", entry.Title, StringComparison.Ordinal);
         Assert.Equal(HexCodec.ToHex(frame, true), entry.RawHex);
+        Assert.Equal(DebugTrafficCategory.System, entry.Category);
+        Assert.NotNull(entry.Metadata);
+        Assert.Equal(DeviceProtocol.QGdw3761, entry.Metadata.Protocol);
+        Assert.Equal("3761:0000-00001", entry.Metadata.DeviceId);
+        Assert.Equal("AFN=02H / F1", entry.Metadata.InstructionKey);
+        Assert.Equal((byte)1, entry.Metadata.Sequence);
 
         await session.DisconnectAsync();
         listener.Stop();

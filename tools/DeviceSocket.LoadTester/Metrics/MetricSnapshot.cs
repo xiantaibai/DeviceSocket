@@ -43,6 +43,12 @@ public sealed record MetricSnapshot
     public long ApiRequestsSucceeded { get; init; }
     public long ApiRequestsFailed { get; init; }
     public long ApiRequestTimeouts { get; init; }
+    /// <summary>获取 HTTP 指令阶段累计计划覆盖的目标设备数；fixedOrdinal 来源保持为零。</summary>
+    public long ApiTargetsRequired { get; init; }
+    /// <summary>获取 HTTP 指令阶段开始时累计在线目标设备数；fixedOrdinal 来源保持为零。</summary>
+    public long ApiTargetsOnline { get; init; }
+    /// <summary>获取因目标设备已离线而主动跳过的 HTTP 请求累计数。</summary>
+    public long ApiRequestsSkippedOffline { get; init; }
     public long GatherReadingCommandsReceived { get; init; }
     public long GatherReadingCommandsResponded { get; init; }
     public long GatherReadingResponsesSent { get; init; }

@@ -8,6 +8,7 @@ using DeviceSocket.LoadTester.Configuration;
 using DeviceSocket.LoadTester.Devices;
 using DeviceSocket.LoadTester.Metrics;
 using DeviceSocket.LoadTester.Reporting;
+using DeviceSocket.LoadTester.Runtime;
 
 namespace DeviceSocket.LoadTester.Workloads.Gather;
 
@@ -20,6 +21,7 @@ internal sealed class GatherCommandWorkloadRunner : IDisposable
     private readonly IReadOnlyList<VirtualDeviceDescriptor> _devices;
     private readonly IReadOnlyList<GatherDeviceMeterMapping> _mappings;
     private readonly LoadTestMetrics _metrics;
+    private readonly IDeviceOnlineRegistry? _onlineRegistry;
     private readonly HttpClient _httpClient;
     private readonly List<CommandPhaseResult> _results = [];
 
@@ -34,16 +36,19 @@ internal sealed class GatherCommandWorkloadRunner : IDisposable
     /// <param name="options">完整负载配置。</param>
     /// <param name="devices">当前分片负责的虚拟设备。</param>
     /// <param name="metrics">共享节点指标。</param>
+    /// <param name="onlineRegistry">目标来源为 onlineRegistry 时使用的本节点设备在线注册表。</param>
     /// <exception cref="InvalidDataException">映射不能覆盖任一已配置指令阶段。</exception>
     /// <exception cref="InvalidOperationException">配置要求鉴权头但环境变量未提供密钥。</exception>
     internal GatherCommandWorkloadRunner(
         LoadTestOptions options,
         IReadOnlyList<VirtualDeviceDescriptor> devices,
-        LoadTestMetrics metrics)
+        LoadTestMetrics metrics,
+        IDeviceOnlineRegistry? onlineRegistry = null)
     {
         _options = options;
         _devices = devices;
         _metrics = metrics;
+        _onlineRegistry = onlineRegistry;
         _mappings = GatherDeviceMeterMappingLoader.Load(options, devices);
         ValidateMappingCoverage();
 
@@ -86,6 +91,13 @@ internal sealed class GatherCommandWorkloadRunner : IDisposable
             var gate = waitForOnline
                 ? await WaitForStableOnlineAsync(phase, cancellationToken)
                 : OnlineGateResult.NotRequired;
+            var targetSelection = SelectPhaseTargets(phase);
+            if (_options.CommandWorkload.TargetDeviceSource == CommandTargetSource.OnlineRegistry)
+            {
+                _metrics.ApiTargetsObserved(
+                    targetSelection.PlannedTargetCount,
+                    targetSelection.Targets.Count);
+            }
             if (gate.IsRequired && !gate.Satisfied)
             {
                 if (phase.OnlineGateFailureAction == OnlineGateFailureAction.SkipPhase)
@@ -98,6 +110,7 @@ internal sealed class GatherCommandWorkloadRunner : IDisposable
                         CommandPhaseStatus.Skipped,
                         gate.FailureReason,
                         gate,
+                        targetSelection,
                         null,
                         null);
                     continue;
@@ -112,6 +125,7 @@ internal sealed class GatherCommandWorkloadRunner : IDisposable
                         CommandPhaseStatus.Failed,
                         gate.FailureReason,
                         gate,
+                        targetSelection,
                         null,
                         null);
                     throw new TimeoutException(gate.FailureReason);
@@ -123,7 +137,7 @@ internal sealed class GatherCommandWorkloadRunner : IDisposable
             var before = _metrics.Snapshot(DateTimeOffset.UtcNow);
             try
             {
-                await RunPhaseAsync(phase, cancellationToken);
+                await RunPhaseAsync(phase, targetSelection, cancellationToken);
                 if (phase.PauseAfterSeconds > 0)
                     await Task.Delay(TimeSpan.FromSeconds(phase.PauseAfterSeconds), cancellationToken);
                 AddResult(
@@ -133,6 +147,7 @@ internal sealed class GatherCommandWorkloadRunner : IDisposable
                     CommandPhaseStatus.Completed,
                     gate.Satisfied ? null : gate.FailureReason,
                     gate,
+                    targetSelection,
                     before,
                     _metrics.Snapshot(DateTimeOffset.UtcNow));
             }
@@ -145,6 +160,7 @@ internal sealed class GatherCommandWorkloadRunner : IDisposable
                     CommandPhaseStatus.Failed,
                     "测试被取消，当前 HTTP 指令阶段未完成。",
                     gate,
+                    targetSelection,
                     before,
                     _metrics.Snapshot(DateTimeOffset.UtcNow));
                 throw;
@@ -158,6 +174,7 @@ internal sealed class GatherCommandWorkloadRunner : IDisposable
                     CommandPhaseStatus.Failed,
                     $"{exception.GetType().Name}: {exception.Message}",
                     gate,
+                    targetSelection,
                     before,
                     _metrics.Snapshot(DateTimeOffset.UtcNow));
                 throw;
@@ -174,23 +191,33 @@ internal sealed class GatherCommandWorkloadRunner : IDisposable
     /// 执行单个限速阶段；生产者负责全局速率分摊，固定数量工作线程负责有界并发。
     /// </summary>
     /// <param name="phase">当前 HTTP 指令阶段。</param>
+    /// <param name="targetSelection">在线门槛结束后一次性选出的本阶段目标快照。</param>
     /// <param name="cancellationToken">取消阶段的令牌。</param>
     /// <returns>当前阶段全部本地请求完成的异步任务。</returns>
-    private async Task RunPhaseAsync(CommandPhaseOptions phase, CancellationToken cancellationToken)
+    private async Task RunPhaseAsync(
+        CommandPhaseOptions phase,
+        PhaseTargetSelection targetSelection,
+        CancellationToken cancellationToken)
     {
-        var globalTarget = ResolveGlobalTarget(phase);
-        var targets = _mappings
-            .Where(item => item.Device.GlobalOrdinal < globalTarget)
-            .OrderBy(item => item.Device.GlobalOrdinal)
-            .ToArray();
-        if (targets.Length == 0)
+        var useOnlineRegistry = _options.CommandWorkload.TargetDeviceSource ==
+            CommandTargetSource.OnlineRegistry;
+        var missingTargetCount = targetSelection.PlannedTargetCount - targetSelection.Targets.Count;
+        if (useOnlineRegistry && missingTargetCount > 0)
+        {
+            // 在线门槛允许按比例放行或强制执行，因此把快照时缺少的目标换算为计划请求缺口，避免 API 成功率掩盖覆盖不足。
+            _metrics.ApiRequestSkippedOffline(
+                checked((long)missingTargetCount * phase.RequestsPerDevice));
+        }
+        if (targetSelection.Targets.Count == 0)
             return;
 
         var localConcurrency = ResolveLocalConcurrency(phase);
         var localRate = phase.RequestsPerSecond / (double)_options.Distributed.ShardCount;
-        var totalRequests = checked(targets.Length * phase.RequestsPerDevice);
+        var plannedRequests = checked(targetSelection.PlannedTargetCount * phase.RequestsPerDevice);
+        var selectedRequests = checked(targetSelection.Targets.Count * phase.RequestsPerDevice);
         Console.WriteLine(
-            $"[HTTP阶段开始] {phase.Name}，本地设备 {targets.Length:N0}，请求 {totalRequests:N0}，" +
+            $"[HTTP阶段开始] {phase.Name}，计划目标 {targetSelection.PlannedTargetCount:N0}，" +
+            $"已选在线目标 {targetSelection.Targets.Count:N0}，计划/实际候选请求 {plannedRequests:N0}/{selectedRequests:N0}，" +
             $"全局速率 {phase.RequestsPerSecond:N0}/s，全局并发 {phase.MaxConcurrency:N0}，show_result={phase.ShowResult}");
 
         var channel = Channel.CreateBounded<GatherDeviceMeterMapping>(new BoundedChannelOptions(localConcurrency * 2)
@@ -204,9 +231,12 @@ internal sealed class GatherCommandWorkloadRunner : IDisposable
             .ToArray();
         var producer = ProduceRequestsAsync(
             channel.Writer,
-            targets,
+            targetSelection.Targets,
             phase.RequestsPerDevice,
             localRate,
+            useOnlineRegistry
+                ? IsTargetEligible
+                : _ => true,
             cancellationToken);
         await Task.WhenAll(workers.Prepend(producer));
         var snapshot = _metrics.Snapshot(DateTimeOffset.UtcNow);
@@ -219,16 +249,18 @@ internal sealed class GatherCommandWorkloadRunner : IDisposable
     /// 按单设备连续写入 requestsPerDevice 条请求的顺序生产，使同一集中器在前一命令完成前形成真实排队压力。
     /// </summary>
     /// <param name="writer">有界请求通道写入端。</param>
-    /// <param name="targets">当前分片目标设备映射。</param>
+    /// <param name="candidates">当前分片候选设备映射。</param>
     /// <param name="requestsPerDevice">每个设备请求次数。</param>
     /// <param name="requestsPerSecond">当前分片分摊后的每秒速率。</param>
+    /// <param name="isEligible">判断候选设备当前是否允许发送；onlineRegistry 模式会拒绝已离线设备。</param>
     /// <param name="cancellationToken">取消生产的令牌。</param>
     /// <returns>全部请求写入通道的异步任务。</returns>
-    private static async Task ProduceRequestsAsync(
+    private async Task ProduceRequestsAsync(
         ChannelWriter<GatherDeviceMeterMapping> writer,
-        IReadOnlyList<GatherDeviceMeterMapping> targets,
+        IReadOnlyList<GatherDeviceMeterMapping> candidates,
         int requestsPerDevice,
         double requestsPerSecond,
+        Func<GatherDeviceMeterMapping, bool> isEligible,
         CancellationToken cancellationToken)
     {
         Exception? failure = null;
@@ -236,7 +268,7 @@ internal sealed class GatherCommandWorkloadRunner : IDisposable
         {
             var stopwatch = Stopwatch.StartNew();
             long produced = 0;
-            foreach (var target in targets)
+            foreach (var target in candidates)
             {
                 for (var repetition = 0; repetition < requestsPerDevice; repetition++)
                 {
@@ -244,8 +276,14 @@ internal sealed class GatherCommandWorkloadRunner : IDisposable
                     var delay = due - stopwatch.Elapsed;
                     if (delay > TimeSpan.Zero)
                         await Task.Delay(delay, cancellationToken);
-                    await writer.WriteAsync(target, cancellationToken);
                     produced++;
+                    if (!isEligible(target))
+                    {
+                        _metrics.ApiRequestSkippedOffline();
+                        continue;
+                    }
+
+                    await writer.WriteAsync(target, cancellationToken);
                 }
             }
         }
@@ -273,8 +311,26 @@ internal sealed class GatherCommandWorkloadRunner : IDisposable
         CancellationToken cancellationToken)
     {
         await foreach (var mapping in reader.ReadAllAsync(cancellationToken))
+        {
+            // 设备可能在进入有界队列后、真正取得 HTTP 并发槽之前掉线，因此发送前必须再次核对在线状态。
+            if (!IsTargetEligible(mapping))
+            {
+                _metrics.ApiRequestSkippedOffline();
+                continue;
+            }
+
             await SendReadingRequestAsync(mapping, phase.ShowResult, cancellationToken);
+        }
     }
+
+    /// <summary>
+    /// 判断目标在准备进入 HTTP 队列或即将发送时是否仍符合当前目标来源要求。
+    /// </summary>
+    /// <param name="mapping">待发送的真实电表与虚拟集中器映射。</param>
+    /// <returns>固定序号来源始终返回 true；在线注册表来源仅在设备仍在线时返回 true。</returns>
+    private bool IsTargetEligible(GatherDeviceMeterMapping mapping) =>
+        _options.CommandWorkload.TargetDeviceSource != CommandTargetSource.OnlineRegistry ||
+        _onlineRegistry?.IsOnline(mapping.Device.GlobalOrdinal) == true;
 
     /// <summary>
     /// 调用一次老读表 API，并同时检查 HTTP 状态码和响应 JSON 的 success 业务字段。
@@ -373,6 +429,9 @@ internal sealed class GatherCommandWorkloadRunner : IDisposable
         CommandPhaseOptions phase,
         CancellationToken cancellationToken)
     {
+        if (_options.CommandWorkload.TargetDeviceSource == CommandTargetSource.OnlineRegistry)
+            return await WaitForOnlineRegistryAsync(phase, cancellationToken);
+
         var globalRequired = phase.MinimumOnlineCount ??
             (int)Math.Ceiling(_options.Devices.Count * _options.CommandWorkload.RequiredOnlineRate);
         var required = _devices.Count(item => item.GlobalOrdinal < globalRequired);
@@ -426,6 +485,76 @@ internal sealed class GatherCommandWorkloadRunner : IDisposable
     }
 
     /// <summary>
+    /// 在 onlineRegistry 来源下等待本节点任意在线设备达到当前阶段的目标配额并连续稳定。
+    /// </summary>
+    /// <param name="phase">当前 HTTP 指令阶段及其在线门槛覆盖值。</param>
+    /// <param name="cancellationToken">取消等待的令牌。</param>
+    /// <returns>按本节点目标配额计算的在线门槛结果。</returns>
+    private async Task<OnlineGateResult> WaitForOnlineRegistryAsync(
+        CommandPhaseOptions phase,
+        CancellationToken cancellationToken)
+    {
+        var registry = _onlineRegistry ??
+            throw new InvalidOperationException("onlineRegistry 目标来源需要设备在线注册表。");
+        var globalTarget = ResolveGlobalTarget(phase);
+        var localTargetCount = _mappings.Count(item => item.Device.GlobalOrdinal < globalTarget);
+        var globalRequired = phase.MinimumOnlineCount ??
+            (int)Math.Ceiling(globalTarget * _options.CommandWorkload.RequiredOnlineRate);
+        var required = _mappings.Count(item => item.Device.GlobalOrdinal < globalRequired);
+        if (localTargetCount == 0 || required == 0)
+            return OnlineGateResult.NotRequired;
+
+        var stableSeconds = phase.OnlineStableSeconds ?? _options.CommandWorkload.OnlineStableSeconds;
+        var waitTimeoutSeconds = phase.OnlineWaitTimeoutSeconds ??
+            _options.CommandWorkload.OnlineWaitTimeoutSeconds;
+        var stopwatch = Stopwatch.StartNew();
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(waitTimeoutSeconds);
+        DateTimeOffset? stableSince = null;
+        var maximumObservedOnline = 0;
+        Console.WriteLine(
+            $"[HTTP等待] 阶段 {phase.Name} 等待可选在线设备 {required:N0}/{localTargetCount:N0}，" +
+            $"连续 {stableSeconds:N0} 秒，最长等待 {waitTimeoutSeconds:N0} 秒。");
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            var onlineOrdinals = registry.GetOnlineOrdinalsSnapshot().ToHashSet();
+            // onlineRegistry 可以用任意当前在线设备补足阶段配额，不再局限于 GlobalOrdinal 小于 targetDeviceCount 的固定前缀。
+            var online = Math.Min(
+                localTargetCount,
+                _mappings.Count(item => onlineOrdinals.Contains(item.Device.GlobalOrdinal)));
+            maximumObservedOnline = Math.Max(maximumObservedOnline, online);
+            stableSince = online >= required ? stableSince ?? DateTimeOffset.UtcNow : null;
+            if (stableSince.HasValue &&
+                DateTimeOffset.UtcNow - stableSince.Value >= TimeSpan.FromSeconds(stableSeconds))
+            {
+                stopwatch.Stop();
+                Console.WriteLine(
+                    $"[HTTP等待完成] 阶段 {phase.Name} 可选在线设备 {online:N0}/{localTargetCount:N0}，开始指令压测。");
+                return new OnlineGateResult(
+                    IsRequired: true,
+                    Satisfied: true,
+                    RequiredOnlineCount: required,
+                    MaximumObservedOnlineCount: maximumObservedOnline,
+                    WaitDuration: stopwatch.Elapsed,
+                    FailureReason: null);
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+        }
+
+        stopwatch.Stop();
+        var reason =
+            $"等待可选在线设备超过 {waitTimeoutSeconds} 秒；要求本地在线配额 {required:N0}/{localTargetCount:N0} " +
+            $"并连续稳定 {stableSeconds} 秒，实际峰值 {maximumObservedOnline:N0}。";
+        return new OnlineGateResult(
+            IsRequired: true,
+            Satisfied: false,
+            RequiredOnlineCount: required,
+            MaximumObservedOnlineCount: maximumObservedOnline,
+            WaitDuration: stopwatch.Elapsed,
+            FailureReason: reason);
+    }
+
+    /// <summary>
     /// 将完成、跳过或失败阶段统一转换为报告结果，并按执行前后快照计算当前阶段的指标增量。
     /// </summary>
     /// <param name="phase">当前 HTTP 指令阶段配置。</param>
@@ -434,6 +563,7 @@ internal sealed class GatherCommandWorkloadRunner : IDisposable
     /// <param name="status">阶段最终状态。</param>
     /// <param name="statusReason">跳过、失败或强制执行说明。</param>
     /// <param name="gate">在线门槛观测结果。</param>
+    /// <param name="targetSelection">当前阶段计划目标数和实际选出的设备快照。</param>
     /// <param name="before">实际执行请求前的指标；未执行请求时为空。</param>
     /// <param name="after">实际执行结束后的指标；未执行请求时为空。</param>
     private void AddResult(
@@ -443,18 +573,17 @@ internal sealed class GatherCommandWorkloadRunner : IDisposable
         CommandPhaseStatus status,
         string? statusReason,
         OnlineGateResult gate,
+        PhaseTargetSelection targetSelection,
         MetricSnapshot? before,
         MetricSnapshot? after)
     {
-        var globalTarget = ResolveGlobalTarget(phase);
-        var localDeviceCount = _mappings.Count(item => item.Device.GlobalOrdinal < globalTarget);
         _results.Add(new CommandPhaseResult
         {
             Name = phase.Name,
             StartedAtUtc = startedAtUtc,
             EndedAtUtc = endedAtUtc,
-            LocalDeviceCount = localDeviceCount,
-            PlannedRequests = checked(localDeviceCount * phase.RequestsPerDevice),
+            LocalDeviceCount = targetSelection.PlannedTargetCount,
+            PlannedRequests = checked(targetSelection.PlannedTargetCount * phase.RequestsPerDevice),
             ShowResult = phase.ShowResult,
             Status = status,
             StatusReason = statusReason,
@@ -466,6 +595,15 @@ internal sealed class GatherCommandWorkloadRunner : IDisposable
             ApiRequestsSucceeded = Delta(after?.ApiRequestsSucceeded, before?.ApiRequestsSucceeded),
             ApiRequestsFailed = Delta(after?.ApiRequestsFailed, before?.ApiRequestsFailed),
             ApiRequestTimeouts = Delta(after?.ApiRequestTimeouts, before?.ApiRequestTimeouts),
+            ApiTargetsRequired = _options.CommandWorkload.TargetDeviceSource == CommandTargetSource.OnlineRegistry
+                ? targetSelection.PlannedTargetCount
+                : 0,
+            ApiTargetsOnline = _options.CommandWorkload.TargetDeviceSource == CommandTargetSource.OnlineRegistry
+                ? targetSelection.Targets.Count
+                : 0,
+            ApiRequestsSkippedOffline = Delta(
+                after?.ApiRequestsSkippedOffline,
+                before?.ApiRequestsSkippedOffline),
             GatherReadingCommandsReceived = Delta(
                 after?.GatherReadingCommandsReceived,
                 before?.GatherReadingCommandsReceived),
@@ -485,25 +623,25 @@ internal sealed class GatherCommandWorkloadRunner : IDisposable
         after.HasValue && before.HasValue ? Math.Max(0, after.Value - before.Value) : 0;
 
     /// <summary>
-    /// 验证当前分片映射覆盖每个阶段需要的全部全局设备序号，避免连接建立后才发现 meter_id 缺失。
+    /// 验证当前分片映射覆盖可能被阶段选中的全部设备序号，避免连接建立后才发现 meter_id 缺失。
     /// </summary>
     /// <exception cref="InvalidDataException">至少一个阶段缺少本地设备映射。</exception>
     private void ValidateMappingCoverage()
     {
         var mappedOrdinals = _mappings.Select(item => item.Device.GlobalOrdinal).ToHashSet();
-        foreach (var phase in _options.CommandWorkload.Phases)
+        var phases = _options.CommandWorkload.Phases;
+        var maximumGlobalTarget = _options.CommandWorkload.TargetDeviceSource == CommandTargetSource.OnlineRegistry
+            ? _options.Devices.Count
+            : phases.Select(ResolveGlobalTarget).DefaultIfEmpty(0).Max();
+        var missing = _devices
+            .Where(item => item.GlobalOrdinal < maximumGlobalTarget && !mappedOrdinals.Contains(item.GlobalOrdinal))
+            .Take(5)
+            .Select(item => item.DeviceId)
+            .ToArray();
+        if (missing.Length > 0)
         {
-            var globalTarget = ResolveGlobalTarget(phase);
-            var missing = _devices
-                .Where(item => item.GlobalOrdinal < globalTarget && !mappedOrdinals.Contains(item.GlobalOrdinal))
-                .Take(5)
-                .Select(item => item.DeviceId)
-                .ToArray();
-            if (missing.Length > 0)
-            {
-                throw new InvalidDataException(
-                    $"HTTP 阶段 {phase.Name} 的设备映射不完整，示例缺失：{string.Join(", ", missing)}。");
-            }
+            throw new InvalidDataException(
+                $"HTTP 指令目标的设备映射不完整，示例缺失：{string.Join(", ", missing)}。");
         }
     }
 
@@ -540,11 +678,46 @@ internal sealed class GatherCommandWorkloadRunner : IDisposable
         phase.TargetDeviceCount == 0 ? _options.Devices.Count : phase.TargetDeviceCount;
 
     /// <summary>
+    /// 在在线门槛结束后为当前阶段生成一次目标快照；在线来源可用任意当前在线设备补足本分片配额。
+    /// </summary>
+    /// <param name="phase">当前 HTTP 指令阶段。</param>
+    /// <returns>本分片计划目标数以及按全局序号稳定排序的实际目标。</returns>
+    private PhaseTargetSelection SelectPhaseTargets(CommandPhaseOptions phase)
+    {
+        var globalTarget = ResolveGlobalTarget(phase);
+        var fixedTargets = _mappings
+            .Where(item => item.Device.GlobalOrdinal < globalTarget)
+            .OrderBy(item => item.Device.GlobalOrdinal)
+            .ToArray();
+        if (_options.CommandWorkload.TargetDeviceSource != CommandTargetSource.OnlineRegistry)
+            return new PhaseTargetSelection(fixedTargets.Length, fixedTargets);
+
+        var registry = _onlineRegistry ??
+            throw new InvalidOperationException("onlineRegistry 目标来源需要设备在线注册表。");
+        var onlineOrdinals = registry.GetOnlineOrdinalsSnapshot().ToHashSet();
+        var onlineTargets = _mappings
+            .Where(item => onlineOrdinals.Contains(item.Device.GlobalOrdinal))
+            .OrderBy(item => item.Device.GlobalOrdinal)
+            .Take(fixedTargets.Length)
+            .ToArray();
+        return new PhaseTargetSelection(fixedTargets.Length, onlineTargets);
+    }
+
+    /// <summary>
     /// 表示一次 API 响应的业务判定结果。
     /// </summary>
     /// <param name="Succeeded">是否同时满足 HTTP 与业务成功。</param>
     /// <param name="ErrorCode">失败时的稳定聚合错误码。</param>
     private sealed record ApiEvaluation(bool Succeeded, string? ErrorCode);
+
+    /// <summary>
+    /// 表示一个 HTTP 指令阶段的计划目标配额和一次性选出的实际目标快照。
+    /// </summary>
+    /// <param name="PlannedTargetCount">根据全局目标和分片规则换算出的本节点计划目标数。</param>
+    /// <param name="Targets">固定来源的序号前缀，或在线来源在阶段开始时选出的在线设备。</param>
+    private sealed record PhaseTargetSelection(
+        int PlannedTargetCount,
+        IReadOnlyList<GatherDeviceMeterMapping> Targets);
 
     /// <summary>
     /// 表示单个 HTTP 阶段开始前的在线门槛观测结果。

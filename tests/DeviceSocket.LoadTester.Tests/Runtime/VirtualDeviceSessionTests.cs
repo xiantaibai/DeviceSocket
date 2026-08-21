@@ -34,6 +34,7 @@ public sealed class VirtualDeviceSessionTests
         var descriptor = Assert.Single(DeviceAddressAllocator.Allocate(options));
         var protocol = LoadTestProtocolFactory.Create(options.Target);
         var metrics = new LoadTestMetrics();
+        var onlineRegistry = new DeviceOnlineRegistry();
         metrics.SetExpectedOnline(1, DateTimeOffset.UtcNow);
         using var pacer = new ConnectionPacer(0, metrics);
         using var gate = new SemaphoreSlim(1);
@@ -41,9 +42,21 @@ public sealed class VirtualDeviceSessionTests
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(8));
 
         var serverTask = ServeGatherLoginAndHeartbeatAsync(listener, cancellation.Token);
-        var session = new VirtualDeviceSession(descriptor, options, protocol, metrics, pacer, gate, faults);
+        var session = new VirtualDeviceSession(
+            descriptor,
+            options,
+            protocol,
+            metrics,
+            onlineRegistry,
+            pacer,
+            gate,
+            faults);
         var sessionTask = session.RunAsync(cancellation.Token);
 
+        await WaitUntilAsync(
+            () => onlineRegistry.IsOnline(descriptor.GlobalOrdinal),
+            TimeSpan.FromSeconds(3));
+        Assert.Equal(1, onlineRegistry.Count);
         await WaitUntilAsync(
             () => metrics.Snapshot(DateTimeOffset.UtcNow).HeartbeatsConfirmed >= 1,
             TimeSpan.FromSeconds(5));
@@ -57,6 +70,8 @@ public sealed class VirtualDeviceSessionTests
         Assert.True(snapshot.HeartbeatsConfirmed >= 1);
         Assert.Equal(0, snapshot.LoginTimeouts);
         Assert.Equal(0, snapshot.HeartbeatTimeouts);
+        Assert.False(onlineRegistry.IsOnline(descriptor.GlobalOrdinal));
+        Assert.Equal(0, onlineRegistry.Count);
     }
 
     /// <summary>
@@ -82,7 +97,15 @@ public sealed class VirtualDeviceSessionTests
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(8));
 
         var serverTask = ServeTimeoutThenLoginAsync(listener, cancellation.Token);
-        var session = new VirtualDeviceSession(descriptor, options, protocol, metrics, pacer, gate, faults);
+        var session = new VirtualDeviceSession(
+            descriptor,
+            options,
+            protocol,
+            metrics,
+            new DeviceOnlineRegistry(),
+            pacer,
+            gate,
+            faults);
         var sessionTask = session.RunAsync(cancellation.Token);
 
         await WaitUntilAsync(
@@ -123,7 +146,15 @@ public sealed class VirtualDeviceSessionTests
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
         var serverTask = ServeDlt645DownstreamRequestAsync(listener, descriptor.MeterAddress, cancellation.Token);
-        var session = new VirtualDeviceSession(descriptor, options, protocol, metrics, pacer, gate, faults);
+        var session = new VirtualDeviceSession(
+            descriptor,
+            options,
+            protocol,
+            metrics,
+            new DeviceOnlineRegistry(),
+            pacer,
+            gate,
+            faults);
         var sessionTask = session.RunAsync(cancellation.Token);
 
         var response = await serverTask;
@@ -165,7 +196,15 @@ public sealed class VirtualDeviceSessionTests
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
         var serverTask = ServeLoginAndCloseTwiceAsync(listener, cancellation.Token);
-        var session = new VirtualDeviceSession(descriptor, options, protocol, metrics, pacer, gate, faults);
+        var session = new VirtualDeviceSession(
+            descriptor,
+            options,
+            protocol,
+            metrics,
+            new DeviceOnlineRegistry(),
+            pacer,
+            gate,
+            faults);
         var sessionTask = session.RunAsync(cancellation.Token);
 
         await WaitUntilAsync(
@@ -204,7 +243,15 @@ public sealed class VirtualDeviceSessionTests
         var faults = new FaultInjectionController();
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var serverTask = ServeTwoLoginsAsync(listener, cancellation.Token);
-        var session = new VirtualDeviceSession(descriptor, options, protocol, metrics, pacer, gate, faults);
+        var session = new VirtualDeviceSession(
+            descriptor,
+            options,
+            protocol,
+            metrics,
+            new DeviceOnlineRegistry(),
+            pacer,
+            gate,
+            faults);
         var sessionTask = session.RunAsync(cancellation.Token);
 
         await WaitUntilAsync(
@@ -251,7 +298,15 @@ public sealed class VirtualDeviceSessionTests
         });
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var serverTask = ServeOneLoginAsync(listener, cancellation.Token);
-        var session = new VirtualDeviceSession(descriptor, options, protocol, metrics, pacer, gate, faults);
+        var session = new VirtualDeviceSession(
+            descriptor,
+            options,
+            protocol,
+            metrics,
+            new DeviceOnlineRegistry(),
+            pacer,
+            gate,
+            faults);
         var sessionTask = session.RunAsync(cancellation.Token);
 
         await WaitUntilAsync(

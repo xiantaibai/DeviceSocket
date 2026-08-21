@@ -311,7 +311,45 @@ public sealed class LoadTestOptionsValidatorTests
     }
 
     /// <summary>
-    /// 验证 HTTP 阶段在线门槛不能超过全局设备数，且阶段等待上限设置后必须大于零。
+    /// 验证在线注册表目标来源只允许 combined 角色使用，apiOnly 必须保持固定序号读取。
+    /// </summary>
+    [Fact]
+    public void OnlineRegistryTargetSource_RequiresCombinedRole()
+    {
+        var options = TestOptionsFactory.Create();
+        options.Target.CompatibilityProfile = ServerCompatibilityProfile.GatherTcpCenter;
+        options.CommandWorkload = new CommandWorkloadOptions
+        {
+            Enabled = true,
+            BaseUrl = "http://127.0.0.1:8080",
+            MeterIdStart = 1_000,
+            TargetDeviceSource = CommandTargetSource.OnlineRegistry,
+            Phases =
+            [
+                new CommandPhaseOptions
+                {
+                    Name = "online-only",
+                    TargetDeviceCount = 1,
+                    RequestsPerDevice = 1,
+                    RequestsPerSecond = 10,
+                    MaxConcurrency = 1
+                }
+            ]
+        };
+
+        var apiOnlyErrors = LoadTestOptionsValidator.Validate(options);
+        options.Role = LoadTestRole.Combined;
+        var combinedErrors = LoadTestOptionsValidator.Validate(options);
+
+        Assert.Contains(
+            apiOnlyErrors,
+            error => error.Contains("onlineRegistry", StringComparison.Ordinal) &&
+                     error.Contains("combined", StringComparison.Ordinal));
+        Assert.Empty(combinedErrors);
+    }
+
+    /// <summary>
+    /// 验证 HTTP 阶段在线门槛不能超过当前阶段目标数，且阶段等待上限设置后必须大于零。
     /// </summary>
     [Fact]
     public void CommandPhaseOnlineGate_InvalidValuesAreRejected()
@@ -319,6 +357,7 @@ public sealed class LoadTestOptionsValidatorTests
         var options = TestOptionsFactory.Create();
         options.Role = LoadTestRole.Combined;
         options.Target.CompatibilityProfile = ServerCompatibilityProfile.GatherTcpCenter;
+        options.Devices.Count = 20;
         options.CommandWorkload = new CommandWorkloadOptions
         {
             Enabled = true,

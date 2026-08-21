@@ -13,6 +13,7 @@ namespace DeviceSocket.LoadTester.Runtime;
 /// <param name="devices">仅属于当前分片的虚拟设备描述集合。</param>
 /// <param name="protocol">所有设备共享的无状态协议适配器。</param>
 /// <param name="metrics">本节点共享指标容器。</param>
+/// <param name="onlineRegistry">供设备会话维护并供 HTTP 指令工作负载读取的在线注册表。</param>
 /// <param name="pacer">支持阶段动态调速的连接节流器。</param>
 /// <param name="connectionGate">单节点连接与登录并发闸门。</param>
 /// <param name="faultController">向全部设备原子发布阶段故障参数的控制器。</param>
@@ -21,6 +22,7 @@ internal sealed class LoadTestRunner(
     IReadOnlyList<VirtualDeviceDescriptor> devices,
     ILoadTestProtocol protocol,
     LoadTestMetrics metrics,
+    IDeviceOnlineRegistry onlineRegistry,
     ConnectionPacer pacer,
     SemaphoreSlim connectionGate,
     FaultInjectionController faultController)
@@ -204,6 +206,7 @@ internal sealed class LoadTestRunner(
                 options,
                 protocol,
                 metrics,
+                onlineRegistry,
                 pacer,
                 connectionGate,
                 faultController);

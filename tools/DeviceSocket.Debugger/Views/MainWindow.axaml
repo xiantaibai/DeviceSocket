@@ -30,9 +30,58 @@
       <Setter Property="Background" Value="#1769E0" />
       <Setter Property="Foreground" Value="White" />
     </Style>
+    <Style Selector="Button.primary:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="#D91769E0" />
+      <Setter Property="Foreground" Value="White" />
+    </Style>
+    <Style Selector="Button.primary:pressed /template/ ContentPresenter">
+      <Setter Property="Background" Value="#B31769E0" />
+      <Setter Property="Foreground" Value="White" />
+    </Style>
     <Style Selector="Button.success">
       <Setter Property="Background" Value="#138A5B" />
       <Setter Property="Foreground" Value="White" />
+    </Style>
+    <Style Selector="Button.success:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="#D9138A5B" />
+      <Setter Property="Foreground" Value="White" />
+    </Style>
+    <Style Selector="Button.success:pressed /template/ ContentPresenter">
+      <Setter Property="Background" Value="#B3138A5B" />
+      <Setter Property="Foreground" Value="White" />
+    </Style>
+    <Style Selector="Button.receive-filter">
+      <Setter Property="Padding" Value="12,6" />
+      <Setter Property="Background" Value="#EDF2F7" />
+      <Setter Property="Foreground" Value="#334E68" />
+    </Style>
+    <Style Selector="Button.receive-filter:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="#D9DCEBFA" />
+      <Setter Property="Foreground" Value="#1769E0" />
+    </Style>
+    <Style Selector="Button.receive-filter.selected">
+      <Setter Property="Background" Value="#1769E0" />
+      <Setter Property="Foreground" Value="White" />
+    </Style>
+    <Style Selector="Button.receive-filter.selected /template/ ContentPresenter">
+      <Setter Property="Background" Value="#1769E0" />
+      <Setter Property="Foreground" Value="White" />
+    </Style>
+    <Style Selector="Border.traffic-category">
+      <Setter Property="Padding" Value="7,2" />
+      <Setter Property="CornerRadius" Value="10" />
+    </Style>
+    <Style Selector="Border.traffic-category.business">
+      <Setter Property="Background" Value="#E7F0FF" />
+    </Style>
+    <Style Selector="Border.traffic-category.heartbeat">
+      <Setter Property="Background" Value="#E4F7EF" />
+    </Style>
+    <Style Selector="Border.traffic-category.error">
+      <Setter Property="Background" Value="#FDECEC" />
+    </Style>
+    <Style Selector="Border.traffic-category.system">
+      <Setter Property="Background" Value="#EDF2F7" />
     </Style>
     <Style Selector="TextBox">
       <Setter Property="CornerRadius" Value="5" />
@@ -71,11 +120,16 @@
                  Watermark="5001" />
         <Button Grid.Column="6"
                 Classes="success"
+                IsVisible="{Binding IsConnectActionVisible}"
+                IsEnabled="{Binding CanConnect}"
                 Command="{Binding ConnectCommand}"
                 Content="连接" />
         <Button Grid.Column="7"
+                Classes="primary"
+                IsVisible="{Binding IsDisconnectActionVisible}"
+                IsEnabled="{Binding CanDisconnect}"
                 Command="{Binding DisconnectCommand}"
-                Content="断开" />
+                Content="断开连接" />
         <StackPanel Grid.Column="9"
                     VerticalAlignment="Center"
                     Orientation="Horizontal"
@@ -106,43 +160,127 @@
                        Text="{Binding SelectedCommandDescription}" />
           </StackPanel>
 
-          <Border Grid.Row="1"
-                  Background="#F8FAFD"
-                  BorderBrush="#E5EAF1"
-                  BorderThickness="1"
-                  CornerRadius="6"
-                  Padding="12">
-            <ScrollViewer MaxHeight="215"
-                          VerticalScrollBarVisibility="Auto">
-              <ItemsControl ItemsSource="{Binding Inputs}">
-                <ItemsControl.ItemTemplate>
-                  <DataTemplate x:DataType="vm:CommandInputViewModel">
-                    <Grid Margin="0,4"
-                          ColumnDefinitions="150,*"
-                          ColumnSpacing="10">
-                      <StackPanel Grid.Column="0"
-                                  VerticalAlignment="Center"
-                                  Spacing="2">
-                        <TextBlock FontWeight="SemiBold"
-                                   Text="{Binding Label}" />
-                        <TextBlock FontSize="11"
-                                   Foreground="#829AB1"
-                                   TextWrapping="Wrap"
-                                   Text="{Binding Description}" />
-                      </StackPanel>
-                      <TextBox Grid.Column="1"
-                               IsVisible="{Binding IsTextInput}"
-                               Text="{Binding Value, Mode=TwoWay}" />
-                      <ComboBox Grid.Column="1"
-                                IsVisible="{Binding IsSelect}"
-                                ItemsSource="{Binding Options}"
-                                SelectedItem="{Binding Value, Mode=TwoWay}" />
-                    </Grid>
-                  </DataTemplate>
-                </ItemsControl.ItemTemplate>
-              </ItemsControl>
-            </ScrollViewer>
-          </Border>
+          <Grid Grid.Row="1"
+                ColumnDefinitions="*,Auto"
+                ColumnSpacing="12">
+            <Border Grid.Column="0"
+                    Background="#F8FAFD"
+                    BorderBrush="#E5EAF1"
+                    BorderThickness="1"
+                    CornerRadius="6"
+                    Padding="12">
+              <ScrollViewer MaxHeight="300"
+                            VerticalScrollBarVisibility="Auto">
+                <ItemsControl ItemsSource="{Binding Inputs}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:CommandInputViewModel">
+                      <Grid Margin="0,4"
+                            ColumnDefinitions="150,*"
+                            ColumnSpacing="10">
+                        <StackPanel Grid.Column="0"
+                                    VerticalAlignment="Center"
+                                    Spacing="2">
+                          <TextBlock FontWeight="SemiBold"
+                                     Text="{Binding Label}" />
+                          <TextBlock FontSize="11"
+                                     Foreground="#829AB1"
+                                     TextWrapping="Wrap"
+                                     Text="{Binding Description}" />
+                        </StackPanel>
+                        <TextBox Grid.Column="1"
+                                 IsVisible="{Binding IsTextInput}"
+                                 Text="{Binding Value, Mode=TwoWay}" />
+                        <ComboBox Grid.Column="1"
+                                  IsVisible="{Binding IsSelect}"
+                                  ItemsSource="{Binding Options}"
+                                  SelectedItem="{Binding Value, Mode=TwoWay}" />
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </ScrollViewer>
+            </Border>
+
+            <StackPanel Grid.Column="1"
+                        Width="360"
+                        IsVisible="{Binding HasSpecialConfiguration}"
+                        Spacing="12">
+              <Border IsVisible="{Binding IsHeartbeatCommand}"
+                      Background="#F8FAFD"
+                      BorderBrush="#E5EAF1"
+                      BorderThickness="1"
+                      CornerRadius="6"
+                      Padding="12">
+                <Grid RowDefinitions="Auto,Auto"
+                      RowSpacing="10">
+                  <Grid Grid.Row="0"
+                        ColumnDefinitions="Auto,*"
+                        ColumnSpacing="8">
+                    <TextBlock VerticalAlignment="Center"
+                               FontWeight="SemiBold"
+                               Text="376.1 定时心跳" />
+                    <TextBlock Grid.Column="1"
+                               HorizontalAlignment="Right"
+                               VerticalAlignment="Center"
+                               Foreground="#627D98"
+                               TextTrimming="CharacterEllipsis"
+                               Text="{Binding AutoHeartbeatStatus}" />
+                  </Grid>
+                  <Grid Grid.Row="1"
+                        ColumnDefinitions="Auto,*,Auto,Auto"
+                        ColumnSpacing="8">
+                    <TextBlock VerticalAlignment="Center"
+                               Text="间隔（秒）" />
+                    <TextBox Grid.Column="1"
+                             MinWidth="68"
+                             Text="{Binding HeartbeatIntervalSeconds}"
+                             Watermark="120" />
+                    <Button Grid.Column="2"
+                            Classes="success"
+                            IsEnabled="{Binding CanStartAutoHeartbeat}"
+                            Command="{Binding StartAutoHeartbeatCommand}"
+                            Content="启动" />
+                    <Button Grid.Column="3"
+                            IsEnabled="{Binding IsAutoHeartbeatRunning}"
+                            Command="{Binding StopAutoHeartbeatCommand}"
+                            Content="停止" />
+                  </Grid>
+                </Grid>
+              </Border>
+
+              <Border IsVisible="{Binding IsGatherReadingResponseCommand}"
+                      Background="#F8FAFD"
+                      BorderBrush="#E5EAF1"
+                      BorderThickness="1"
+                      CornerRadius="6"
+                      Padding="12">
+                <Grid RowDefinitions="Auto,*,Auto"
+                      RowSpacing="8">
+                  <Grid Grid.Row="0"
+                        ColumnDefinitions="*,Auto"
+                        ColumnSpacing="8">
+                    <TextBlock VerticalAlignment="Center"
+                               FontWeight="SemiBold"
+                               Text="根据下发报文回填参数" />
+                    <Button Grid.Column="1"
+                            Command="{Binding ApplyDownstreamCommand}"
+                            Content="解析并回填" />
+                  </Grid>
+                  <TextBox Grid.Row="1"
+                           MinHeight="62"
+                           AcceptsReturn="True"
+                           FontFamily="Cascadia Mono, Consolas"
+                           TextWrapping="Wrap"
+                           Watermark="粘贴 AFN=0CH/F129 下发报文，例如 68 32 00 32 00 68 ..."
+                           Text="{Binding DownstreamHex}" />
+                  <TextBlock Grid.Row="2"
+                             Foreground="#627D98"
+                             TextWrapping="Wrap"
+                             Text="{Binding DownstreamApplyStatus}" />
+                </Grid>
+              </Border>
+            </StackPanel>
+          </Grid>
 
           <Grid Grid.Row="2"
                 ColumnDefinitions="Auto,Auto,Auto,*"
@@ -196,21 +334,220 @@
 
             <TabItem Header="接收数据">
               <Grid Margin="0,10,0,0"
-                    RowDefinitions="Auto,*"
+                    RowDefinitions="Auto,Auto,*"
                     RowSpacing="8">
-                <Button Grid.Row="0"
-                        HorizontalAlignment="Right"
-                        Command="{Binding ClearReceiveCommand}"
-                        Content="清空数据" />
-                <TextBox Grid.Row="1"
-                         AcceptsReturn="True"
-                         IsReadOnly="True"
-                         FontFamily="Cascadia Mono, Consolas"
-                         FontSize="13"
-                         TextWrapping="Wrap"
-                         ScrollViewer.VerticalScrollBarVisibility="Auto"
-                         ScrollViewer.HorizontalScrollBarVisibility="Auto"
-                         Text="{Binding ReceivedText}" />
+                <Grid Grid.Row="0"
+                      ColumnDefinitions="*,Auto"
+                      ColumnSpacing="8">
+                  <StackPanel Orientation="Horizontal"
+                              Spacing="6">
+                    <Button Classes="receive-filter"
+                            Classes.selected="{Binding IsBusinessReceiveFilterSelected}"
+                            Command="{Binding SelectReceiveCategoryCommand}"
+                            CommandParameter="Business"
+                            Content="{Binding BusinessFilterLabel}" />
+                    <Button Classes="receive-filter"
+                            Classes.selected="{Binding IsHeartbeatReceiveFilterSelected}"
+                            Command="{Binding SelectReceiveCategoryCommand}"
+                            CommandParameter="Heartbeat"
+                            Content="{Binding HeartbeatFilterLabel}" />
+                    <Button Classes="receive-filter"
+                            Classes.selected="{Binding IsStatusReceiveFilterSelected}"
+                            Command="{Binding SelectReceiveCategoryCommand}"
+                            CommandParameter="Status"
+                            Content="{Binding StatusFilterLabel}" />
+                    <Button Classes="receive-filter"
+                            Classes.selected="{Binding IsAllReceiveFilterSelected}"
+                            Command="{Binding SelectReceiveCategoryCommand}"
+                            CommandParameter="All"
+                            Content="{Binding AllFilterLabel}" />
+                  </StackPanel>
+                  <TextBlock Grid.Column="1"
+                             VerticalAlignment="Center"
+                             Foreground="#627D98"
+                             Text="{Binding ReceiveViewStatus}" />
+                </Grid>
+
+                <Grid Grid.Row="1"
+                      ColumnDefinitions="*,190,Auto,Auto,Auto,Auto"
+                      ColumnSpacing="8">
+                  <TextBox Watermark="搜索设备号、标题、HEX 或解析内容"
+                           Text="{Binding ReceiveSearchText, Mode=TwoWay}" />
+                  <ComboBox Grid.Column="1"
+                            ItemsSource="{Binding InstructionFilterOptions}"
+                            SelectedItem="{Binding SelectedInstructionFilter, Mode=TwoWay}" />
+                  <CheckBox Grid.Column="2"
+                            VerticalAlignment="Center"
+                            IsChecked="{Binding AutoScrollReceived, Mode=TwoWay}"
+                            Content="自动滚动" />
+                  <Button Grid.Column="3"
+                          Command="{Binding ToggleReceivePauseCommand}"
+                          Content="{Binding PauseReceiveButtonText}" />
+                  <Button Grid.Column="4"
+                          Command="{Binding ClearCurrentReceiveCategoryCommand}"
+                          Content="清空当前" />
+                  <Button Grid.Column="5"
+                          Command="{Binding ClearReceiveCommand}"
+                          Content="清空全部" />
+                </Grid>
+
+                <Grid Grid.Row="2"
+                      ColumnDefinitions="1.25*,8,*">
+                  <ListBox x:Name="ReceiveList"
+                           Grid.Column="0"
+                           Padding="0"
+                           Background="Transparent"
+                           BorderThickness="0"
+                           ItemsSource="{Binding ReceivedEntries}"
+                           SelectedItem="{Binding SelectedReceivedEntry, Mode=TwoWay}"
+                           ScrollViewer.VerticalScrollBarVisibility="Auto"
+                           ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <ListBox.Styles>
+                      <Style Selector="ListBoxItem">
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        <Setter Property="Padding" Value="0" />
+                      </Style>
+                    </ListBox.Styles>
+                    <ListBox.ItemTemplate>
+                      <DataTemplate x:DataType="vm:ReceivedTrafficItemViewModel">
+                        <Border Margin="0,0,0,6"
+                                Padding="9,7"
+                                Background="#F8FAFD"
+                                BorderBrush="#E5EAF1"
+                                BorderThickness="1"
+                                CornerRadius="6">
+                          <Grid RowDefinitions="Auto,Auto"
+                                RowSpacing="4">
+                            <Grid ColumnDefinitions="82,Auto,*"
+                                  ColumnSpacing="7">
+                              <TextBlock VerticalAlignment="Center"
+                                         Foreground="#627D98"
+                                         FontFamily="Cascadia Mono, Consolas"
+                                         FontSize="12"
+                                         Text="{Binding TimeText}" />
+                              <Border Grid.Column="1"
+                                      Classes="traffic-category"
+                                      Classes.business="{Binding IsBusiness}"
+                                      Classes.heartbeat="{Binding IsHeartbeat}"
+                                      Classes.error="{Binding IsError}"
+                                      Classes.system="{Binding IsSystem}">
+                                <TextBlock FontSize="11"
+                                           FontWeight="SemiBold"
+                                           Foreground="#334E68"
+                                           Text="{Binding CategoryText}" />
+                              </Border>
+                              <TextBlock Grid.Column="2"
+                                         VerticalAlignment="Center"
+                                         FontWeight="SemiBold"
+                                         MaxLines="1"
+                                         TextTrimming="CharacterEllipsis"
+                                         Text="{Binding Title}" />
+                            </Grid>
+                            <TextBlock Grid.Row="1"
+                                       Margin="89,0,0,0"
+                                       Foreground="#627D98"
+                                       FontSize="11"
+                                       MaxLines="1"
+                                       TextTrimming="CharacterEllipsis"
+                                       Text="{Binding SecondaryText}" />
+                          </Grid>
+                        </Border>
+                      </DataTemplate>
+                    </ListBox.ItemTemplate>
+                  </ListBox>
+
+                  <GridSplitter Grid.Column="1"
+                                Width="8"
+                                Background="Transparent"
+                                ResizeDirection="Columns" />
+
+                  <Border Grid.Column="2"
+                          Background="#F8FAFD"
+                          BorderBrush="#E5EAF1"
+                          BorderThickness="1"
+                          CornerRadius="6"
+                          Padding="10">
+                    <Grid>
+                      <StackPanel IsVisible="{Binding IsReceiveDetailEmpty}"
+                                  HorizontalAlignment="Center"
+                                  VerticalAlignment="Center"
+                                  Spacing="6">
+                        <TextBlock HorizontalAlignment="Center"
+                                   FontWeight="SemiBold"
+                                   Foreground="#627D98"
+                                   Text="选择一条记录查看详情" />
+                        <TextBlock HorizontalAlignment="Center"
+                                   FontSize="11"
+                                   Foreground="#829AB1"
+                                   Text="完整 HEX 和解析结果将在这里展示" />
+                      </StackPanel>
+
+                      <ContentControl IsVisible="{Binding HasSelectedReceivedEntry}"
+                                      Content="{Binding SelectedReceivedEntry}">
+                        <ContentControl.ContentTemplate>
+                          <DataTemplate x:DataType="vm:ReceivedTrafficItemViewModel">
+                            <Grid RowDefinitions="Auto,Auto,*"
+                                  RowSpacing="8">
+                              <Grid ColumnDefinitions="Auto,*,Auto"
+                                    ColumnSpacing="8">
+                                <Border Classes="traffic-category"
+                                        Classes.business="{Binding IsBusiness}"
+                                        Classes.heartbeat="{Binding IsHeartbeat}"
+                                        Classes.error="{Binding IsError}"
+                                        Classes.system="{Binding IsSystem}">
+                                  <TextBlock FontSize="11"
+                                             FontWeight="SemiBold"
+                                             Foreground="#334E68"
+                                             Text="{Binding CategoryText}" />
+                                </Border>
+                                <TextBlock Grid.Column="1"
+                                           VerticalAlignment="Center"
+                                           FontWeight="Bold"
+                                           TextTrimming="CharacterEllipsis"
+                                           Text="{Binding Title}" />
+                                <TextBlock Grid.Column="2"
+                                           VerticalAlignment="Center"
+                                           Foreground="#627D98"
+                                           FontFamily="Cascadia Mono, Consolas"
+                                           FontSize="11"
+                                           Text="{Binding TimeText}" />
+                              </Grid>
+                              <Grid Grid.Row="1"
+                                    ColumnDefinitions="Auto,*,Auto,*"
+                                    RowDefinitions="Auto,Auto"
+                                    ColumnSpacing="6"
+                                    RowSpacing="4">
+                                <TextBlock Foreground="#829AB1" Text="设备" />
+                                <TextBlock Grid.Column="1"
+                                           TextTrimming="CharacterEllipsis"
+                                           Text="{Binding DeviceText}" />
+                                <TextBlock Grid.Column="2" Foreground="#829AB1" Text="协议" />
+                                <TextBlock Grid.Column="3" Text="{Binding ProtocolText}" />
+                                <TextBlock Grid.Row="1" Foreground="#829AB1" Text="指令" />
+                                <TextBlock Grid.Row="1" Grid.Column="1"
+                                           TextTrimming="CharacterEllipsis"
+                                           Text="{Binding InstructionText}" />
+                                <TextBlock Grid.Row="1" Grid.Column="2" Foreground="#829AB1" Text="关联" />
+                                <TextBlock Grid.Row="1" Grid.Column="3"
+                                           TextTrimming="CharacterEllipsis"
+                                           Text="{Binding ResponseStatus}" />
+                              </Grid>
+                              <TextBox Grid.Row="2"
+                                       AcceptsReturn="True"
+                                       IsReadOnly="True"
+                                       FontFamily="Cascadia Mono, Consolas"
+                                       FontSize="12"
+                                       TextWrapping="Wrap"
+                                       ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                       ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                       Text="{Binding FullText}" />
+                            </Grid>
+                          </DataTemplate>
+                        </ContentControl.ContentTemplate>
+                      </ContentControl>
+                    </Grid>
+                  </Border>
+                </Grid>
               </Grid>
             </TabItem>
           </TabControl>

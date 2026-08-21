@@ -85,4 +85,39 @@ public sealed class AcceptanceEvaluatorTests
         Assert.True(result.Passed);
         Assert.Equal(2, result.Checks.Count);
     }
+
+    /// <summary>
+    /// 验证 API 目标覆盖率把离线跳过请求计入分母，避免少量已发送请求全部成功时误判整轮通过。
+    /// </summary>
+    [Fact]
+    public void ApiTargetCoverageRate_IncludesOfflineSkippedRequests()
+    {
+        var options = new AcceptanceOptions
+        {
+            MinimumFinalOnlineRate = null,
+            MaximumProtocolErrorRate = null,
+            MinimumApiSuccessRate = 0.95,
+            MinimumApiTargetCoverageRate = 0.95
+        };
+        var metrics = new MetricSnapshot
+        {
+            ApiRequestsStarted = 90,
+            ApiRequestsSucceeded = 90,
+            ApiRequestsSkippedOffline = 10
+        };
+
+        var result = AcceptanceEvaluator.Evaluate(
+            metrics,
+            options,
+            expectedOnline: 0,
+            role: LoadTestRole.ApiOnly);
+
+        Assert.False(result.Passed);
+        Assert.Contains(
+            result.Checks,
+            item => item.Name == "apiSuccessRate" && item.Passed && item.Actual == 1);
+        Assert.Contains(
+            result.Checks,
+            item => item.Name == "apiTargetCoverageRate" && !item.Passed && item.Actual == 0.9);
+    }
 }

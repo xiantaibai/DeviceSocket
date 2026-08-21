@@ -15,6 +15,7 @@ namespace DeviceSocket.LoadTester.Runtime;
 /// <param name="options">连接、心跳、上报、重连和协议兼容配置。</param>
 /// <param name="protocol">负责创建帧、拆包和确认关联的协议适配器。</param>
 /// <param name="metrics">本节点共享的并发安全指标容器。</param>
+/// <param name="onlineRegistry">供 HTTP 指令工作负载按设备序号筛选在线目标的注册表。</param>
 /// <param name="pacer">所有设备共享的连接速率调度器。</param>
 /// <param name="connectionGate">限制同时处于连接和登录过程中的设备数量。</param>
 /// <param name="faultController">提供当前场景阶段的故障参数快照。</param>
@@ -23,6 +24,7 @@ internal sealed class VirtualDeviceSession(
     LoadTestOptions options,
     ILoadTestProtocol protocol,
     LoadTestMetrics metrics,
+    IDeviceOnlineRegistry onlineRegistry,
     ConnectionPacer pacer,
     SemaphoreSlim connectionGate,
     FaultInjectionController faultController)
@@ -125,6 +127,7 @@ internal sealed class VirtualDeviceSession(
             stopwatch.Restart();
             await LoginAsync(stream, reader, cycleCancellation.Token);
             metrics.LoginCompleted(stopwatch.Elapsed, DateTimeOffset.UtcNow);
+            onlineRegistry.RegisterOnline(descriptor.GlobalOrdinal);
             online = true;
             reachedOnline = true;
             loginStage = false;
@@ -206,6 +209,8 @@ internal sealed class VirtualDeviceSession(
             }
             if (Interlocked.Exchange(ref _forcedDisconnectRequested, 0) != 0)
                 metrics.ForcedDisconnect();
+            if (online)
+                onlineRegistry.UnregisterOnline(descriptor.GlobalOrdinal);
             if (cancellationToken.IsCancellationRequested && online && stream is not null)
                 await TrySendLogoutAsync(stream);
             client?.Dispose();

@@ -43,4 +43,40 @@ public sealed class CommandInputValueMemory
 
         protocolValues[key] = value;
     }
+
+    /// <summary>
+    /// 导出当前所有协议下已记住的参数，供本地配置文件持久化。
+    /// </summary>
+    /// <returns>协议到参数键值的只读快照。</returns>
+    public IReadOnlyDictionary<DeviceProtocol, IReadOnlyDictionary<string, string>> Snapshot()
+    {
+        var snapshot = new Dictionary<DeviceProtocol, IReadOnlyDictionary<string, string>>();
+        foreach (var protocolPair in _values)
+        {
+            snapshot.Add(
+                protocolPair.Key,
+                new Dictionary<string, string>(protocolPair.Value, StringComparer.OrdinalIgnoreCase));
+        }
+
+        return snapshot;
+    }
+
+    /// <summary>
+    /// 用配置文件恢复指定协议下的参数记忆，并在下次创建输入项时自动应用。
+    /// </summary>
+    /// <param name="protocol">待恢复的协议。</param>
+    /// <param name="values">配置文件中保存的参数键值。</param>
+    public void Restore(DeviceProtocol protocol, IReadOnlyDictionary<string, string>? values)
+    {
+        if (values is null || values.Count == 0)
+            return;
+        if (!_values.TryGetValue(protocol, out var protocolValues))
+        {
+            protocolValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            _values.Add(protocol, protocolValues);
+        }
+
+        foreach (var pair in values)
+            protocolValues[pair.Key] = pair.Value;
+    }
 }

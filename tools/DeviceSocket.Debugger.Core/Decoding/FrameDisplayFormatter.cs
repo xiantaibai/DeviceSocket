@@ -37,9 +37,10 @@ public static class FrameDisplayFormatter
             $"用户数据长度：{frame.UserDataLength}",
             $"行政区划：{frame.AdministrativeDivision}",
             $"终端地址：{frame.TerminalAddress}",
+            $"主站地址 MSA：{frame.MasterStationAddress}",
             $"AFN：{frame.Afn:X2}H",
             $"SEQ：{frame.Sequence}",
-            $"信息点：{string.Join(", ", frame.Points)}",
+            $"测量点 PN：{string.Join(", ", frame.Points)}",
             $"功能项：{string.Join(", ", frame.Functions.Select(value => $"F{value}"))}",
             $"链路类型：{frame.LinkMessageKind}",
             $"数据单元：{HexCodec.ToHex(frame.DataUnitPayload, true)}");
