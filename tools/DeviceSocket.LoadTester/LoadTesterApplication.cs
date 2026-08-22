@@ -6,6 +6,7 @@ using DeviceSocket.LoadTester.Devices;
 using DeviceSocket.LoadTester.Metrics;
 using DeviceSocket.LoadTester.Protocols;
 using DeviceSocket.LoadTester.Reporting;
+using DeviceSocket.LoadTester.Reporting.Detailed;
 using DeviceSocket.LoadTester.Runtime;
 using DeviceSocket.LoadTester.Workloads.Gather;
 
@@ -17,7 +18,7 @@ namespace DeviceSocket.LoadTester;
 internal static class LoadTesterApplication
 {
     /// <summary>
-    /// 解析命令行并执行负载测试或报告合并命令。
+    /// 解析命令行并执行负载测试、报告合并或离线详细报告命令。
     /// </summary>
     /// <param name="args">进程命令行参数。</param>
     /// <returns>符合命令行约定的进程退出码。</returns>
@@ -60,7 +61,7 @@ internal static class LoadTesterApplication
         }
         catch (Exception exception)
         {
-            Console.Error.WriteLine($"负载测试失败：{exception}");
+            Console.Error.WriteLine($"命令执行失败：{exception}");
             return 1;
         }
         finally
@@ -91,6 +92,11 @@ internal static class LoadTesterApplication
                     cancellationToken);
                 Console.WriteLine($"已合并 {aggregate.NodeCount} 个节点报告，结果：{(aggregate.Acceptance.Passed ? "通过" : "失败")}");
                 return aggregate.Acceptance.Passed ? 0 : 3;
+            case GenerateDetailedReportCommand generate:
+                var analysis = await DetailedReportGenerator.GenerateAsync(generate.Options, cancellationToken);
+                Console.WriteLine($"详细报告已生成：{Path.GetFullPath(generate.Options.OutputDirectory)}");
+                Console.WriteLine($"综合验收结果：{(analysis.AcceptancePassed ? "通过" : "未通过")}，自动诊断问题 {analysis.Findings.Count:N0} 项。");
+                return analysis.AcceptancePassed ? 0 : 3;
             default:
                 throw new ArgumentOutOfRangeException(nameof(command));
         }
@@ -118,9 +124,12 @@ internal static class LoadTesterApplication
         var metrics = new LoadTestMetrics();
         var onlineRegistry = new DeviceOnlineRegistry();
         var protocol = LoadTestProtocolFactory.Create(options);
-        var initialRate = options.Connection.StartMode == ConnectionStartMode.Burst
+        var initialGlobalRate = options.Connection.StartMode == ConnectionStartMode.Burst
             ? 0
             : options.Connection.ConnectionsPerSecond;
+        var initialRate = LoadTestRunner.ResolveLocalConnectionRate(
+            initialGlobalRate,
+            options.Distributed.ShardCount);
         using var pacer = new ConnectionPacer(initialRate, metrics);
         using var connectionGate = new SemaphoreSlim(options.Connection.MaxConcurrentConnecting);
         var faultController = new FaultInjectionController();
@@ -220,7 +229,9 @@ internal static class LoadTesterApplication
             options.Acceptance,
             expectedOnline,
             gatewayObservation,
-            options.Role);
+            options.Role,
+            options.Distributed.ShardIndex,
+            options.Distributed.ShardCount);
         var commandPhases = commandRunner?.Results.ToArray() ?? [];
         var cancelled = execution.Cancelled || cancellationObserved;
         var runStatus = ResolveRunStatus(executionFailure, cancelled, commandPhases, acceptance);

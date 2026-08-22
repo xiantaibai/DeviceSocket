@@ -1,18 +1,21 @@
 {
+  // 标准 8 核 16 GiB 测试服务器场景：一万台真实设备保持在线，同时调用读表 API 并模拟终端业务应答。
   "role": "combined",
   "target": {
-    "host": "192.168.111.18",
+    "host": "192.168.111.222",
     "port": 6666,
     "protocol": "qGdw3761",
     "compatibilityProfile": "gatherTcpCenter"
   },
   "devices": {
+    // 多分片仍填写全局总数；每个节点使用同一份完整 CSV，再按数据行全局序号取模分配。
     "count": 10000,
     "generationMode": "csv",
     "deviceMappingFile": "gather-device-10000.csv"
   },
   "connection": {
     "startMode": "ramp",
+    // 所有分片合计速率，工具会按 shardCount 精确分摊，不会随负载机数量放大。
     "connectionsPerSecond": 300,
     "maxConcurrentConnecting": 500,
     "connectTimeoutSeconds": 5,
@@ -31,9 +34,11 @@
     "reportIntervalSeconds": 300,
     "jitterSeconds": 30,
     "gatherReadingResponse": {
+      // 收到 Gather AFN=0CH/F129 读表命令后生成老 CmdCenter 可解析的 A15/A14 业务应答。
       "enabled": true,
       "mode": "normal",
       "affectedDevicePercentage": 100,
+      // 模拟真实终端采集耗时，单位毫秒。
       "delayMilliseconds": 1000,
       "rateCount": 4,
       "baseReadingKwh": 1000,
@@ -41,75 +46,73 @@
     }
   },
   "commandWorkload": {
+    // combined 模式从本进程真正在线的设备中选取目标，避免向已离线 meterId 发起无效请求。
     "targetDeviceSource": "onlineRegistry",
     "enabled": true,
+    // 运行前替换为与 TCP 服务同一套环境的 Gather.Control.Api 地址。
     "baseUrl": "http://192.168.111.18:9011",
     "endpointPath": "/api/ammeter/reading",
     "authorizationHeaderName": "gather-authorize-key",
+    // 需要鉴权时设置为 GATHER_AUTHORIZE_KEY，并只在进程环境变量中保存密钥；空值表示不发送鉴权头。
     "authorizationKeyEnvironmentVariable": "",
     "operatorUserId": 0,
     "operationSource": 6,
     "readingModel": 0,
     "readingCode": 0,
     "requestTimeoutSeconds": 70,
+    // 阶段未写固定数量时，按目标设备数的 98% 在线并连续稳定 30 秒后才放行。
     "requiredOnlineRate": 0.98,
     "onlineStableSeconds": 30,
-    "onlineWaitTimeoutSeconds": 600,
+    "onlineWaitTimeoutSeconds": 900,
     "startDelaySeconds": 0,
     "phases": [
       {
+        // 少量同步请求先验证 HTTP、TCP 下发、终端应答和结果订阅闭环。
         "name": "functional-sync-100",
         "targetDeviceCount": 100,
         "requestsPerDevice": 1,
         "requestsPerSecond": 10,
         "maxConcurrency": 10,
         "showResult": true,
-        "pauseAfterSeconds": 10
+        "pauseAfterSeconds": 15,
+        "minimumOnlineCount": 100,
+        "onlineStableSeconds": 10,
+        "onlineWaitTimeoutSeconds": 180,
+        "onlineGateFailureAction": "skipPhase"
       },
       {
+        // targetDeviceCount=0 表示本轮全部设备；一万台时发送 10000 条，扩到 3～5 万时自动覆盖新的全局设备数。
         "name": "all-devices-async-once",
-        "targetDeviceCount": 10000,
+        "targetDeviceCount": 0,
         "requestsPerDevice": 1,
+        // RPS 和并发均为所有分片合计值，各负载节点会自动分摊。
         "requestsPerSecond": 200,
-        "maxConcurrency": 50,
+        "maxConcurrency": 100,
         "showResult": false,
-        "pauseAfterSeconds": 30
+        "pauseAfterSeconds": 60,
+        "onlineGateFailureAction": "skipPhase"
       },
       {
-        "name": "sync-concurrency-20",
-        "targetDeviceCount": 200,
-        "requestsPerDevice": 1,
-        "requestsPerSecond": 20,
-        "maxConcurrency": 20,
-        "showResult": true,
-        "pauseAfterSeconds": 20
-      },
-      {
-        "name": "sync-concurrency-50",
-        "targetDeviceCount": 500,
-        "requestsPerDevice": 1,
-        "requestsPerSecond": 50,
-        "maxConcurrency": 50,
-        "showResult": true,
-        "pauseAfterSeconds": 20
-      },
-      {
+        // 向 1000 台在线设备各连续提交 5 条异步命令，验证服务端同设备队列与队头阻塞。
         "name": "same-device-queue-1000x5",
         "targetDeviceCount": 1000,
         "requestsPerDevice": 5,
         "requestsPerSecond": 200,
         "maxConcurrency": 100,
         "showResult": false,
-        "pauseAfterSeconds": 60
+        "pauseAfterSeconds": 60,
+        "onlineGateFailureAction": "skipPhase"
       },
       {
+        // 小规模同步多命令用于观察结果订阅、HTTP 等待线程和单设备串行处理，不把一万请求全部改为同步。
         "name": "same-device-sync-100x5",
         "targetDeviceCount": 100,
         "requestsPerDevice": 5,
         "requestsPerSecond": 20,
         "maxConcurrency": 20,
         "showResult": true,
-        "pauseAfterSeconds": 60
+        "pauseAfterSeconds": 60,
+        "onlineGateFailureAction": "skipPhase"
       }
     ]
   },
@@ -122,7 +125,7 @@
     "maximumAttempts": 0
   },
   "scenario": {
-    "name": "gather-tcpcenter-reading-10000",
+    "name": "gather-tcpcenter-http-reading-10000",
     "durationSeconds": 1,
     "phases": [
       {
@@ -133,23 +136,31 @@
         "connectionsPerSecond": 25
       },
       {
+        "name": "ramp-1000",
+        "kind": "ramp",
+        "durationSeconds": 90,
+        "targetDevicePercentage": 10,
+        "connectionsPerSecond": 100
+      },
+      {
         "name": "ramp-5000",
         "kind": "ramp",
-        "durationSeconds": 120,
+        "durationSeconds": 180,
         "targetDevicePercentage": 50,
         "connectionsPerSecond": 200
       },
       {
         "name": "ramp-10000",
         "kind": "ramp",
-        "durationSeconds": 180,
+        "durationSeconds": 300,
         "targetDevicePercentage": 100,
         "connectionsPerSecond": 300
       },
       {
+        // HTTP 工作负载未结束时，运行器会继续保持设备在线，不会提前进入 cooldown。
         "name": "command-steady-10000",
         "kind": "steady",
-        "durationSeconds": 900,
+        "durationSeconds": 1200,
         "targetDevicePercentage": 100,
         "connectionsPerSecond": 300
       },
@@ -157,13 +168,15 @@
         "name": "cooldown",
         "kind": "cooldown",
         "durationSeconds": 30,
-        "targetDevicePercentage": 0
+        "targetDevicePercentage": 0,
+        "connectionsPerSecond": 300
       }
     ]
   },
   "reporting": {
     "outputDirectory": "load-test-results",
     "sampleIntervalSeconds": 1,
+    "checkpointIntervalSeconds": 10,
     "writeConsoleSummary": true
   },
   "serverObservation": {
@@ -173,7 +186,7 @@
     "minimumConnectionSuccessRate": 0.95,
     "minimumLoginSuccessRate": 0.95,
     "minimumFinalOnlineRate": 0.98,
-    "minimumFinalOnlineCount": 9800,
+    "minimumFinalOnlineCount": null,
     "maximumProtocolErrorRate": 0.01,
     "minimumApiSuccessRate": 0.98,
     "minimumApiTargetCoverageRate": 0.98,
@@ -181,7 +194,7 @@
     "maximumApiP95Milliseconds": 70000
   },
   "distributed": {
-    "runId": "gather-tcpcenter-reading-10k",
+    "runId": "gather-http-reading-10000",
     "shardIndex": 0,
     "shardCount": 1
   }

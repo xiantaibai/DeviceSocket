@@ -1,0 +1,42 @@
+{
+  "report": {
+    "title": "Gather.TcpCenter 优化后 10000 台 HTTP 指令压测",
+    "environment": "公司内网测试环境",
+    "tester": "测试人员姓名"
+  },
+  "scenario": {
+    "name": "gather-tcpcenter-http-reading-10000",
+    "description": "10000 台设备连接、登录、心跳、HTTP 抄读、终端应答与同设备多命令压测"
+  },
+  "server": {
+    "name": "TCPCenter-TEST-01",
+    "operatingSystem": "Windows Server 2022 Standard",
+    "cpu": "8 vCPU，Intel Xeon Gold 6230R",
+    "memory": "16 GB",
+    "network": "1 Gbps 公司内网"
+  },
+  "service": {
+    "name": "Gather.TcpCenter",
+    "version": "2026.08.21-optimized",
+    "codeBranch": "请填写实际 Git 分支",
+    "codeCommit": "请填写实际 Git Commit",
+    "parameters": [
+      {
+        "name": "Pipeline Worker",
+        "value": "16"
+      },
+      {
+        "name": "Pipeline Queue Capacity",
+        "value": "50000"
+      },
+      {
+        "name": "TCP Listen Backlog",
+        "value": "10000"
+      },
+      {
+        "name": "Redis Pool Size",
+        "value": "请填写正式测试值"
+      }
+    ]
+  }
+}

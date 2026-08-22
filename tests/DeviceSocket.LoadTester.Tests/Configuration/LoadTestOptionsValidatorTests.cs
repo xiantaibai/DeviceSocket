@@ -1,5 +1,6 @@
 using DeviceSocket.LoadTester.Configuration;
 using DeviceSocket.LoadTester.Devices;
+using DeviceSocket.LoadTester.Runtime;
 using System.Text.Json;
 
 namespace DeviceSocket.LoadTester.Tests.Configuration;
@@ -35,12 +36,15 @@ public sealed class LoadTestOptionsValidatorTests
     }
 
     /// <summary>
-    /// 验证老服务万人场景使用已准备的260810001～260820000连续设备号和 Gather 兼容配置。
+    /// 验证老服务万人纯连接场景使用数据库真实 CSV 映射和 Gather 兼容配置。
     /// </summary>
     [Fact]
-    public async Task GatherTenThousandScenario_UsesPreparedDeviceRange()
+    public async Task GatherTenThousandScenario_UsesPreparedDeviceMapping()
     {
-        var path = Path.Combine(AppContext.BaseDirectory, "Scenarios", "intranet-local-5000-10000.json");
+        var path = Path.Combine(
+            AppContext.BaseDirectory,
+            "Scenarios",
+            "gather-tcpcenter-connections-10000.json");
         var options = await LoadTestConfigurationLoader.LoadAsync(
             path,
             new RunCommandOverrides(),
@@ -48,9 +52,10 @@ public sealed class LoadTestOptionsValidatorTests
         var devices = DeviceAddressAllocator.Allocate(options);
 
         Assert.Equal(ServerCompatibilityProfile.GatherTcpCenter, options.Target.CompatibilityProfile);
+        Assert.Equal(DeviceAddressGenerationMode.Csv, options.Devices.GenerationMode);
         Assert.Equal(10_000, devices.Count);
-        Assert.Equal("3761:2608-10001", devices[0].DeviceId);
-        Assert.Equal("3761:2608-20000", devices[^1].DeviceId);
+        Assert.Equal(10_000, devices.Select(item => item.DeviceId).Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(Enumerable.Range(0, 10_000), devices.Select(item => item.GlobalOrdinal));
     }
 
     /// <summary>
@@ -164,8 +169,17 @@ public sealed class LoadTestOptionsValidatorTests
     {
         var scenarioDirectory = Path.Combine(AppContext.BaseDirectory, "Scenarios");
         var paths = Directory.GetFiles(scenarioDirectory, "*.json");
+        var expectedNames = new[]
+        {
+            "gather-tcpcenter-connections-10000.json",
+            "gather-tcpcenter-http-reading-10000.json",
+            "gather-tcpcenter-reconnect-storm-10000.json",
+            "gather-tcpcenter-soak-10000.json"
+        };
 
-        Assert.NotEmpty(paths);
+        Assert.Equal(
+            expectedNames.Order(StringComparer.Ordinal),
+            paths.Select(Path.GetFileName).Order(StringComparer.Ordinal));
         foreach (var path in paths)
         {
             var options = await LoadTestConfigurationLoader.LoadAsync(
@@ -177,32 +191,79 @@ public sealed class LoadTestOptionsValidatorTests
     }
 
     /// <summary>
-    /// 验证低 CPU 场景始终保持一万台 TCP 设备，并把所有 HTTP 阶段的全局请求预算限制在一千次以内。
+    /// 验证标准 HTTP 场景覆盖全部在线设备，并使用面向 8 核 16 GiB 服务器的正常请求速率。
     /// </summary>
     [Fact]
-    public async Task LowCpuGatherScenario_KeepsTenThousandConnectionsAndCapsHttpRequestsAtOneThousand()
+    public async Task StandardGatherHttpScenario_CoversAllOnlineDevicesAndUsesNormalRequestRate()
     {
         var path = Path.Combine(
             AppContext.BaseDirectory,
             "Scenarios",
-            "gather-tcpcenter-dump-regression-10000-v2-http-1000.json");
+            "gather-tcpcenter-http-reading-10000.json");
 
         var options = await LoadTestConfigurationLoader.LoadAsync(
             path,
             new RunCommandOverrides(),
             CancellationToken.None);
-        var requestBudget = options.CommandWorkload.Phases.Sum(phase =>
-            (phase.TargetDeviceCount == 0 ? options.Devices.Count : phase.TargetDeviceCount) *
-            phase.RequestsPerDevice);
+        var allDevicesPhase = Assert.Single(
+            options.CommandWorkload.Phases,
+            phase => phase.Name == "all-devices-async-once");
 
         Assert.Equal(10_000, options.Devices.Count);
-        Assert.InRange(requestBudget, 1, 1_000);
-        Assert.All(options.CommandWorkload.Phases, phase =>
+        Assert.Equal(LoadTestRole.Combined, options.Role);
+        Assert.Equal(CommandTargetSource.OnlineRegistry, options.CommandWorkload.TargetDeviceSource);
+        Assert.Equal(0, allDevicesPhase.TargetDeviceCount);
+        Assert.Equal(1, allDevicesPhase.RequestsPerDevice);
+        Assert.Equal(200, allDevicesPhase.RequestsPerSecond);
+        Assert.Equal(100, allDevicesPhase.MaxConcurrency);
+        Assert.False(allDevicesPhase.ShowResult);
+    }
+
+    /// <summary>
+    /// 验证四台负载机读取同一份万人 CSV 时，每个真实设备只会分配给一个分片且全局没有遗漏。
+    /// </summary>
+    [Fact]
+    public async Task GatherCsvScenario_FourShardsPartitionAllDevicesWithoutDuplicates()
+    {
+        var path = Path.Combine(
+            AppContext.BaseDirectory,
+            "Scenarios",
+            "gather-tcpcenter-connections-10000.json");
+        var ordinals = new HashSet<int>();
+
+        for (var shardIndex = 0; shardIndex < 4; shardIndex++)
         {
-            Assert.InRange(phase.TargetDeviceCount, 1, 1_000);
-            Assert.Equal(1, phase.RequestsPerDevice);
-            Assert.False(phase.ShowResult);
-        });
+            var options = await LoadTestConfigurationLoader.LoadAsync(
+                path,
+                new RunCommandOverrides(ShardIndex: shardIndex, ShardCount: 4),
+                CancellationToken.None);
+            var devices = DeviceAddressAllocator.Allocate(options);
+
+            Assert.Equal(2_500, devices.Count);
+            Assert.All(devices, device => Assert.True(ordinals.Add(device.GlobalOrdinal)));
+        }
+
+        Assert.Equal(10_000, ordinals.Count);
+        Assert.Equal(Enumerable.Range(0, 10_000), ordinals.Order());
+    }
+
+    /// <summary>
+    /// 验证 TCP 建连速率是所有分片的全局预算，并支持用小数精确分摊低速配置。
+    /// </summary>
+    /// <param name="globalRate">场景配置的所有分片合计连接数/秒。</param>
+    /// <param name="shardCount">共同运行的分片总数。</param>
+    /// <param name="expectedLocalRate">单个分片应得到的连接数/秒。</param>
+    [Theory]
+    [InlineData(300, 4, 75)]
+    [InlineData(1, 4, 0.25)]
+    public void GlobalConnectionRate_IsDistributedAcrossShards(
+        int globalRate,
+        int shardCount,
+        double expectedLocalRate)
+    {
+        var actual = LoadTestRunner.ResolveLocalConnectionRate(globalRate, shardCount);
+
+        Assert.Equal(expectedLocalRate, actual, 6);
     }
 
     /// <summary>

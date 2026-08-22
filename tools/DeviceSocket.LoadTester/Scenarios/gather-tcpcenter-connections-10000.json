@@ -1,0 +1,145 @@
+{
+  // 纯设备容量基线：只测试 TCP 建连、376.1 登录、心跳和长期在线，不混入 HTTP 指令或主动断线。
+  "role": "devicesOnly",
+  "target": {
+    // 运行前替换为本轮 Gather.TcpCenter 的实际内网地址和端口。
+    "host": "192.168.111.222",
+    "port": 6666,
+    "protocol": "qGdw3761",
+    // 老服务使用固定 SEQ 和无回显数据区确认，必须启用 Gather 兼容规则。
+    "compatibilityProfile": "gatherTcpCenter"
+  },
+  "devices": {
+    // 这里始终填写全部分片合计的设备总数，不填写单台负载机数量。
+    "count": 10000,
+    "generationMode": "csv",
+    // CSV 必须包含 10000 条数据库真实存在且互不重复的 meterId,deviceId 映射。
+    "deviceMappingFile": "gather-device-10000.csv"
+  },
+  "connection": {
+    "startMode": "ramp",
+    // 所有分片合计建连速率；4 个分片运行时工具自动换算为每个分片 75/s。
+    "connectionsPerSecond": 300,
+    // 单个负载进程同时处于 TCP 建连或协议登录过程的上限。
+    "maxConcurrentConnecting": 500,
+    "connectTimeoutSeconds": 5,
+    "loginTimeoutSeconds": 5,
+    "writeTimeoutSeconds": 5,
+    "noDelay": true
+  },
+  "heartbeat": {
+    "enabled": true,
+    "intervalSeconds": 60,
+    // 打散一万台终端心跳，容量基线不制造同步心跳尖峰。
+    "jitterSeconds": 10,
+    "responseTimeoutSeconds": 5
+  },
+  "workload": {
+    // 关闭普通周期上报，确保本轮只测连接、登录和心跳路径。
+    "reportsEnabled": false,
+    "reportIntervalSeconds": 300,
+    "jitterSeconds": 30
+  },
+  "reconnect": {
+    // 普通网络抖动仍按真实终端行为自动恢复，但本场景不主动制造断线。
+    "mode": "exponentialJitter",
+    "initialDelayMilliseconds": 250,
+    "maximumDelaySeconds": 10,
+    "multiplier": 2,
+    "jitterRatio": 0.5,
+    "maximumAttempts": 0
+  },
+  "scenario": {
+    "name": "gather-tcpcenter-connections-10000",
+    "durationSeconds": 1,
+    "phases": [
+      {
+        "name": "canary-100",
+        "kind": "warmup",
+        "durationSeconds": 30,
+        "targetDevicePercentage": 1,
+        "connectionsPerSecond": 25
+      },
+      {
+        "name": "steady-100",
+        "kind": "steady",
+        "durationSeconds": 30,
+        "targetDevicePercentage": 1,
+        "connectionsPerSecond": 25
+      },
+      {
+        "name": "ramp-1000",
+        "kind": "ramp",
+        "durationSeconds": 90,
+        "targetDevicePercentage": 10,
+        "connectionsPerSecond": 100
+      },
+      {
+        "name": "steady-1000",
+        "kind": "steady",
+        "durationSeconds": 60,
+        "targetDevicePercentage": 10,
+        "connectionsPerSecond": 100
+      },
+      {
+        "name": "ramp-5000",
+        "kind": "ramp",
+        "durationSeconds": 180,
+        "targetDevicePercentage": 50,
+        "connectionsPerSecond": 200
+      },
+      {
+        "name": "steady-5000",
+        "kind": "steady",
+        "durationSeconds": 180,
+        "targetDevicePercentage": 50,
+        "connectionsPerSecond": 200
+      },
+      {
+        "name": "ramp-10000",
+        "kind": "ramp",
+        "durationSeconds": 300,
+        "targetDevicePercentage": 100,
+        "connectionsPerSecond": 300
+      },
+      {
+        // 保持 30 分钟，覆盖多轮心跳并观察物理连接与协议登录追平过程。
+        "name": "steady-10000",
+        "kind": "steady",
+        "durationSeconds": 1800,
+        "targetDevicePercentage": 100,
+        "connectionsPerSecond": 300
+      },
+      {
+        "name": "cooldown",
+        "kind": "cooldown",
+        "durationSeconds": 30,
+        "targetDevicePercentage": 0,
+        "connectionsPerSecond": 300
+      }
+    ]
+  },
+  "reporting": {
+    "outputDirectory": "load-test-results",
+    "sampleIntervalSeconds": 1,
+    "checkpointIntervalSeconds": 10,
+    "writeConsoleSummary": true
+  },
+  "serverObservation": {
+    // Gather 老服务没有 DeviceSocket Gateway 状态 API，服务端指标由 PerfView/指标 JSONL 单独采集。
+    "enabled": false
+  },
+  "acceptance": {
+    "minimumConnectionSuccessRate": 0.95,
+    "minimumLoginSuccessRate": 0.95,
+    // 只使用比例门槛，未来改为 3～5 万台时不需要同步维护固定数量门槛。
+    "minimumFinalOnlineRate": 0.98,
+    "minimumFinalOnlineCount": null,
+    "maximumProtocolErrorRate": 0.01
+  },
+  "distributed": {
+    "runId": "gather-connections-10000",
+    "shardIndex": 0,
+    "shardCount": 1
+  }
+}

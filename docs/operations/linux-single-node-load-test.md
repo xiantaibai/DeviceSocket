@@ -1,10 +1,10 @@
-# Linux 单节点 6～8 万连接压测手册
+# Linux 单节点 1～5 万连接压测手册
 
 ## 1. 目标与边界
 
-本手册用于在一台 8 核 16 GiB Linux 服务器上验证单个 `DeviceSocket.Host` Gateway 进程。目标设备每 120 秒发送一次 Q/GDW 376.1 心跳，Gateway 正常回复确认。
+本手册用于在一台 8 核 16 GiB Linux 服务器上验证单个 `DeviceSocket.Host` Gateway 进程。目标设备周期发送 Q/GDW 376.1 心跳，Gateway 正常回复确认。
 
-“单节点”指被测 Gateway 只有一台。负载发生器应放在其他主机上，否则 LoadTester 的连接、CPU、内存和网络开销会污染 Gateway 结果。单个源 IP 连接同一目标 IP/端口还会受到本地临时端口数量限制，60,000～80,000 连接建议使用至少 4 个负载分片，并分布到多个源 IP 或多台负载机。
+“单节点”指被测 Gateway 只有一台。负载发生器应放在其他主机上，否则 LoadTester 的连接、CPU、内存和网络开销会污染 Gateway 结果。单个源 IP 连接同一目标 IP/端口还会受到本地临时端口数量限制，30,000～50,000 连接建议使用 3～5 个负载分片，并分布到多个源 IP 或多台负载机。
 
 代码已提供场景和服务端观测能力，但仓库本身不能替代目标 Linux 环境的实际结果。每轮报告必须保存软件版本、配置、内核参数、机器规格和异常日志。
 
@@ -66,7 +66,7 @@ ulimit -n
 sysctl fs.file-max net.core.somaxconn net.ipv4.tcp_max_syn_backlog
 ```
 
-Gateway 进程至少需要覆盖监听 Socket、80,000 个设备 Socket、HTTP/RPC、日志文件和运行时文件描述符。建议服务进程软硬限制均不低于 200,000。使用 systemd 时：
+Gateway 进程至少需要覆盖监听 Socket、50,000 个设备 Socket、HTTP/RPC、日志文件和运行时文件描述符。建议服务进程软硬限制均不低于 120,000；若仍保留 80,000 上限验证计划，可继续使用 200,000。使用 systemd 时：
 
 ```ini
 [Service]
@@ -78,7 +78,7 @@ Environment=Orleans__Enabled=false
 Environment=DeviceSocket__ConnectionLimit__MaxConnections=85000
 ```
 
-两个协议 Listener 的默认 `BackLog=4096` 只限制已完成 TCP 握手、等待 SuperSocket 接受的连接队列，和 80,000 条已接受长连接没有直接比例关系。Linux 会使用 `net.core.somaxconn` 作为该队列的内核上限，因此起始值保持不低于应用 `BackLog` 即可。
+两个协议 Listener 的默认 `BackLog=4096` 只限制已完成 TCP 握手、等待 SuperSocket 接受的连接队列，和 50,000 条已接受长连接没有直接比例关系。Linux 会使用 `net.core.somaxconn` 作为该队列的内核上限，因此起始值保持不低于应用 `BackLog` 即可。
 
 `net.ipv4.tcp_max_syn_backlog` 管理的是尚未完成握手的 SYN 队列，不要求和应用 `BackLog` 相等。只有 SYN 队列溢出或集中重连压测显示半连接丢弃时才独立调整。先用临时 `sysctl -w` 验证，确认有效后再写入 `/etc/sysctl.d/`。服务端不需要为了长连接测试缩短 `tcp_fin_timeout` 或开启激进的 `tcp_tw_reuse`。
 
@@ -91,7 +91,7 @@ nstat -az TcpExtListenOverflows TcpExtListenDrops
 
 监听状态下 `Recv-Q` 表示当前等待接受的连接数，`Send-Q` 表示生效的队列上限。只有 `Recv-Q` 持续接近 `Send-Q`，或 `TcpExtListenOverflows`、`TcpExtListenDrops` 相对本轮开始值增长，才按 4096、8192 逐档提高应用 `BackLog` 和 `somaxconn` 后复测。
 
-4 KiB `ReceiveBufferSize` / `SendBufferSize` 是本项目小报文长连接的起始值，不会限制协议半包重组。放大会增加 8 万连接下的 Socket 内存占用；只有看到持续吞吐受限、发送积压或大报文占比高时，才按 8 KiB、16 KiB 逐档复测。
+4 KiB `ReceiveBufferSize` / `SendBufferSize` 是本项目小报文长连接的起始值，不会限制协议半包重组。放大会增加 5 万连接下的 Socket 内存占用；只有看到持续吞吐受限、发送积压或大报文占比高时，才按 8 KiB、16 KiB 逐档复测。
 
 ## 4. 运行前检查
 
@@ -114,12 +114,14 @@ cat /proc/$pid/limits | grep -i 'open files'
 
 ## 5. 分阶段执行
 
-先把场景中的 `target.host` 和 `serverObservation.statusUrl` 改成 Gateway 可达地址。正式测试使用统一 UTC 启动时间，每个分片只修改 `shardIndex`：
+仓库正式场景已经收敛为 Gather.TcpCenter 测试。验证当前 DeviceSocket Gateway 时，可复制 `gather-tcpcenter-soak-10000.json` 为本地 `devicesocket-soak-50000.local.json`，把 `compatibilityProfile` 改为 `deviceSocket`，按目标规模配置 sequential 设备空间，并启用 `serverObservation`。本地派生文件不要提交为新的正式场景。
+
+先把派生场景中的 `target.host` 和 `serverObservation.statusUrl` 改成 Gateway 可达地址。正式测试使用统一 UTC 启动时间，每个分片只修改 `shardIndex`：
 
 ```bash
 dotnet DeviceSocket.LoadTester.dll run \
-  --config Scenarios/soak-60000.json \
-  --run-id linux-60k-001 \
+  --config Scenarios/devicesocket-soak-50000.local.json \
+  --run-id linux-50k-001 \
   --shard-index 0 \
   --shard-count 4 \
   --start-at-utc 2026-08-10T14:00:00Z
@@ -131,12 +133,11 @@ dotnet DeviceSocket.LoadTester.dll run \
 | --- | ---: | ---: | --- |
 | 冒烟 | 10,000 | 30 分钟 | 验证登录、心跳确认、报告和日志指标 |
 | 中间容量 | 30,000 | 1 小时 | 观察 CPU、内存和 Session 扫描随连接数增长趋势 |
-| 目标容量 | 60,000 | 6 小时，最终扩展到 24 小时 | 验证主要生产目标和长期内存稳定性 |
-| 上限容量 | 80,000 | 6 小时，最终扩展到 24 小时 | 验证 85,000 硬上限下的余量 |
+| 目标容量 | 50,000 | 6 小时，最终扩展到 24 小时 | 验证目标容量和长期内存稳定性 |
 
-10,000 和 30,000 阶段可复制 `soak-60000.json`，只修改 `devices.count`、场景名、稳态时长和 `minimumObservedAuthenticatedDevices`（建议仍取目标数的 99%）。80,000 阶段使用 `soak-80000.json`；该场景显式启用 `spanAdministrativeDivisions`，因为单个 376.1 行政区划只有 65,535 个非零终端地址，后续设备会递增区划码并从终端地址 1 继续。
+10,000、30,000 和 50,000 阶段分别使用独立的本地派生配置，只修改 `devices.count`、场景名、稳态时长和服务端观测门槛。所有分片继续填写全局设备数和全局连接速率，LoadTester 会按分片数换算；不要把总速率重复配置到每台机器。
 
-每个容量阶段至少再补两轮峰值模型：
+每个容量阶段可按风险补充以下峰值模型：
 
 1. 把 `heartbeat.jitterSeconds` 设为 0，验证同步心跳；
 2. 分批主动断开并重连，验证接入限速、在线恢复和路由替换；
@@ -181,7 +182,7 @@ du -sh /opt/devicesocket/gateway/logs
 - CPU 留有故障恢复余量。建议稳态平均值不长期超过约 70%，短时峰值需结合持续时间和线程池排队判断；
 - 日志磁盘写入、文件描述符和 Socket 内存没有逼近主机上限。
 
-若 60,000 连接未通过，不直接扩大接收缓冲或异步队列。先根据状态 API、`pidstat`、`sockstat` 和日志丢弃判断瓶颈属于 CPU、GC、Socket 内存、文件描述符、磁盘还是负载机端口，再只调整对应参数并复测。
+若 50,000 连接未通过，不直接扩大接收缓冲或异步队列。先根据状态 API、`pidstat`、`sockstat` 和日志丢弃判断瓶颈属于 CPU、GC、Socket 内存、文件描述符、磁盘还是负载机端口，再只调整对应参数并复测。
 
 ## 8. 报告归档
 
@@ -189,8 +190,8 @@ du -sh /opt/devicesocket/gateway/logs
 
 ```bash
 dotnet DeviceSocket.LoadTester.dll report merge \
-  --input collected/linux-60k-001 \
-  --output collected/linux-60k-001/aggregate
+  --input collected/linux-50k-001 \
+  --output collected/linux-50k-001/aggregate
 ```
 
 归档内容至少包括：

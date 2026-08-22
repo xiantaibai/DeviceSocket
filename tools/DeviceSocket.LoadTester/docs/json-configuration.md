@@ -15,8 +15,8 @@
 ```powershell
 dotnet run --project tools\DeviceSocket.LoadTester\DeviceSocket.LoadTester.csproj `
   -c Release -- run `
-  --config tools\DeviceSocket.LoadTester\Scenarios\smoke-3761.json `
-  --run-id smoke-local-001
+  --config tools\DeviceSocket.LoadTester\Scenarios\gather-tcpcenter-connections-10000.json `
+  --run-id gather-connections-001
 ```
 
 常用命令行覆盖参数：
@@ -120,7 +120,7 @@ meterId,deviceId
 
 | 字段 | 类型 | 默认值 | 意义与约束 | 使用场景 |
 | --- | --- | --- | --- | --- |
-| `connection.startMode` | enum | `ramp` | `ramp` 按速率平滑建连；`burst` 在并发闸门内尽快发起 | 日常容量爬升用 ramp；服务重启后的暴风重连用 burst |
+| `connection.startMode` | enum | `ramp` | `ramp` 按速率平滑建连；`burst` 在并发闸门内尽快发起 | 日常容量和真实服务重启恢复优先使用 ramp；只验证无速率上限的客户端突发时才用 burst |
 | `connection.connectionsPerSecond` | int | `100` | 所有分片合计连接数/秒；ramp 时必须大于 0。阶段可覆盖该值 | 控制服务端接受连接和登录的增长斜率 |
 | `connection.maxConcurrentConnecting` | int | `200` | 单个负载进程同时处于建连或登录过程的最大设备数，必须大于 0 | 防止负载机瞬间创建过多套接字任务；burst 的主要保护闸门 |
 | `connection.connectTimeoutSeconds` | int | `5` | 单次 TCP 建连超时秒数，必须大于 0 | 内网一般 3～5 秒；跨公网可适当放大 |
@@ -244,7 +244,7 @@ meterId,deviceId
 | `scenario.phases[].faults.duplicateFrameRate` | double | `0` | 0～1，重复发送同一上行帧的概率 | 验证粘包、重复帧和业务幂等 |
 | `scenario.phases[].faults.fragmentSizeBytes` | int | `0` | 大于 0 时按该字节数拆分写入；0 表示完整发送 | 制造 TCP 半包 |
 | `scenario.phases[].faults.fragmentDelayMilliseconds` | int | `0` | 相邻半包片段之间等待的毫秒数，不能小于 0 | 扩大半包停留窗口，测试拆包缓存 |
-| `scenario.phases[].faults.disconnectPercentage` | double | `0` | 0～100，阶段开始后主动断开的当前设备比例 | 100 表示模拟服务重启后全部连接失效 |
+| `scenario.phases[].faults.disconnectPercentage` | double | `0` | 0～100，阶段开始后由客户端主动断开的当前设备比例 | 100 可做自动化全断重连，但不包含服务端进程冷启动和内部状态恢复，不能替代真实服务重启验收 |
 | `scenario.phases[].faults.disconnectBatchSize` | int | `0` | 每批主动断线设备数；0 表示一次性断开全部目标 | 一次性暴风或分批断线 |
 | `scenario.phases[].faults.disconnectIntervalMilliseconds` | int | `0` | 相邻断线批次间隔毫秒数；0 表示不等待 | 控制断线波次密度 |
 
@@ -280,7 +280,7 @@ meterId,deviceId
 | `acceptance.maximumRecoverySeconds` | double/null | `null` | 故障结束后恢复目标在线规模的最长秒数，设置后必须大于 0 | 服务重启和断线风暴恢复测试 |
 | `acceptance.minimumFinalOnlineCount` | int/null | `null` | 最终在线设备数下限，不能小于 0 | 需要精确要求 9800 或 10000 台时使用 |
 | `acceptance.maximumFinalOnlineCount` | int/null | `null` | 最终在线设备数上限，不能小于 0且不能小于最小值 | 验证缩容阶段只保留预期设备数 |
-| `acceptance.minimumReconnects` | long/null | `null` | 累计自动重连次数下限，不能小于 0 | 确认断线故障确实触发重连链路 |
+| `acceptance.minimumReconnects` | long/null | `null` | 所有分片合计的累计自动重连次数下限，不能小于 0；节点退出码按全局序号分摊本地配额，汇总报告按全局值重新验收 | 确认断线故障确实触发重连链路 |
 | `acceptance.minimumObservedAuthenticatedDevices` | int/null | `null` | 服务端观测到的本轮新增认证设备峰值下限 | 校验客户端认为在线与服务端认证数一致；必须启用 serverObservation |
 | `acceptance.maximumObservedAuthenticatedDevices` | int/null | `null` | 服务端观测到的本轮新增认证设备峰值上限 | 限制重复 Session 或连接泄漏；必须启用 serverObservation |
 | `acceptance.minimumApiSuccessRate` | double/null | `null` | HTTP 状态和响应体 `success=true` 的业务成功率下限 | HTTP 指令负载验收 |
@@ -301,22 +301,16 @@ meterId,deviceId
 
 多机报告合并要求 RunId、分片总数、目标、设备空间、流量和验收配置一致。`shardIndex`、输出目录和机器名允许不同。
 
+扩展到 30,000～50,000 台时，每台负载机必须部署内容一致的完整 CSV，不要手工拆分文件。CSV 数据行号是稳定全局序号，工具按 `GlobalOrdinal % shardCount` 自动分配设备；`devices.count`、TCP 建连速率、HTTP RPS、HTTP 并发和 HTTP 目标数继续填写所有分片合计值。只有 `connection.maxConcurrentConnecting` 是单个负载进程的本地上限。多节点启动方式和端口容量注意事项见项目 [LoadTester 使用说明](../README.md)。
+
 ## 场景选型
 
 | 场景文件 | 适用目的 |
 | --- | --- |
-| `smoke-3761.json` / `smoke-645.json` | 少量设备快速验证端口、协议和报告 |
-| `restart-smoke.json` | 小规模验证断线重连流程 |
-| `restart-storm.json` | 当前 DeviceSocket 服务重启后的暴风重连 |
-| `intranet-local-5000-10000.json` | 本机连接内网 Gather 老服务的 5,000～10,000 台爬升测试 |
-| `gather-tcpcenter-storm-5000-10000.json` | Gather 老服务 5,000～10,000 台突发连接和恢复 |
-| `gather-tcpcenter-reading-10000.json` | 一万台在线后调用老读表 API |
-| `gather-tcpcenter-dump-regression-10000-v2.json` | 改造前后 Dump 回归、连接、HTTP、多命令阻塞和断线恢复综合对比 |
-| `gather-tcpcenter-dump-regression-10000-v2-http-1000.json` | 低 CPU 测试服务器：保持一万台 TCP，但整轮最多 1,000 次、默认 5 RPS 的 HTTP 抄读 |
-| `duplicate-login.json` | 重复身份、Session 替换和旧连接清理 |
-| `protocol-chaos-3761.json` | 丢包、非法校验、半包和粘包异常路径 |
-| `capacity-limit-645.json` | 645 地址空间和容量边界 |
-| `soak-60000.json` / `soak-80000.json` | 多机长稳和超大规模连接测试 |
+| `gather-tcpcenter-connections-10000.json` | 一万台纯设备建连、登录追平、心跳和 30 分钟容量基线 |
+| `gather-tcpcenter-reconnect-storm-10000.json` | 一万台稳定在线后真实重启 Gather.TcpCenter，验证全量重连恢复 |
+| `gather-tcpcenter-http-reading-10000.json` | 面向 8 核 16 GiB 测试服务器的一万台在线、HTTP 抄读、终端应答和多命令阻塞测试 |
+| `gather-tcpcenter-soak-10000.json` | 一万台六小时长稳；复制并替换完整 CSV 后可扩展到 3～5 万多分片 |
 
 ## 新增或修改字段时的维护清单
 

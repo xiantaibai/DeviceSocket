@@ -2,11 +2,16 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Shared\DeviceSocket.Core\DeviceSocket.Core.csproj" />
+    <InternalsVisibleTo Include="DeviceSocket.LoadTester.Tests" />
   </ItemGroup>
 
   <ItemGroup>
     <None Update="Scenarios\*.json" CopyToOutputDirectory="PreserveNewest" />
     <None Update="Scenarios\*.csv" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="docs\detailed-report.md" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="docs\report-background.example.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="docs\examples\*.csv" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="scripts\*.ps1" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <PropertyGroup>

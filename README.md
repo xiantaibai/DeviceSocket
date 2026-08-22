@@ -105,12 +105,12 @@ dotnet run --project tools\DeviceSocket.Simulator\DeviceSocket.Simulator.csproj 
 
 ## 并发与稳定性测试
 
-`DeviceSocket.LoadTester` 是独立的无界面负载测试项目，不改变单设备 Simulator。它支持两套协议、批量登录、连接风暴、自动重连、Gateway 重启恢复、长稳、多机分片及报告合并：
+`DeviceSocket.LoadTester` 是独立的无界面负载测试项目，不改变单设备 Simulator。当前正式场景聚焦 Gather.TcpCenter 的一万台连接、服务重启风暴、HTTP 读表指令和六小时长稳，并支持后续 3～5 万台多机分片及报告合并：
 
 ```powershell
 dotnet run --project tools\DeviceSocket.LoadTester\DeviceSocket.LoadTester.csproj -- `
-  run --config tools\DeviceSocket.LoadTester\Scenarios\smoke-3761.json `
-  --run-id smoke-001
+  run --config tools\DeviceSocket.LoadTester\Scenarios\gather-tcpcenter-connections-10000.json `
+  --run-id gather-connections-001
 ```
 
 多机部署、场景字段、退出码和报告说明参见 `tools/DeviceSocket.LoadTester/README.md`。

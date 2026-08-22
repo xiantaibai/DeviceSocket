@@ -120,4 +120,39 @@ public sealed class AcceptanceEvaluatorTests
             result.Checks,
             item => item.Name == "apiTargetCoverageRate" && !item.Passed && item.Actual == 0.9);
     }
+
+    /// <summary>
+    /// 验证多分片节点使用全局在线数和重连数门槛时会换算本地配额，避免每台机器都被要求完成全局数量。
+    /// </summary>
+    [Fact]
+    public void GlobalCountThresholds_AreDistributedForNodeAcceptance()
+    {
+        var options = new AcceptanceOptions
+        {
+            MinimumFinalOnlineRate = null,
+            MaximumProtocolErrorRate = null,
+            MinimumFinalOnlineCount = 9_800,
+            MinimumReconnects = 9_800
+        };
+        var metrics = new MetricSnapshot
+        {
+            ProtocolOnline = 2_450,
+            ReconnectsScheduled = 2_450
+        };
+
+        var result = AcceptanceEvaluator.Evaluate(
+            metrics,
+            options,
+            expectedOnline: 2_500,
+            shardIndex: 3,
+            shardCount: 4);
+
+        Assert.True(result.Passed);
+        Assert.Contains(
+            result.Checks,
+            item => item.Name == "finalOnlineCount" && item.Threshold == 2_450);
+        Assert.Contains(
+            result.Checks,
+            item => item.Name == "reconnects" && item.Threshold == 2_450);
+    }
 }

@@ -1,0 +1,100 @@
+{
+  // 六小时长稳场景：只维持真实设备在线和心跳，用于发现内存、线程、句柄、Socket 或 Redis 状态随时间增长。
+  "role": "devicesOnly",
+  "target": {
+    "host": "192.168.111.18",
+    "port": 6666,
+    "protocol": "qGdw3761",
+    "compatibilityProfile": "gatherTcpCenter"
+  },
+  "devices": {
+    "count": 10000,
+    "generationMode": "csv",
+    "deviceMappingFile": "gather-device-10000.csv"
+  },
+  "connection": {
+    "startMode": "ramp",
+    "connectionsPerSecond": 300,
+    "maxConcurrentConnecting": 500,
+    "connectTimeoutSeconds": 5,
+    "loginTimeoutSeconds": 5,
+    "writeTimeoutSeconds": 5,
+    "noDelay": true
+  },
+  "heartbeat": {
+    "enabled": true,
+    "intervalSeconds": 60,
+    "jitterSeconds": 10,
+    "responseTimeoutSeconds": 5
+  },
+  "workload": {
+    "reportsEnabled": false,
+    "reportIntervalSeconds": 300,
+    "jitterSeconds": 30
+  },
+  "reconnect": {
+    "mode": "exponentialJitter",
+    "initialDelayMilliseconds": 250,
+    "maximumDelaySeconds": 10,
+    "multiplier": 2,
+    "jitterRatio": 0.5,
+    "maximumAttempts": 0
+  },
+  "scenario": {
+    "name": "gather-tcpcenter-soak-10000",
+    "durationSeconds": 1,
+    "phases": [
+      {
+        "name": "canary-100",
+        "kind": "warmup",
+        "durationSeconds": 30,
+        "targetDevicePercentage": 1,
+        "connectionsPerSecond": 25
+      },
+      {
+        "name": "ramp-10000",
+        "kind": "ramp",
+        "durationSeconds": 600,
+        "targetDevicePercentage": 100,
+        "connectionsPerSecond": 300
+      },
+      {
+        // 默认六小时；正式稳定性验收可以改为 86400 秒执行 24 小时长稳。
+        "name": "six-hour-soak-10000",
+        "kind": "steady",
+        "durationSeconds": 21600,
+        "targetDevicePercentage": 100,
+        "connectionsPerSecond": 300
+      },
+      {
+        "name": "cooldown",
+        "kind": "cooldown",
+        "durationSeconds": 30,
+        "targetDevicePercentage": 0,
+        "connectionsPerSecond": 300
+      }
+    ]
+  },
+  "reporting": {
+    "outputDirectory": "load-test-results",
+    // 长稳每五秒采样一次，减少时间序列文件体积；检查点每 30 秒保留异常中止前状态。
+    "sampleIntervalSeconds": 5,
+    "checkpointIntervalSeconds": 30,
+    "writeConsoleSummary": true
+  },
+  "serverObservation": {
+    "enabled": false
+  },
+  "acceptance": {
+    "minimumConnectionSuccessRate": 0.95,
+    "minimumLoginSuccessRate": 0.95,
+    "minimumFinalOnlineRate": 0.98,
+    "minimumFinalOnlineCount": null,
+    "maximumProtocolErrorRate": 0.01
+  },
+  "distributed": {
+    "runId": "gather-soak-10000",
+    "shardIndex": 0,
+    "shardCount": 1
+  }
+}

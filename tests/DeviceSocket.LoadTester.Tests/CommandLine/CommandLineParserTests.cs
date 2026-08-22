@@ -1,4 +1,5 @@
 using DeviceSocket.LoadTester.CommandLine;
+using DeviceSocket.LoadTester.Reporting.Detailed;
 
 namespace DeviceSocket.LoadTester.Tests.CommandLine;
 
@@ -46,5 +47,43 @@ public sealed class CommandLineParserTests
     {
         Assert.Throws<ArgumentException>(() => CommandLineParser.Parse(
             ["run", "--config", "scenario.json", "--shrad-count", "3"]));
+    }
+
+    /// <summary>
+    /// 验证离线详细报告命令能够解析受众、服务指标、基线和数值门槛。
+    /// </summary>
+    [Fact]
+    public void DetailedReportCommand_ParsesAudienceAndThresholds()
+    {
+        var command = Assert.IsType<GenerateDetailedReportCommand>(CommandLineParser.Parse(
+        [
+            "report", "generate", "--input", "result", "--server-metrics", "server.jsonl",
+            "--background", "background.json",
+            "--audience", "diagnostic", "--baseline-input", "before",
+            "--business-catchup-seconds", "45", "--queue-age-seconds", "20",
+            "--ack-milliseconds", "3000", "--target-devices", "10000"
+        ]));
+
+        Assert.Equal(DetailedReportAudience.Diagnostic, command.Options.Audience);
+        Assert.Equal("server.jsonl", command.Options.ServerMetricsPath);
+        Assert.Equal("background.json", command.Options.BackgroundPath);
+        Assert.Equal("before", command.Options.BaselineInputDirectory);
+        Assert.Equal(45, command.Options.MaximumBusinessCatchupSeconds);
+        Assert.Equal(20, command.Options.MaximumQueueAgeSeconds);
+        Assert.Equal(3000, command.Options.MaximumAckMilliseconds);
+        Assert.Equal(10000, command.Options.TargetDeviceCount);
+    }
+
+    /// <summary>
+    /// 验证只设置基线服务指标而没有基线结果目录时会被拒绝，避免生成来源不匹配的比较报告。
+    /// </summary>
+    [Fact]
+    public void DetailedReportCommand_RejectsOrphanBaselineMetrics()
+    {
+        Assert.Throws<ArgumentException>(() => CommandLineParser.Parse(
+        [
+            "report", "generate", "--input", "result",
+            "--baseline-server-metrics", "before.jsonl"
+        ]));
     }
 }

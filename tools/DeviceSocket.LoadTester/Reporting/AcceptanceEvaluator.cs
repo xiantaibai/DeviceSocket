@@ -16,14 +16,21 @@ public static class AcceptanceEvaluator
     /// <param name="expectedOnline">当前角色需要验收的预期在线设备数。</param>
     /// <param name="gatewayObservation">可选服务端状态观测汇总。</param>
     /// <param name="role">当前运行角色；apiOnly 跳过 TCP 规则，devicesOnly 跳过 HTTP 规则。</param>
+    /// <param name="shardIndex">当前节点零基分片编号；汇总报告保持默认零。</param>
+    /// <param name="shardCount">当前运行的分片总数；汇总报告保持默认一，节点报告用它换算全局数量门槛。</param>
     /// <returns>全部已启用规则的逐项结果和总判定。</returns>
     public static AcceptanceResult Evaluate(
         MetricSnapshot metrics,
         AcceptanceOptions options,
         int expectedOnline,
         GatewayObservationSummary? gatewayObservation = null,
-        LoadTestRole role = LoadTestRole.DevicesOnly)
+        LoadTestRole role = LoadTestRole.DevicesOnly,
+        int shardIndex = 0,
+        int shardCount = 1)
     {
+        ArgumentOutOfRangeException.ThrowIfLessThan(shardCount, 1);
+        ArgumentOutOfRangeException.ThrowIfNegative(shardIndex);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(shardIndex, shardCount);
         var checks = new List<AcceptanceCheck>();
         if (role != LoadTestRole.ApiOnly)
         {
@@ -31,9 +38,22 @@ public static class AcceptanceEvaluator
             AddMinimum(checks, "loginSuccessRate", Rate(metrics.LoginSucceeded, metrics.LoginAttempts), options.MinimumLoginSuccessRate);
             AddMinimum(checks, "finalOnlineRate", Rate(metrics.ProtocolOnline, expectedOnline), options.MinimumFinalOnlineRate);
             AddMaximum(checks, "protocolErrorRate", Rate(metrics.InvalidFrames, metrics.FramesReceived), options.MaximumProtocolErrorRate);
-            AddMinimum(checks, "finalOnlineCount", metrics.ProtocolOnline, options.MinimumFinalOnlineCount);
-            AddMaximum(checks, "finalOnlineCount", metrics.ProtocolOnline, options.MaximumFinalOnlineCount);
-            AddMinimum(checks, "reconnects", metrics.ReconnectsScheduled, options.MinimumReconnects);
+            // 配置中的数量是全部分片合计值；节点退出码必须先换算本地配额，最终合并报告仍按全局值重新验收。
+            AddMinimum(
+                checks,
+                "finalOnlineCount",
+                metrics.ProtocolOnline,
+                ResolveLocalCountThreshold(options.MinimumFinalOnlineCount, shardIndex, shardCount));
+            AddMaximum(
+                checks,
+                "finalOnlineCount",
+                metrics.ProtocolOnline,
+                ResolveLocalCountThreshold(options.MaximumFinalOnlineCount, shardIndex, shardCount));
+            AddMinimum(
+                checks,
+                "reconnects",
+                metrics.ReconnectsScheduled,
+                ResolveLocalCountThreshold(options.MinimumReconnects, shardIndex, shardCount));
             AddMinimum(
                 checks,
                 "gatherReadingResponseRate",
@@ -129,5 +149,26 @@ public static class AcceptanceEvaluator
     {
         if (threshold.HasValue)
             checks.Add(new AcceptanceCheck(name, actual, "<=", threshold.Value, actual <= threshold.Value));
+    }
+
+    /// <summary>
+    /// 按全局序号取模规则把所有分片合计的数量门槛换算为当前节点配额。
+    /// </summary>
+    /// <param name="globalThreshold">全局数量门槛；空值表示不启用规则。</param>
+    /// <param name="shardIndex">当前节点零基分片编号。</param>
+    /// <param name="shardCount">分片总数。</param>
+    /// <returns>当前节点应承担的数量；单分片保持原值。</returns>
+    private static long? ResolveLocalCountThreshold(
+        long? globalThreshold,
+        int shardIndex,
+        int shardCount)
+    {
+        if (!globalThreshold.HasValue || shardCount == 1)
+            return globalThreshold;
+        if (globalThreshold.Value <= shardIndex)
+            return 0;
+
+        // 全局序号 shardIndex、shardIndex+shardCount... 中，小于门槛的元素数量就是当前节点配额。
+        return (globalThreshold.Value - 1 - shardIndex) / shardCount + 1;
     }
 }

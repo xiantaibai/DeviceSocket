@@ -41,7 +41,7 @@ public sealed class AcceptanceOptions
     public int? MaximumFinalOnlineCount { get; set; }
 
     /// <summary>
-    /// 获取或设置 <c>acceptance.minimumReconnects</c>；单位为累计重连次数，默认空表示不验收，零表示允许没有发生重连。
+    /// 获取或设置 <c>acceptance.minimumReconnects</c>；单位为所有分片合计累计重连次数，默认空表示不验收，零表示允许没有发生重连；节点运行时按全局序号分摊，汇总报告按全局值验收。
     /// </summary>
     public long? MinimumReconnects { get; set; }
 

@@ -162,13 +162,37 @@ internal sealed class LoadTestRunner(
         ];
     }
 
-    private int ResolveConnectionRate(ScenarioPhaseOptions phase)
+    /// <summary>
+    /// 解析当前阶段的全局连接速率，并换算为本节点连接调度器使用的本地速率。
+    /// </summary>
+    /// <param name="phase">当前 TCP 场景阶段；阶段未覆盖速率时继承顶层连接配置。</param>
+    /// <returns>当前分片连接数/秒；Burst 模式且阶段未覆盖速率时返回零。</returns>
+    private double ResolveConnectionRate(ScenarioPhaseOptions phase)
     {
         if (phase.ConnectionsPerSecond.HasValue)
-            return phase.ConnectionsPerSecond.Value;
+            return ResolveLocalConnectionRate(
+                phase.ConnectionsPerSecond.Value,
+                options.Distributed.ShardCount);
         return options.Connection.StartMode == ConnectionStartMode.Burst
             ? 0
-            : options.Connection.ConnectionsPerSecond;
+            : ResolveLocalConnectionRate(
+                options.Connection.ConnectionsPerSecond,
+                options.Distributed.ShardCount);
+    }
+
+    /// <summary>
+    /// 把场景中“所有分片合计”的连接速率换算为单个分片速率。
+    /// </summary>
+    /// <param name="globalConnectionsPerSecond">所有分片合计连接数/秒；零表示不启用限速。</param>
+    /// <param name="shardCount">共同执行本轮测试的分片总数，必须大于零。</param>
+    /// <returns>当前分片应使用的连接数/秒；使用小数避免低速场景因整数取整被放大或退化为 Burst。</returns>
+    internal static double ResolveLocalConnectionRate(
+        int globalConnectionsPerSecond,
+        int shardCount)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(globalConnectionsPerSecond);
+        ArgumentOutOfRangeException.ThrowIfLessThan(shardCount, 1);
+        return globalConnectionsPerSecond / (double)shardCount;
     }
 
     private int GetLocalTargetCount(double percentage)
