@@ -30,6 +30,18 @@ internal static class DetailedReportAnalyzer
     /// <param name="AckedButRejectedTotal">已 ACK 但后续未进入业务管线的累计数量。</param>
     /// <param name="StaleBusinessTotal">慢业务遇到旧会话并丢弃的累计数量。</param>
     /// <param name="HeartbeatCoalescedTotal">被合并的重复心跳累计数量。</param>
+    /// <param name="CommandLineStartPauseCount">命令线路启动被 ACK 压力保护暂停的累计次数。</param>
+    /// <param name="CommandLineStartMaximumPauseElapsedMilliseconds">命令线路启动压力保护最大持续时间。</param>
+    /// <param name="AckFailedTotal">ACK 发送失败累计数。</param>
+    /// <param name="AckSendAbortedTotal">ACK 发送中止累计数。</param>
+    /// <param name="ConnectionClosedTotal">连接关闭累计数。</param>
+    /// <param name="ConnectionCloseWithErrorTotal">带错误关闭累计数。</param>
+    /// <param name="ConnectionCloseReceiveTotal">接收侧关闭累计数。</param>
+    /// <param name="ConnectionCloseOtherTotal">其他原因关闭累计数。</param>
+    /// <param name="CommandLineRejectedTotal">命令线路任务拒绝累计数。</param>
+    /// <param name="LifecycleStateRejectedTotal">生命周期状态任务拒绝累计数。</param>
+    /// <param name="CommandLineMaximumQueueDepth">命令线路专用管线历史最大队列深度。</param>
+    /// <param name="LifecycleMaximumQueueDepth">生命周期专用管线历史最大队列深度。</param>
     private sealed record ServerMetricSample(
         TcpCenterTimelinePoint Timeline,
         int WorkerCount,
@@ -38,7 +50,19 @@ internal static class DetailedReportAnalyzer
         long PipelineRejectedTotal,
         long AckedButRejectedTotal,
         long StaleBusinessTotal,
-        long HeartbeatCoalescedTotal);
+        long HeartbeatCoalescedTotal,
+        long CommandLineStartPauseCount,
+        long CommandLineStartMaximumPauseElapsedMilliseconds,
+        long AckFailedTotal,
+        long AckSendAbortedTotal,
+        long ConnectionClosedTotal,
+        long ConnectionCloseWithErrorTotal,
+        long ConnectionCloseReceiveTotal,
+        long ConnectionCloseOtherTotal,
+        long CommandLineRejectedTotal,
+        long LifecycleStateRejectedTotal,
+        long CommandLineMaximumQueueDepth,
+        long LifecycleMaximumQueueDepth);
 
     /// <summary>
     /// 表示一次运行完成输入发现和流式读取后的归一化数据及质量警告。
@@ -142,6 +166,7 @@ internal static class DetailedReportAnalyzer
         var serverSummary = BuildServerSummary(serverWindow, inputs.ServerMetricsPath, target);
         var commandPhases = MergeCommandPhases(reports);
         var resources = BuildResourceSummary(inputs.Nodes);
+        var expectedServerRestart = HasExpectedServerRestart(reports);
         var warnings = inputs.Warnings.ToList();
         if (inputs.ServerMetricsPath is null)
             warnings.Add("未找到 TcpCenter 服务指标文件，业务在线、Pipeline 和服务进程稳定性无法验收。");
@@ -154,7 +179,7 @@ internal static class DetailedReportAnalyzer
             serverSummary,
             target,
             options);
-        var findings = BuildFindings(clientMetrics, commandPhases, serverSummary, target, options);
+        var findings = BuildFindings(clientMetrics, commandPhases, serverSummary, target, options, expectedServerRestart);
         var title = FirstNonBlank(options.Title, background.Report.Title) ?? $"{reports[0].RunId} 负载测试详细报告";
         var environment = NormalizeMetadata(FirstNonBlank(options.Environment, background.Report.Environment));
         var serviceVersion = NormalizeMetadata(FirstNonBlank(options.ServiceVersion, background.Service.Version));
@@ -180,6 +205,7 @@ internal static class DetailedReportAnalyzer
             NodeCount = reports.Length,
             DeviceCount = reports.Sum(item => item.LocalDeviceCount),
             TargetDeviceCount = target,
+            ExpectedServerRestart = expectedServerRestart,
             ClientMetrics = clientMetrics,
             LoadGeneratorResources = resources,
             ClientTimeline = clientTimeline,
@@ -192,6 +218,20 @@ internal static class DetailedReportAnalyzer
             Comparisons = []
         };
     }
+
+    /// <summary>
+    /// 判断场景是否计划人工重启服务端；同时识别新版显式标记和旧报告中包含 restart 的阶段名称。
+    /// </summary>
+    /// <param name="reports">当前运行的全部节点报告。</param>
+    /// <returns>至少一个阶段声明或命名为服务端重启时返回真。</returns>
+    private static bool HasExpectedServerRestart(IEnumerable<NodeReport> reports) =>
+        reports.Any(report =>
+            report.Phases.Any(phase =>
+                phase.ExpectedServerRestart ||
+                phase.Name.Contains("restart", StringComparison.OrdinalIgnoreCase)) ||
+            report.Options.Scenario.Phases.Any(phase =>
+                phase.ExpectedServerRestart ||
+                phase.Name.Contains("restart", StringComparison.OrdinalIgnoreCase)));
 
     /// <summary>
     /// 按“命令行、背景 JSON”顺序选取第一个非空文本，不负责填充最终占位值。
@@ -476,6 +516,12 @@ internal static class DetailedReportAnalyzer
         var pipeline = root.TryGetProperty("Pipeline", out var pipelineElement) && pipelineElement.ValueKind == JsonValueKind.Object
             ? pipelineElement
             : default;
+        var commandLinePipeline = root.TryGetProperty("CommandLinePipeline", out var commandLinePipelineElement) && commandLinePipelineElement.ValueKind == JsonValueKind.Object
+            ? commandLinePipelineElement
+            : default;
+        var lifecyclePipeline = root.TryGetProperty("LifecyclePipeline", out var lifecyclePipelineElement) && lifecyclePipelineElement.ValueKind == JsonValueKind.Object
+            ? lifecyclePipelineElement
+            : default;
         var timeline = new TcpCenterTimelinePoint
         {
             TimestampUtc = ParseServerTimestamp(ReadString(root, "Timestamp"), timeZone),
@@ -486,9 +532,19 @@ internal static class DetailedReportAnalyzer
             BoundWithoutBusinessLine = ReadInt(root, "BoundWithoutBusinessLine"),
             PendingLogin = ReadInt(root, "PendingLogin"),
             PendingHeartbeat = ReadInt(root, "PendingHeartbeat"),
+            PendingCommandLine = ReadInt(root, "PendingCommandLine"),
+            PendingLifecycleState = ReadInt(root, "PendingLifecycleState"),
+            PendingConfirmSend = ReadInt(root, "PendingConfirmSend"),
             QueueDepth = ReadInt(pipeline, "QueueDepth"),
             MaxQueueAgeMilliseconds = ReadLong(pipeline, "MaxQueueAgeMs"),
-            AckMaxElapsedMilliseconds = ReadLong(root, "AckMaxElapsedMs")
+            AckMaxElapsedMilliseconds = ReadLong(root, "AckMaxElapsedMs"),
+            AckSendCompletedMaxElapsedMilliseconds = ReadLong(root, "AckSendCompletedMaxElapsedMs"),
+            LoginBusinessReadyMaxElapsedMilliseconds = ReadLong(root, "LoginBusinessReadyMaxElapsedMs"),
+            CommandLineStartPaused = ReadInt(root, "CommandLineStartPaused"),
+            CommandLineQueueDepth = ReadInt(commandLinePipeline, "QueueDepth"),
+            CommandLineMaxQueueAgeMilliseconds = ReadLong(commandLinePipeline, "MaxQueueAgeMs"),
+            LifecycleQueueDepth = ReadInt(lifecyclePipeline, "QueueDepth"),
+            LifecycleMaxQueueAgeMilliseconds = ReadLong(lifecyclePipeline, "MaxQueueAgeMs")
         };
         return new ServerMetricSample(
             timeline,
@@ -498,7 +554,19 @@ internal static class DetailedReportAnalyzer
             ReadCounterTotal(pipeline, "Rejected"),
             ReadCounterTotal(root, "AckedButRejected"),
             ReadCounterTotal(root, "StaleBusiness"),
-            ReadCounterTotal(root, "HeartbeatCoalesced"));
+            ReadCounterTotal(root, "HeartbeatCoalesced"),
+            ReadLong(root, "CommandLineStartPauseCount"),
+            ReadLong(root, "CommandLineStartMaxPauseElapsedMs"),
+            ReadCounterTotal(root, "AckFailed"),
+            ReadCounterTotal(root, "AckSendAborted"),
+            ReadCounterTotal(root, "ConnectionClosed"),
+            ReadCounterTotal(root, "ConnectionCloseWithError"),
+            ReadCounterTotal(root, "ConnectionCloseReceive"),
+            ReadCounterTotal(root, "ConnectionCloseOther"),
+            ReadCounterTotal(root, "CommandLineRejected"),
+            ReadCounterTotal(root, "LifecycleStateRejected"),
+            ReadLong(commandLinePipeline, "MaxQueueDepth"),
+            ReadLong(lifecyclePipeline, "MaxQueueDepth"));
     }
 
     /// <summary>
@@ -698,15 +766,34 @@ internal static class DetailedReportAnalyzer
             MaximumBoundWithoutBusinessLine = samples.Max(item => item.Timeline.BoundWithoutBusinessLine),
             MaximumPendingLogin = samples.Max(item => item.Timeline.PendingLogin),
             MaximumPendingHeartbeat = samples.Max(item => item.Timeline.PendingHeartbeat),
+            MaximumPendingCommandLine = samples.Max(item => item.Timeline.PendingCommandLine),
+            MaximumPendingLifecycleState = samples.Max(item => item.Timeline.PendingLifecycleState),
+            MaximumPendingConfirmSend = samples.Max(item => item.Timeline.PendingConfirmSend),
             MaximumQueueDepth = samples.Max(item => Math.Max(item.MaximumQueueDepth, item.Timeline.QueueDepth)),
             MaximumQueueAgeMilliseconds = samples.Max(item => item.Timeline.MaxQueueAgeMilliseconds),
             MaximumAckElapsedMilliseconds = samples.Max(item => item.Timeline.AckMaxElapsedMilliseconds),
+            MaximumAckSendCompletedElapsedMilliseconds = samples.Max(item => item.Timeline.AckSendCompletedMaxElapsedMilliseconds),
+            MaximumLoginBusinessReadyElapsedMilliseconds = samples.Max(item => item.Timeline.LoginBusinessReadyMaxElapsedMilliseconds),
+            MaximumCommandLineQueueDepth = samples.Max(item => Math.Max(item.CommandLineMaximumQueueDepth, item.Timeline.CommandLineQueueDepth)),
+            MaximumCommandLineQueueAgeMilliseconds = samples.Max(item => item.Timeline.CommandLineMaxQueueAgeMilliseconds),
+            MaximumLifecycleQueueDepth = samples.Max(item => Math.Max(item.LifecycleMaximumQueueDepth, item.Timeline.LifecycleQueueDepth)),
+            MaximumLifecycleQueueAgeMilliseconds = samples.Max(item => item.Timeline.LifecycleMaxQueueAgeMilliseconds),
+            MaximumCommandLineStartPauseElapsedMilliseconds = samples.Max(item => item.CommandLineStartMaximumPauseElapsedMilliseconds),
+            CommandLineStartPauseCount = CalculateCounterDelta(samples, item => item.CommandLineStartPauseCount),
             WorkerCount = samples.Max(item => item.WorkerCount),
             PipelineFailed = CalculateCounterDelta(samples, item => item.PipelineFailedTotal),
             PipelineRejected = CalculateCounterDelta(samples, item => item.PipelineRejectedTotal),
             AckedButRejected = CalculateCounterDelta(samples, item => item.AckedButRejectedTotal),
             StaleBusiness = CalculateCounterDelta(samples, item => item.StaleBusinessTotal),
             HeartbeatCoalesced = CalculateCounterDelta(samples, item => item.HeartbeatCoalescedTotal),
+            AckFailed = CalculateCounterDelta(samples, item => item.AckFailedTotal),
+            AckSendAborted = CalculateCounterDelta(samples, item => item.AckSendAbortedTotal),
+            ConnectionClosed = CalculateCounterDelta(samples, item => item.ConnectionClosedTotal),
+            ConnectionCloseWithError = CalculateCounterDelta(samples, item => item.ConnectionCloseWithErrorTotal),
+            ConnectionCloseReceive = CalculateCounterDelta(samples, item => item.ConnectionCloseReceiveTotal),
+            ConnectionCloseOther = CalculateCounterDelta(samples, item => item.ConnectionCloseOtherTotal),
+            CommandLineRejected = CalculateCounterDelta(samples, item => item.CommandLineRejectedTotal),
+            LifecycleStateRejected = CalculateCounterDelta(samples, item => item.LifecycleStateRejectedTotal),
             ProcessRestartCount = samples.Zip(samples.Skip(1)).Count(pair => pair.First.Timeline.ProcessId != pair.Second.Timeline.ProcessId),
             PhysicalTargetReachedAtUtc = physicalAt,
             BusinessTargetReachedAtUtc = businessAt,
@@ -818,12 +905,14 @@ internal static class DetailedReportAnalyzer
                 CreateUnavailableCheck("业务在线追平时间"),
                 CreateUnavailableCheck("业务管线最大排队年龄"),
                 CreateUnavailableCheck("ACK 最大耗时"),
+                CreateUnavailableCheck("ACK 发送完成最大耗时"),
                 CreateUnavailableCheck("Pipeline 失败与拒绝"),
                 CreateUnavailableCheck("TcpCenter 进程稳定性")
             ]);
             return checks;
         }
 
+        var expectedServerRestart = HasExpectedServerRestart(reports);
         checks.Add(CreateCheck("TcpCenter 物理连接容量", server.MaximumSocketConnections >= target, $"{server.MaximumSocketConnections:N0}", $">= {target:N0}", "来源：SocketConnections 峰值。"));
         checks.Add(CreateCheck("TcpCenter 业务在线容量", server.MaximumBusinessOnlineDevices >= target, $"{server.MaximumBusinessOnlineDevices:N0}", $">= {target:N0}", "来源：BusinessOnlineDevices 峰值。"));
         checks.Add(server.BusinessCatchupSeconds.HasValue
@@ -831,8 +920,16 @@ internal static class DetailedReportAnalyzer
             : new DetailedAcceptanceCheck { Name = "业务在线追平时间", Status = DetailedAcceptanceStatus.Failed, Actual = "未追平", Expected = $"<= {options.MaximumBusinessCatchupSeconds} 秒", Evidence = "物理连接或业务在线未达到目标。" });
         checks.Add(CreateCheck("业务管线最大排队年龄", server.MaximumQueueAgeMilliseconds <= options.MaximumQueueAgeSeconds * 1000L, $"{server.MaximumQueueAgeMilliseconds / 1000d:F1} 秒", $"<= {options.MaximumQueueAgeSeconds} 秒", "来源：Pipeline.MaxQueueAgeMs 周期峰值。"));
         checks.Add(CreateCheck("ACK 最大耗时", server.MaximumAckElapsedMilliseconds <= options.MaximumAckMilliseconds, $"{server.MaximumAckElapsedMilliseconds:N0} ms", $"<= {options.MaximumAckMilliseconds:N0} ms", "来源：AckMaxElapsedMs；该值是组帧到 Socket Send 返回耗时。"));
+        checks.Add(CreateCheck("ACK 发送完成最大耗时", server.MaximumAckSendCompletedElapsedMilliseconds <= options.MaximumAckMilliseconds, $"{server.MaximumAckSendCompletedElapsedMilliseconds:N0} ms", $"<= {options.MaximumAckMilliseconds:N0} ms", "来源：AckSendCompletedMaxElapsedMs；用于识别 ACK 已排队但 Socket Send 完成回调迟到。"));
         checks.Add(CreateCheck("Pipeline 失败与拒绝", server.PipelineFailed == 0 && server.PipelineRejected == 0 && server.AckedButRejected == 0, $"处理失败 {server.PipelineFailed:N0} / 容量拒绝 {server.PipelineRejected:N0} / ACK后拒绝 {server.AckedButRejected:N0}", "全部为 0", "使用测试窗口内累计计数增量。"));
-        checks.Add(CreateCheck("TcpCenter 进程稳定性", server.ProcessRestartCount == 0, $"重启 {server.ProcessRestartCount:N0} 次", "0 次", "依据服务指标 ProcessId 在测试窗口内是否变化。"));
+        checks.Add(CreateCheck(
+            "TcpCenter 进程稳定性",
+            expectedServerRestart ? server.ProcessRestartCount <= 1 : server.ProcessRestartCount == 0,
+            $"重启 {server.ProcessRestartCount:N0} 次",
+            expectedServerRestart ? "<= 1 次（计划内）" : "0 次",
+            expectedServerRestart
+                ? "场景包含计划重启；只允许一次 ProcessId 变化，额外变化仍判定失败。"
+                : "依据服务指标 ProcessId 在测试窗口内是否变化。"));
         return checks;
     }
 
@@ -881,25 +978,46 @@ internal static class DetailedReportAnalyzer
     /// <param name="server">可选服务端摘要。</param>
     /// <param name="target">目标设备数。</param>
     /// <param name="options">报告阈值。</param>
+    /// <param name="expectedServerRestart">场景是否包含计划服务端重启。</param>
     /// <returns>按严重程度排序的问题列表。</returns>
     private static IReadOnlyList<DiagnosticFinding> BuildFindings(
         MetricSnapshot metrics,
         IReadOnlyList<DetailedCommandPhaseSummary> commandPhases,
         TcpCenterAnalysisSummary? server,
         int target,
-        DetailedReportGenerationOptions options)
+        DetailedReportGenerationOptions options,
+        bool expectedServerRestart)
     {
         var findings = new List<DiagnosticFinding>();
         var addressInUse = metrics.Errors.GetValueOrDefault("SOCKET_AddressAlreadyInUse");
         if (addressInUse > 0)
         {
+            var occurredAfterPlannedRestart = expectedServerRestart;
+            findings.Add(new DiagnosticFinding
+            {
+                Severity = occurredAfterPlannedRestart ? DiagnosticSeverity.P1 : DiagnosticSeverity.P0,
+                Title = occurredAfterPlannedRestart ? "重连风暴被负载机临时端口放大" : "负载机临时端口资源耗尽",
+                Evidence = $"SOCKET_AddressAlreadyInUse 累计 {addressInUse:N0} 次，占全部连接尝试的 {Rate(addressInUse, metrics.ConnectionAttempts):P2}。",
+                Impact = occurredAfterPlannedRestart
+                    ? "这是计划重启后集中重连的客户端侧放大因素，不是触发首次掉线的原因；它会延长恢复并制造后续重试。"
+                    : "连接阶段的失败主要受负载机源端口/TIME_WAIT 约束，不能直接归因于 TcpCenter 拒绝连接。",
+                Recommendation = "对本地资源错误增加全局退避，并使用多个负载机或多个源 IP 复测重连风暴。",
+                Confidence = DiagnosticConfidence.Fact
+            });
+        }
+
+        var secondaryOutages = metrics.Outages.Count > 0
+            ? metrics.Outages.Count(item => !item.ExpectedServerRestart)
+            : expectedServerRestart ? Math.Max(0, metrics.OutageCount - 1) : metrics.OutageCount;
+        if (secondaryOutages > 0)
+        {
             findings.Add(new DiagnosticFinding
             {
                 Severity = DiagnosticSeverity.P0,
-                Title = "负载机临时端口资源耗尽",
-                Evidence = $"SOCKET_AddressAlreadyInUse 累计 {addressInUse:N0} 次，占全部连接尝试的 {Rate(addressInUse, metrics.ConnectionAttempts):P2}。",
-                Impact = "连接风暴阶段的失败主要受负载机源端口/TIME_WAIT 约束，不能直接归因于 TcpCenter 拒绝连接。",
-                Recommendation = "对本地资源错误增加全局退避，并使用多个负载机或多个源 IP 复测重连风暴。",
+                Title = "计划重启后仍发生二次掉线",
+                Evidence = $"整轮记录 {metrics.OutageCount:N0} 次在线中断，其中至少 {secondaryOutages:N0} 次不属于计划重启首次中断。",
+                Impact = "设备虽然曾恢复满在线，但连接没有持续稳定，最后一次短恢复耗时不能代表最严重事件。",
+                Recommendation = "按中断事件对齐服务端 ACK、连接关闭原因和负载机端口错误，优先定位第一次恢复后的再次掉线触发点。",
                 Confidence = DiagnosticConfidence.Fact
             });
         }
@@ -1000,6 +1118,45 @@ internal static class DetailedReportAnalyzer
                 });
             }
 
+            if (server.MaximumAckSendCompletedElapsedMilliseconds > options.MaximumAckMilliseconds)
+            {
+                findings.Add(new DiagnosticFinding
+                {
+                    Severity = DiagnosticSeverity.P1,
+                    Title = "ACK Socket 发送完成明显滞后",
+                    Evidence = $"AckSendCompletedMaxElapsedMs={server.MaximumAckSendCompletedElapsedMilliseconds:N0} ms，PendingConfirmSend 峰值={server.MaximumPendingConfirmSend:N0}。",
+                    Impact = "ACK 已进入发送路径但完成回调迟到，客户端可能先按心跳超时断线，随后产生旧连接 ACK 中止。",
+                    Recommendation = "对齐 ACK 提交、Send 完成、连接关闭和客户端心跳超时的时间窗，并检查 HP-Socket 发送队列与线程调度。",
+                    Confidence = DiagnosticConfidence.Fact
+                });
+            }
+
+            if (server.CommandLineStartPauseCount > 0)
+            {
+                findings.Add(new DiagnosticFinding
+                {
+                    Severity = DiagnosticSeverity.P1,
+                    Title = "ACK 压力保护已触发命令线路延迟",
+                    Evidence = $"CommandLineStartPauseCount={server.CommandLineStartPauseCount:N0}，最大暂停 {server.MaximumCommandLineStartPauseElapsedMilliseconds / 1000d:F1} 秒，命令线路队列峰值 {server.MaximumCommandLineQueueDepth:N0}。",
+                    Impact = "压力保护避免 ACK 与命令线路初始化相互放大，但会延后业务在线追平；这属于受控降级，需要单独验收恢复时间。",
+                    Recommendation = "保留压力保护，继续拆分 ACK 完成、Redis 查询和 ConrLine 创建耗时，并确认恢复后队列能够回落到零。",
+                    Confidence = DiagnosticConfidence.Fact
+                });
+            }
+
+            if (server.AckSendAborted > 0)
+            {
+                findings.Add(new DiagnosticFinding
+                {
+                    Severity = DiagnosticSeverity.P1,
+                    Title = "连接关闭期间存在大量 ACK 发送中止",
+                    Evidence = $"AckSendAborted={server.AckSendAborted:N0}，ConnectionClosed={server.ConnectionClosed:N0}，其中 Receive={server.ConnectionCloseReceive:N0}、Other={server.ConnectionCloseOther:N0}。",
+                    Impact = "这通常是连接先失效后的结果，但会减少客户端实际收到的确认并继续推动重连，需与首次心跳超时区分因果。",
+                    Recommendation = "用同一秒级时间线核对客户端 HeartbeatTimeouts 与 ConnectionClosed；不要只根据 ACK 中止总量判断 ACK 逻辑是根因。",
+                    Confidence = DiagnosticConfidence.HighProbability
+                });
+            }
+
             if (server.PipelineFailed > 0 || server.PipelineRejected > 0 || server.AckedButRejected > 0)
             {
                 findings.Add(new DiagnosticFinding
@@ -1013,14 +1170,14 @@ internal static class DetailedReportAnalyzer
                 });
             }
 
-            if (server.ProcessRestartCount > 0)
+            if (server.ProcessRestartCount > (expectedServerRestart ? 1 : 0))
             {
                 findings.Add(new DiagnosticFinding
                 {
                     Severity = DiagnosticSeverity.P0,
-                    Title = "测试期间 TcpCenter 进程发生重启",
+                    Title = expectedServerRestart ? "TcpCenter 发生计划外额外重启" : "测试期间 TcpCenter 进程发生重启",
                     Evidence = $"服务指标 ProcessId 发生 {server.ProcessRestartCount:N0} 次变化。",
-                    Impact = "本轮不能认定服务持续稳定运行。",
+                    Impact = expectedServerRestart ? "进程变化次数超过场景允许的一次人工重启。" : "本轮不能认定服务持续稳定运行。",
                     Recommendation = "结合 Windows 事件、服务日志和 dump 确认退出原因。",
                     Confidence = DiagnosticConfidence.Fact
                 });

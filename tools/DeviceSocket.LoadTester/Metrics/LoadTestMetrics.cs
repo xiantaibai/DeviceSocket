@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using DeviceSocket.LoadTester.Configuration;
 
 namespace DeviceSocket.LoadTester.Metrics;
 
@@ -62,9 +63,50 @@ public sealed class LoadTestMetrics
     private long _gatherReadingBusinessFailuresSent;
     private long _gatherReadingDuplicateResponsesSent;
     private bool _baselineReached;
-    private DateTimeOffset? _outageStartedAt;
+    private readonly List<OutageEventSnapshot> _completedOutages = [];
+    private ActiveOutage? _activeOutage;
     private long _outageCount;
     private long? _lastRecoveryMilliseconds;
+    private long? _worstRecoveryMilliseconds;
+    private DateTimeOffset? _stableOnlineStartedAt;
+    private long _maximumStableOnlineMilliseconds;
+    private string _currentPhaseName = string.Empty;
+    private ScenarioPhaseKind _currentPhaseKind = ScenarioPhaseKind.Steady;
+    private bool _currentPhaseExpectedServerRestart;
+    private bool _expectedRestartOutageConsumed;
+    private long _phaseMinimumProtocolOnline;
+    private long _phaseMaximumProtocolOnline;
+
+    /// <summary>
+    /// 切换当前场景阶段并重置阶段在线数范围；正在进行的掉线事件仍保留其开始阶段，避免 fault 到 recovery 边界切断恢复窗口。
+    /// </summary>
+    /// <param name="name">用于报告定位的阶段名称。</param>
+    /// <param name="kind">阶段业务类型。</param>
+    /// <param name="expectedServerRestart">该阶段是否预期服务端进程发生计划重启。</param>
+    public void SetCurrentPhase(string name, ScenarioPhaseKind kind, bool expectedServerRestart)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        lock (_recoveryLock)
+        {
+            _currentPhaseName = name;
+            _currentPhaseKind = kind;
+            _currentPhaseExpectedServerRestart = expectedServerRestart;
+            _expectedRestartOutageConsumed = false;
+            var online = Interlocked.Read(ref _protocolOnline);
+            _phaseMinimumProtocolOnline = online;
+            _phaseMaximumProtocolOnline = online;
+        }
+    }
+
+    /// <summary>
+    /// 获取当前阶段实际观测到的最低和最高协议在线数。
+    /// </summary>
+    /// <returns>以 <c>Minimum</c> 和 <c>Maximum</c> 命名的在线数范围。</returns>
+    public (long Minimum, long Maximum) GetCurrentPhaseOnlineRange()
+    {
+        lock (_recoveryLock)
+            return (_phaseMinimumProtocolOnline, _phaseMaximumProtocolOnline);
+    }
 
     /// <summary>
     /// 设置当前阶段预期在线设备数；阶段缩容时先更新目标，避免把正常下线误判为故障。
@@ -77,8 +119,10 @@ public sealed class LoadTestMetrics
             // 故障和恢复阶段通常保持同一目标值，此时必须延续停机窗口，不能在阶段切换时清零。
             if (previous == count)
                 return;
+            UpdateMaximumStableOnline(now);
             _baselineReached = count > 0 && Interlocked.Read(ref _protocolOnline) >= count;
-            _outageStartedAt = null;
+            _activeOutage = null;
+            _stableOnlineStartedAt = _baselineReached ? now : null;
         }
     }
 
@@ -119,14 +163,23 @@ public sealed class LoadTestMetrics
         lock (_recoveryLock)
         {
             var expected = Interlocked.Read(ref _expectedOnline);
+            _phaseMinimumProtocolOnline = Math.Min(_phaseMinimumProtocolOnline, online);
+            _phaseMaximumProtocolOnline = Math.Max(_phaseMaximumProtocolOnline, online);
             if (expected <= 0 || online < expected)
                 return;
             if (!_baselineReached)
                 _baselineReached = true;
-            if (_outageStartedAt is not { } outageStartedAt)
-                return;
-            _lastRecoveryMilliseconds = Math.Max(0, (long)(now - outageStartedAt).TotalMilliseconds);
-            _outageStartedAt = null;
+            if (_activeOutage is { } activeOutage)
+            {
+                var recovered = CreateOutageSnapshot(activeOutage, now, now);
+                _completedOutages.Add(recovered);
+                _lastRecoveryMilliseconds = recovered.DurationMilliseconds;
+                _worstRecoveryMilliseconds = Math.Max(
+                    _worstRecoveryMilliseconds ?? 0,
+                    recovered.DurationMilliseconds);
+                _activeOutage = null;
+            }
+            _stableOnlineStartedAt ??= now;
         }
     }
 
@@ -149,10 +202,40 @@ public sealed class LoadTestMetrics
         lock (_recoveryLock)
         {
             var expected = Interlocked.Read(ref _expectedOnline);
-            if (_baselineReached && expected > 0 && online < expected && _outageStartedAt is null)
+            _phaseMinimumProtocolOnline = Math.Min(_phaseMinimumProtocolOnline, online);
+            _phaseMaximumProtocolOnline = Math.Max(_phaseMaximumProtocolOnline, online);
+            if (_baselineReached && expected > 0 && online < expected)
             {
-                _outageStartedAt = now;
-                _outageCount++;
+                if (_activeOutage is null)
+                {
+                    UpdateMaximumStableOnline(now);
+                    _stableOnlineStartedAt = null;
+                    _outageCount++;
+                    var expectedRestartOutage = _currentPhaseExpectedServerRestart &&
+                                                !_expectedRestartOutageConsumed;
+                    if (expectedRestartOutage)
+                        _expectedRestartOutageConsumed = true;
+                    _activeOutage = new ActiveOutage(
+                        _outageCount,
+                        _currentPhaseName,
+                        _currentPhaseKind,
+                        expectedRestartOutage,
+                        now,
+                        expected,
+                        online,
+                        Interlocked.Read(ref _connectionAttempts),
+                        Interlocked.Read(ref _connectionFailed),
+                        Interlocked.Read(ref _loginFailed),
+                        Interlocked.Read(ref _heartbeatTimeouts),
+                        Interlocked.Read(ref _reconnectsScheduled),
+                        _errors.GetValueOrDefault("SOCKET_AddressAlreadyInUse"));
+                }
+                else
+                {
+                    _activeOutage.MinimumProtocolOnline = Math.Min(
+                        _activeOutage.MinimumProtocolOnline,
+                        online);
+                }
             }
         }
     }
@@ -330,11 +413,26 @@ public sealed class LoadTestMetrics
         bool outageActive;
         long outageCount;
         long? lastRecovery;
+        long? worstRecovery;
+        long currentStableOnline;
+        long maximumStableOnline;
+        string currentPhaseName;
+        IReadOnlyList<OutageEventSnapshot> outages;
         lock (_recoveryLock)
         {
-            outageActive = _outageStartedAt is not null;
+            outageActive = _activeOutage is not null;
             outageCount = _outageCount;
             lastRecovery = _lastRecoveryMilliseconds;
+            worstRecovery = _worstRecoveryMilliseconds;
+            currentStableOnline = _stableOnlineStartedAt is { } stableStartedAt
+                ? Math.Max(0, (long)(now - stableStartedAt).TotalMilliseconds)
+                : 0;
+            maximumStableOnline = Math.Max(_maximumStableOnlineMilliseconds, currentStableOnline);
+            currentPhaseName = _currentPhaseName;
+            var eventSnapshots = new List<OutageEventSnapshot>(_completedOutages);
+            if (_activeOutage is { } activeOutage)
+                eventSnapshots.Add(CreateOutageSnapshot(activeOutage, now, recoveredAt: null));
+            outages = eventSnapshots;
         }
 
         return new MetricSnapshot
@@ -389,6 +487,11 @@ public sealed class LoadTestMetrics
             OutageCount = outageCount,
             OutageActive = outageActive,
             LastRecoveryMilliseconds = lastRecovery,
+            Outages = outages,
+            WorstRecoveryMilliseconds = worstRecovery,
+            CurrentStableOnlineMilliseconds = currentStableOnline,
+            MaximumStableOnlineMilliseconds = maximumStableOnline,
+            CurrentPhaseName = currentPhaseName,
             Errors = new Dictionary<string, long>(_errors, StringComparer.Ordinal),
             ConnectionLatency = _connectionLatency.Snapshot(),
             LoginLatency = _loginLatency.Snapshot(),
@@ -399,6 +502,68 @@ public sealed class LoadTestMetrics
         };
     }
 
+    /// <summary>
+    /// 把当前完整在线区间计入历史最大稳定时长。
+    /// </summary>
+    /// <param name="now">稳定区间结束或目标切换的 UTC 时间。</param>
+    private void UpdateMaximumStableOnline(DateTimeOffset now)
+    {
+        if (_stableOnlineStartedAt is not { } stableStartedAt)
+            return;
+        _maximumStableOnlineMilliseconds = Math.Max(
+            _maximumStableOnlineMilliseconds,
+            Math.Max(0, (long)(now - stableStartedAt).TotalMilliseconds));
+    }
+
+    /// <summary>
+    /// 根据掉线开始基线和当前累计计数创建可序列化事件快照。
+    /// </summary>
+    /// <param name="active">正在进行的掉线事件。</param>
+    /// <param name="now">用于未恢复事件计算当前持续时间的快照时间。</param>
+    /// <param name="recoveredAt">实际恢复时间；为空表示事件仍在进行。</param>
+    /// <returns>包含持续时间、最低在线和错误增量的不可变事件。</returns>
+    private OutageEventSnapshot CreateOutageSnapshot(
+        ActiveOutage active,
+        DateTimeOffset now,
+        DateTimeOffset? recoveredAt)
+    {
+        var endedAt = recoveredAt ?? now;
+        return new OutageEventSnapshot
+        {
+            Sequence = active.Sequence,
+            PhaseName = active.PhaseName,
+            PhaseKind = active.PhaseKind,
+            ExpectedServerRestart = active.ExpectedServerRestart,
+            StartedAtUtc = active.StartedAtUtc,
+            RecoveredAtUtc = recoveredAt,
+            DurationMilliseconds = Math.Max(0, (long)(endedAt - active.StartedAtUtc).TotalMilliseconds),
+            ExpectedOnline = active.ExpectedOnline,
+            MinimumProtocolOnline = active.MinimumProtocolOnline,
+            MaximumOfflineDevices = Math.Max(0, active.ExpectedOnline - active.MinimumProtocolOnline),
+            ConnectionAttempts = Delta(active.ConnectionAttempts, Interlocked.Read(ref _connectionAttempts)),
+            ConnectionFailures = Delta(active.ConnectionFailures, Interlocked.Read(ref _connectionFailed)),
+            LoginFailures = Delta(active.LoginFailures, Interlocked.Read(ref _loginFailed)),
+            HeartbeatTimeouts = Delta(active.HeartbeatTimeouts, Interlocked.Read(ref _heartbeatTimeouts)),
+            ReconnectsScheduled = Delta(active.ReconnectsScheduled, Interlocked.Read(ref _reconnectsScheduled)),
+            AddressAlreadyInUse = Delta(
+                active.AddressAlreadyInUse,
+                _errors.GetValueOrDefault("SOCKET_AddressAlreadyInUse"))
+        };
+    }
+
+    /// <summary>
+    /// 计算累计计数的非负增量。
+    /// </summary>
+    /// <param name="started">事件开始值。</param>
+    /// <param name="ended">当前或事件结束值。</param>
+    /// <returns>非负差值。</returns>
+    private static long Delta(long started, long ended) => Math.Max(0, ended - started);
+
+    /// <summary>
+    /// 以原子方式递减瞬时仪表但不允许低于零，容忍取消和关闭回调的竞争顺序。
+    /// </summary>
+    /// <param name="value">要递减的原子长整数。</param>
+    /// <returns>成功递减后的值；原值已为零时返回零。</returns>
     private static long DecrementNonNegative(ref long value)
     {
         while (true)
@@ -409,5 +574,63 @@ public sealed class LoadTestMetrics
             if (Interlocked.CompareExchange(ref value, current - 1, current) == current)
                 return current - 1;
         }
+    }
+
+    /// <summary>
+    /// 保存掉线事件开始时的阶段身份、最低在线数和累计计数基线，恢复时转换为不可变快照。
+    /// </summary>
+    private sealed class ActiveOutage(
+        long sequence,
+        string phaseName,
+        ScenarioPhaseKind phaseKind,
+        bool expectedServerRestart,
+        DateTimeOffset startedAtUtc,
+        long expectedOnline,
+        long minimumProtocolOnline,
+        long connectionAttempts,
+        long connectionFailures,
+        long loginFailures,
+        long heartbeatTimeouts,
+        long reconnectsScheduled,
+        long addressAlreadyInUse)
+    {
+        /// <summary>获取事件编号。</summary>
+        internal long Sequence { get; } = sequence;
+
+        /// <summary>获取事件开始阶段名称。</summary>
+        internal string PhaseName { get; } = phaseName;
+
+        /// <summary>获取事件开始阶段类型。</summary>
+        internal ScenarioPhaseKind PhaseKind { get; } = phaseKind;
+
+        /// <summary>获取事件是否属于计划重启阶段。</summary>
+        internal bool ExpectedServerRestart { get; } = expectedServerRestart;
+
+        /// <summary>获取事件开始时间。</summary>
+        internal DateTimeOffset StartedAtUtc { get; } = startedAtUtc;
+
+        /// <summary>获取事件目标在线数。</summary>
+        internal long ExpectedOnline { get; } = expectedOnline;
+
+        /// <summary>获取或设置事件期间最低在线数。</summary>
+        internal long MinimumProtocolOnline { get; set; } = minimumProtocolOnline;
+
+        /// <summary>获取事件开始时连接尝试累计值。</summary>
+        internal long ConnectionAttempts { get; } = connectionAttempts;
+
+        /// <summary>获取事件开始时连接失败累计值。</summary>
+        internal long ConnectionFailures { get; } = connectionFailures;
+
+        /// <summary>获取事件开始时登录失败累计值。</summary>
+        internal long LoginFailures { get; } = loginFailures;
+
+        /// <summary>获取事件开始时心跳超时累计值。</summary>
+        internal long HeartbeatTimeouts { get; } = heartbeatTimeouts;
+
+        /// <summary>获取事件开始时重连累计值。</summary>
+        internal long ReconnectsScheduled { get; } = reconnectsScheduled;
+
+        /// <summary>获取事件开始时端口占用错误累计值。</summary>
+        internal long AddressAlreadyInUse { get; } = addressAlreadyInUse;
     }
 }

@@ -155,4 +155,148 @@ public sealed class AcceptanceEvaluatorTests
             result.Checks,
             item => item.Name == "reconnects" && item.Threshold == 2_450);
     }
+
+    /// <summary>
+    /// 验证重启验收使用最严重恢复事件，并能同时拒绝二次掉线和过量级联重连。
+    /// </summary>
+    [Fact]
+    public void RestartStabilityRules_UseWorstAndSecondaryOutages()
+    {
+        var options = new AcceptanceOptions
+        {
+            MinimumFinalOnlineRate = null,
+            MaximumProtocolErrorRate = null,
+            MaximumRecoverySeconds = 60,
+            MaximumReconnectsPerDevice = 2,
+            MaximumSecondaryOutages = 0,
+            MinimumStableOnlineSeconds = 120
+        };
+        var metrics = new MetricSnapshot
+        {
+            ExpectedOnline = 10_000,
+            ProtocolOnline = 10_000,
+            ReconnectsScheduled = 30_000,
+            WorstRecoveryMilliseconds = 90_000,
+            CurrentStableOnlineMilliseconds = 30_000,
+            Outages =
+            [
+                CreateOutage(1, expectedRestart: true, 90_000),
+                CreateOutage(2, expectedRestart: false, 1_000)
+            ]
+        };
+
+        var result = AcceptanceEvaluator.Evaluate(metrics, options, expectedOnline: 10_000);
+
+        Assert.False(result.Passed);
+        Assert.Contains(result.Checks, item => item.Name == "worstRecoverySeconds" && item.Actual == 90 && !item.Passed);
+        Assert.Contains(result.Checks, item => item.Name == "secondaryOutages" && item.Actual == 1 && !item.Passed);
+        Assert.Contains(result.Checks, item => item.Name == "reconnectsPerDevice" && item.Actual == 3 && !item.Passed);
+        Assert.Contains(result.Checks, item => item.Name == "stableOnlineSeconds" && item.Actual == 30 && !item.Passed);
+    }
+
+    /// <summary>
+    /// 验证计划重启场景的连接和登录成功率只统计重启前正常阶段，不受预期重连风暴失败污染。
+    /// </summary>
+    [Fact]
+    public void PreRestartPhaseRates_ExcludeExpectedRestartTraffic()
+    {
+        var options = new AcceptanceOptions
+        {
+            UsePreRestartPhaseRates = true,
+            MinimumConnectionSuccessRate = 0.95,
+            MinimumLoginSuccessRate = 0.95,
+            MinimumFinalOnlineRate = null,
+            MaximumProtocolErrorRate = null
+        };
+        var metrics = new MetricSnapshot
+        {
+            ConnectionAttempts = 30_000,
+            ConnectionSucceeded = 10_000,
+            LoginAttempts = 10_000,
+            LoginSucceeded = 10_000
+        };
+        var now = DateTimeOffset.UtcNow;
+        var phases = new[]
+        {
+            CreatePhase("ramp", ScenarioPhaseKind.Ramp, now, expectedRestart: false, attempts: 10_000, connected: 9_900, logins: 9_900, loggedIn: 9_801),
+            CreatePhase("restart", ScenarioPhaseKind.Fault, now.AddMinutes(1), expectedRestart: true, attempts: 20_000, connected: 100, logins: 100, loggedIn: 100)
+        };
+
+        var result = AcceptanceEvaluator.Evaluate(metrics, options, 10_000, phases: phases);
+
+        Assert.True(result.Passed);
+        Assert.Contains(result.Checks, item => item.Name == "connectionSuccessRate" && item.Actual == 0.99);
+        Assert.Contains(result.Checks, item => item.Name == "loginSuccessRate" && item.Actual == 0.99);
+    }
+
+    /// <summary>
+    /// 创建验收测试使用的完整掉线事件快照。
+    /// </summary>
+    /// <param name="sequence">事件编号。</param>
+    /// <param name="expectedRestart">是否计划重启事件。</param>
+    /// <param name="durationMilliseconds">恢复耗时毫秒数。</param>
+    /// <returns>用于验收的掉线事件。</returns>
+    private static OutageEventSnapshot CreateOutage(long sequence, bool expectedRestart, long durationMilliseconds) => new()
+    {
+        Sequence = sequence,
+        PhaseName = "restart",
+        PhaseKind = ScenarioPhaseKind.Fault,
+        ExpectedServerRestart = expectedRestart,
+        StartedAtUtc = DateTimeOffset.UtcNow,
+        RecoveredAtUtc = DateTimeOffset.UtcNow.AddMilliseconds(durationMilliseconds),
+        DurationMilliseconds = durationMilliseconds,
+        ExpectedOnline = 10_000,
+        MinimumProtocolOnline = 0,
+        MaximumOfflineDevices = 10_000,
+        ConnectionAttempts = 10_000,
+        ConnectionFailures = 0,
+        LoginFailures = 0,
+        HeartbeatTimeouts = 0,
+        ReconnectsScheduled = 10_000,
+        AddressAlreadyInUse = 0
+    };
+
+    /// <summary>
+    /// 创建包含连接和登录增量的阶段结果。
+    /// </summary>
+    /// <param name="name">阶段名称。</param>
+    /// <param name="kind">阶段类型。</param>
+    /// <param name="startedAtUtc">阶段开始时间。</param>
+    /// <param name="expectedRestart">是否计划重启阶段。</param>
+    /// <param name="attempts">连接尝试增量。</param>
+    /// <param name="connected">连接成功增量。</param>
+    /// <param name="logins">登录尝试增量。</param>
+    /// <param name="loggedIn">登录成功增量。</param>
+    /// <returns>用于阶段范围验收的结果。</returns>
+    private static PhaseResult CreatePhase(
+        string name,
+        ScenarioPhaseKind kind,
+        DateTimeOffset startedAtUtc,
+        bool expectedRestart,
+        long attempts,
+        long connected,
+        long logins,
+        long loggedIn) => new(
+            name,
+            kind,
+            startedAtUtc,
+            startedAtUtc.AddSeconds(30),
+            10_000,
+            new MetricSnapshot(),
+            Delta: new PhaseMetricDelta
+            {
+                ConnectionAttempts = attempts,
+                ConnectionSucceeded = connected,
+                ConnectionFailed = attempts - connected,
+                LoginAttempts = logins,
+                LoginSucceeded = loggedIn,
+                LoginFailed = logins - loggedIn,
+                HeartbeatsSent = 0,
+                HeartbeatsConfirmed = 0,
+                HeartbeatTimeouts = 0,
+                ReconnectsScheduled = 0,
+                OutageCount = 0,
+                Errors = new Dictionary<string, long>()
+            },
+            ExpectedServerRestart: expectedRestart);
 }

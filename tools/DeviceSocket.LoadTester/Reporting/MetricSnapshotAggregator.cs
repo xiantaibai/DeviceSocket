@@ -23,6 +23,7 @@ internal static class MetricSnapshotAggregator
             .SelectMany(item => item.Errors)
             .GroupBy(item => item.Key, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.Sum(item => item.Value), StringComparer.Ordinal);
+        var outages = MergeOutages(source.SelectMany(item => item.Outages));
         return new MetricSnapshot
         {
             TimestampUtc = source.Max(item => item.TimestampUtc),
@@ -72,12 +73,30 @@ internal static class MetricSnapshotAggregator
             GatherReadingResponsesDropped = source.Sum(item => item.GatherReadingResponsesDropped),
             GatherReadingBusinessFailuresSent = source.Sum(item => item.GatherReadingBusinessFailuresSent),
             GatherReadingDuplicateResponsesSent = source.Sum(item => item.GatherReadingDuplicateResponsesSent),
-            OutageCount = source.Sum(item => item.OutageCount),
+            // 旧版节点报告没有 Outages 明细，只能保留各节点最大累计事件数，避免离线重放时丢失既有掉线事实。
+            OutageCount = outages.Count > 0 ? outages.Count : source.Max(item => item.OutageCount),
             OutageActive = source.Any(item => item.OutageActive),
             LastRecoveryMilliseconds = source.Where(item => item.LastRecoveryMilliseconds.HasValue)
                 .Select(item => item.LastRecoveryMilliseconds)
                 .DefaultIfEmpty(null)
                 .Max(),
+            Outages = outages,
+            WorstRecoveryMilliseconds = outages.Count > 0
+                ? outages
+                    .Where(item => item.RecoveredAtUtc.HasValue)
+                    .Select(item => (long?)item.DurationMilliseconds)
+                    .DefaultIfEmpty(null)
+                    .Max()
+                : source
+                    .Select(item => item.WorstRecoveryMilliseconds ?? item.LastRecoveryMilliseconds)
+                    .DefaultIfEmpty(null)
+                    .Max(),
+            // 集群只有在所有负载节点都稳定在线时才算稳定，因此取各节点当前连续稳定时长的最小值。
+            CurrentStableOnlineMilliseconds = source.Min(item => item.CurrentStableOnlineMilliseconds),
+            MaximumStableOnlineMilliseconds = source.Min(item => item.MaximumStableOnlineMilliseconds),
+            CurrentPhaseName = source.Select(item => item.CurrentPhaseName).Distinct(StringComparer.Ordinal).Count() == 1
+                ? source[0].CurrentPhaseName
+                : "mixed",
             Errors = errors,
             ConnectionLatency = MergeableHistogram.Merge(source.Select(item => item.ConnectionLatency)),
             LoginLatency = MergeableHistogram.Merge(source.Select(item => item.LoginLatency)),
@@ -86,5 +105,46 @@ internal static class MetricSnapshotAggregator
             ApiRequestLatency = MergeableHistogram.Merge(source.Select(item => item.ApiRequestLatency)),
             GatherReadingResponseLatency = MergeableHistogram.Merge(source.Select(item => item.GatherReadingResponseLatency))
         };
+    }
+
+    /// <summary>
+    /// 按阶段和节点内事件序号合并同一次集群中断，避免多分片把一次服务端重启重复统计为多次掉线。
+    /// </summary>
+    /// <param name="outages">各负载节点记录的中断事件。</param>
+    /// <returns>按开始时间排序的集群级中断事件。</returns>
+    private static IReadOnlyList<OutageEventSnapshot> MergeOutages(IEnumerable<OutageEventSnapshot> outages)
+    {
+        return outages
+            .GroupBy(item => new { item.Sequence, item.PhaseName, item.ExpectedServerRestart })
+            .Select(group =>
+            {
+                var source = group.ToArray();
+                var recoveredAtUtc = source.All(item => item.RecoveredAtUtc.HasValue)
+                    ? source.Max(item => item.RecoveredAtUtc)
+                    : null;
+                return new OutageEventSnapshot
+                {
+                    Sequence = group.Key.Sequence,
+                    PhaseName = group.Key.PhaseName,
+                    PhaseKind = source[0].PhaseKind,
+                    ExpectedServerRestart = group.Key.ExpectedServerRestart,
+                    StartedAtUtc = source.Min(item => item.StartedAtUtc),
+                    RecoveredAtUtc = recoveredAtUtc,
+                    DurationMilliseconds = recoveredAtUtc.HasValue
+                        ? (long)Math.Max(0, (recoveredAtUtc.Value - source.Min(item => item.StartedAtUtc)).TotalMilliseconds)
+                        : source.Max(item => item.DurationMilliseconds),
+                    ExpectedOnline = source.Sum(item => item.ExpectedOnline),
+                    MinimumProtocolOnline = source.Sum(item => item.MinimumProtocolOnline),
+                    MaximumOfflineDevices = source.Sum(item => item.MaximumOfflineDevices),
+                    ConnectionAttempts = source.Sum(item => item.ConnectionAttempts),
+                    ConnectionFailures = source.Sum(item => item.ConnectionFailures),
+                    LoginFailures = source.Sum(item => item.LoginFailures),
+                    HeartbeatTimeouts = source.Sum(item => item.HeartbeatTimeouts),
+                    ReconnectsScheduled = source.Sum(item => item.ReconnectsScheduled),
+                    AddressAlreadyInUse = source.Sum(item => item.AddressAlreadyInUse)
+                };
+            })
+            .OrderBy(item => item.StartedAtUtc)
+            .ToArray();
     }
 }

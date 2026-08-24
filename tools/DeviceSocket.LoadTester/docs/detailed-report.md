@@ -76,7 +76,7 @@ dotnet run --project tools\DeviceSocket.LoadTester\DeviceSocket.LoadTester.cspro
 | `--server-time-zone` | `-ServerTimeZone` | `Local` | 解释服务端无偏移时间戳的系统时区；中国 Windows 通常用 `China Standard Time` |
 | `--business-catchup-seconds` | `-BusinessCatchupSeconds` | `60` | 物理连接达到目标后，业务在线允许的最长追平秒数 |
 | `--queue-age-seconds` | `-QueueAgeSeconds` | `30` | TcpCenter Pipeline 允许的最大排队年龄秒数 |
-| `--ack-milliseconds` | `-AckMilliseconds` | `5000` | ACK 从组帧到 Socket Send 返回允许的最大毫秒数 |
+| `--ack-milliseconds` | `-AckMilliseconds` | `5000` | ACK 从组帧到 Socket Send 返回、以及 Socket Send 完成回调允许的最大毫秒数 |
 | `--target-devices` | `-TargetDevices` | 自动推断 | 覆盖里程碑目标；只在报告中采用的目标与场景设备数不一致时填写 |
 
 数值阈值必须大于零。它们只改变报告判定，不会修改原压测结果。修改默认阈值用于正式验收时，应在报告元数据或评审记录中说明依据，避免为了得到“通过”而事后放宽门槛。
@@ -152,7 +152,7 @@ LoadTester 时间使用带偏移的 UTC 时间。TcpCenter 日志若没有时区
 2. `--server-time-zone` 是否与 TcpCenter 记录时间一致；
 3. 指标文件是否属于同一轮测试。
 
-Pipeline 失败、拒绝、`AckedButRejected`、`StaleBusiness` 和 `HeartbeatCoalesced` 属于进程累计计数。分析器会保留测试开始前最近一个样本作为基线，报告展示测试窗口内增量，避免把服务启动以来的历史事件算入本轮。
+Pipeline 失败、拒绝、`AckedButRejected`、`StaleBusiness`、`HeartbeatCoalesced`、`AckFailed`、`AckSendAborted`、连接关闭分类和命令线路压力保护次数属于进程累计计数。分析器会保留测试开始前最近一个样本作为基线，报告展示测试窗口内增量，避免把服务启动以来的历史事件算入本轮。趋势和峰值还会读取 `PendingConfirmSend`、`PendingCommandLine`、`CommandLinePipeline`、`LifecyclePipeline`、`AckSendCompletedMaxElapsedMs` 和 `LoginBusinessReadyMaxElapsedMs`；旧版服务缺少这些字段时按零兼容。
 
 ## 7. 验收口径
 
@@ -163,8 +163,9 @@ Pipeline 失败、拒绝、`AckedButRejected`、`StaleBusiness` 和 `HeartbeatCo
 - 业务在线追平时间是否低于门槛；
 - Pipeline 最大排队年龄是否低于门槛；
 - ACK 最大耗时是否低于门槛；
+- ACK Socket 发送完成最大耗时是否低于门槛；
 - Pipeline 失败、容量拒绝、ACK 后拒绝是否全部为零；
-- TcpCenter 进程在测试窗口内是否保持稳定。
+- TcpCenter 进程在测试窗口内是否保持稳定；显式或旧版命名为 `restart` 的计划重启场景允许一次 PID 变化，额外变化仍失败。
 
 每项结果是“通过”“失败”或“不可评估”三态。任何失败或不可评估都会使综合验收结果为“未通过”。这样可以明确区分“指标证明通过”和“没有指标所以不知道”，避免缺少服务端数据时误报成功。
 
@@ -210,7 +211,7 @@ analysis/
    └─ command-funnel.svg
 ```
 
-HTML 自包含样式和内嵌图表，可直接用浏览器打开或打印为 PDF。Markdown 引用 `charts` 下的 SVG，移动 Markdown 时需要同时保留该目录。`analysis.json` 使用 camelCase 属性和字符串枚举；当前 `schemaVersion=2`，新增 `generatedAtUtc` 和 `background`，外部脚本应先检查版本再读取字段。
+HTML 自包含样式和内嵌图表，可直接用浏览器打开或打印为 PDF。Markdown 引用 `charts` 下的 SVG，移动 Markdown 时需要同时保留该目录。`analysis.json` 使用 camelCase 属性和字符串枚举；当前 `schemaVersion=3`，在版本 2 的背景信息基础上新增计划重启语义、中断事件和细分 ACK/命令线路指标，外部脚本应先检查版本再读取字段。
 
 ## 10. 退出码与常见问题
 

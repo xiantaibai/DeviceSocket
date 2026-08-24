@@ -78,7 +78,10 @@ internal static class DetailedReportChartBuilder
                 new LineSeries("绑定未建业务线路", "#dc2626", analysis.ServerTimeline.Select(item => (item.TimestampUtc, (double)item.BoundWithoutBusinessLine)).ToArray()),
                 new LineSeries("待处理登录", "#ea580c", analysis.ServerTimeline.Select(item => (item.TimestampUtc, (double)item.PendingLogin)).ToArray()),
                 new LineSeries("待处理心跳", "#ca8a04", analysis.ServerTimeline.Select(item => (item.TimestampUtc, (double)item.PendingHeartbeat)).ToArray()),
-                new LineSeries("Pipeline 队列", "#7c3aed", analysis.ServerTimeline.Select(item => (item.TimestampUtc, (double)item.QueueDepth)).ToArray())
+                new LineSeries("接收管线", "#7c3aed", analysis.ServerTimeline.Select(item => (item.TimestampUtc, (double)item.QueueDepth)).ToArray()),
+                new LineSeries("待建命令线路", "#0891b2", analysis.ServerTimeline.Select(item => (item.TimestampUtc, (double)item.PendingCommandLine)).ToArray()),
+                new LineSeries("命令线路管线", "#4f46e5", analysis.ServerTimeline.Select(item => (item.TimestampUtc, (double)item.CommandLineQueueDepth)).ToArray()),
+                new LineSeries("待完成 ACK", "#be123c", analysis.ServerTimeline.Select(item => (item.TimestampUtc, (double)item.PendingConfirmSend)).ToArray())
             };
         var errorSeries = new[]
         {

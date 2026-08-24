@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using DeviceSocket.LoadTester.Configuration;
 
@@ -33,8 +34,20 @@ internal static class ResourcePreflight
 
         if (options.Role != LoadTestRole.ApiOnly && !Environment.Is64BitProcess && localDeviceCount > 10_000)
             warnings.Add("当前为 32 位进程，大规模连接可能提前耗尽地址空间。");
-        if (options.Role != LoadTestRole.ApiOnly && localDeviceCount > 15_000)
-            warnings.Add("单一源 IP 连接固定目标端口可能受临时端口和 TIME_WAIT 限制，建议使用多源 IP 或多台负载机。");
+        if (options.Role != LoadTestRole.ApiOnly)
+        {
+            TryAppendTcpPortFacts(facts, warnings, localDeviceCount);
+            if (localDeviceCount >= 8_000 && options.Scenario.Phases.Any(item => item.ExpectedServerRestart))
+            {
+                warnings.Add(
+                    "本分片将在服务端重启后集中重连；单一源 IP 的临时端口和 TIME_WAIT 可能先于服务端耗尽，" +
+                    "建议降低单机分片规模、增加负载机/源 IP，且不要把 SOCKET_AddressAlreadyInUse 直接归因于服务端。");
+            }
+            else if (localDeviceCount > 15_000)
+            {
+                warnings.Add("单一源 IP 连接固定目标端口可能受临时端口和 TIME_WAIT 限制，建议使用多源 IP 或多台负载机。");
+            }
+        }
         var availableMemory = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes;
         if (availableMemory > 0)
             facts.Add($"运行时可用内存估计: {availableMemory / 1024d / 1024d:N0} MiB");
@@ -58,5 +71,35 @@ internal static class ResourcePreflight
             warnings.Add("计划启动时间已经过去，当前节点将立即启动，可能无法与其他分片同步。");
 
         return new ResourcePreflightResult(facts, warnings);
+    }
+
+    /// <summary>
+    /// 尝试读取操作系统 TCP 连接表并记录已建立连接和 TIME_WAIT 数量；读取失败只产生警告，不阻止压测。
+    /// </summary>
+    /// <param name="facts">追加可验证运行事实的集合。</param>
+    /// <param name="warnings">追加非阻断风险提示的集合。</param>
+    /// <param name="localDeviceCount">当前分片计划模拟的设备数。</param>
+    private static void TryAppendTcpPortFacts(
+        ICollection<string> facts,
+        ICollection<string> warnings,
+        int localDeviceCount)
+    {
+        try
+        {
+            var connections = IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpConnections();
+            var established = connections.LongCount(item => item.State == TcpState.Established);
+            var timeWait = connections.LongCount(item => item.State == TcpState.TimeWait);
+            facts.Add($"运行前本机 TCP: Established {established:N0}，TIME_WAIT {timeWait:N0}");
+            if (timeWait >= Math.Max(2_000, localDeviceCount / 2))
+            {
+                warnings.Add(
+                    $"运行前已存在 {timeWait:N0} 条 TIME_WAIT，接近本分片 {localDeviceCount:N0} 台设备的端口预算，" +
+                    "建议等待回收或改用空闲负载机后再开始正式测试。");
+            }
+        }
+        catch (NetworkInformationException exception)
+        {
+            warnings.Add($"无法读取本机 TCP 连接表，未能预判临时端口风险：{exception.Message}");
+        }
     }
 }

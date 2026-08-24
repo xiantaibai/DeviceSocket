@@ -66,14 +66,14 @@ dotnet run --project tools\DeviceSocket.LoadTester\DeviceSocket.LoadTester.cspro
   --run-id gather-restart-after-r1
 ```
 
-控制台进入 `restart-tcpcenter-now` 后立即重启被测 `Gather.TcpCenter`。该阶段没有配置客户端主动断线，因此测量包含：
+控制台进入 `restart-tcpcenter-now` 后会先显示 5 秒准备倒计时，再给出 30 秒操作窗口。请在出现“请立即操作”后重启被测 `Gather.TcpCenter`，无需按键确认；多分片时只由 `shard-000` 提示，但所有分片都会等待相同窗口。该阶段没有配置客户端主动断线，因此测量包含：
 
 - 服务端进程退出造成的真实远端断线；
 - TCP 服务冷启动和监听恢复；
 - 一万台终端自动重连；
 - 登录、内部状态和业务在线恢复。
 
-如果没有执行重启，`minimumReconnects` 门槛会失败，避免把一次没有注入故障的运行误判为通过。正式比较时，改造前后应在相同阶段位置、相同服务停止时长和相同负载机条件下执行。
+如果没有执行重启，`minimumReconnects` 门槛会失败，避免把一次没有注入故障的运行误判为通过。报告把本阶段首次中断标记为计划重启，恢复后的再次掉线仍按非预期事件验收；连接和登录成功率只采用重启前正常阶段，恢复时间则取整轮最严重事件。正式比较时，改造前后应在相同阶段位置、相同服务停止时长和相同负载机条件下执行。
 
 ## 一万台设备加 HTTP 指令
 

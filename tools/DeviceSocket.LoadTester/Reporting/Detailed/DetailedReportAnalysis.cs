@@ -7,8 +7,8 @@ namespace DeviceSocket.LoadTester.Reporting.Detailed;
 /// </summary>
 internal sealed record DetailedReportAnalysis
 {
-    /// <summary>获取分析模型结构版本；版本 2 新增报告生成时间和强类型测试背景，用于外部归档工具判断兼容性。</summary>
-    public int SchemaVersion { get; init; } = 2;
+    /// <summary>获取分析模型结构版本；版本 3 新增中断事件、计划重启语义和细分 ACK/命令线路指标。</summary>
+    public int SchemaVersion { get; init; } = 3;
 
     /// <summary>获取当前负载测试运行编号。</summary>
     public required string RunId { get; init; }
@@ -45,6 +45,9 @@ internal sealed record DetailedReportAnalysis
 
     /// <summary>获取验收和里程碑计算采用的目标设备数。</summary>
     public required int TargetDeviceCount { get; init; }
+
+    /// <summary>获取当前场景是否声明了计划服务端重启；用于区分预期 PID 变化和恢复后的二次掉线。</summary>
+    public required bool ExpectedServerRestart { get; init; }
 
     /// <summary>获取各分片测量快照合并后的客户端累计指标。</summary>
     public required MetricSnapshot ClientMetrics { get; init; }
@@ -190,6 +193,15 @@ internal sealed record TcpCenterTimelinePoint
     /// <summary>获取当前待处理心跳数。</summary>
     public required int PendingHeartbeat { get; init; }
 
+    /// <summary>获取当前待建立业务线路的命令数。</summary>
+    public required int PendingCommandLine { get; init; }
+
+    /// <summary>获取当前待处理连接生命周期状态数。</summary>
+    public required int PendingLifecycleState { get; init; }
+
+    /// <summary>获取当前等待完成 ACK Socket 发送的任务数。</summary>
+    public required int PendingConfirmSend { get; init; }
+
     /// <summary>获取接收业务管线当前队列深度。</summary>
     public required int QueueDepth { get; init; }
 
@@ -198,6 +210,27 @@ internal sealed record TcpCenterTimelinePoint
 
     /// <summary>获取当前指标周期 ACK 组帧到 Socket Send 返回的最大耗时，单位毫秒。</summary>
     public required long AckMaxElapsedMilliseconds { get; init; }
+
+    /// <summary>获取当前指标周期 ACK Socket 发送完成最大耗时，单位毫秒。</summary>
+    public required long AckSendCompletedMaxElapsedMilliseconds { get; init; }
+
+    /// <summary>获取当前指标周期登录到业务线路可用的最大耗时，单位毫秒。</summary>
+    public required long LoginBusinessReadyMaxElapsedMilliseconds { get; init; }
+
+    /// <summary>获取命令线路启动是否因 ACK 压力保护而暂停，零表示未暂停。</summary>
+    public required int CommandLineStartPaused { get; init; }
+
+    /// <summary>获取命令线路专用管线当前队列深度。</summary>
+    public required int CommandLineQueueDepth { get; init; }
+
+    /// <summary>获取命令线路专用管线最大队列年龄，单位毫秒。</summary>
+    public required long CommandLineMaxQueueAgeMilliseconds { get; init; }
+
+    /// <summary>获取连接生命周期专用管线当前队列深度。</summary>
+    public required int LifecycleQueueDepth { get; init; }
+
+    /// <summary>获取连接生命周期专用管线最大队列年龄，单位毫秒。</summary>
+    public required long LifecycleMaxQueueAgeMilliseconds { get; init; }
 }
 
 /// <summary>
@@ -237,6 +270,63 @@ internal sealed record TcpCenterAnalysisSummary
 
     /// <summary>获取 ACK 最大耗时，单位毫秒。</summary>
     public required long MaximumAckElapsedMilliseconds { get; init; }
+
+    /// <summary>获取 ACK Socket 发送完成最大耗时，单位毫秒。</summary>
+    public required long MaximumAckSendCompletedElapsedMilliseconds { get; init; }
+
+    /// <summary>获取登录到业务线路可用的最大耗时，单位毫秒。</summary>
+    public required long MaximumLoginBusinessReadyElapsedMilliseconds { get; init; }
+
+    /// <summary>获取最大待处理命令线路数。</summary>
+    public required int MaximumPendingCommandLine { get; init; }
+
+    /// <summary>获取最大待处理生命周期状态数。</summary>
+    public required int MaximumPendingLifecycleState { get; init; }
+
+    /// <summary>获取最大待完成 ACK 发送数。</summary>
+    public required int MaximumPendingConfirmSend { get; init; }
+
+    /// <summary>获取命令线路专用管线最大队列深度。</summary>
+    public required long MaximumCommandLineQueueDepth { get; init; }
+
+    /// <summary>获取命令线路专用管线最大队列年龄，单位毫秒。</summary>
+    public required long MaximumCommandLineQueueAgeMilliseconds { get; init; }
+
+    /// <summary>获取生命周期专用管线最大队列深度。</summary>
+    public required long MaximumLifecycleQueueDepth { get; init; }
+
+    /// <summary>获取生命周期专用管线最大队列年龄，单位毫秒。</summary>
+    public required long MaximumLifecycleQueueAgeMilliseconds { get; init; }
+
+    /// <summary>获取 ACK 压力保护暂停命令线路启动的最大持续时间，单位毫秒。</summary>
+    public required long MaximumCommandLineStartPauseElapsedMilliseconds { get; init; }
+
+    /// <summary>获取测试窗口内命令线路启动被压力保护暂停的次数增量。</summary>
+    public required long CommandLineStartPauseCount { get; init; }
+
+    /// <summary>获取测试窗口内 ACK 发送失败数量增量。</summary>
+    public required long AckFailed { get; init; }
+
+    /// <summary>获取测试窗口内 ACK 发送因连接失效等原因中止的数量增量。</summary>
+    public required long AckSendAborted { get; init; }
+
+    /// <summary>获取测试窗口内连接关闭数量增量。</summary>
+    public required long ConnectionClosed { get; init; }
+
+    /// <summary>获取测试窗口内带错误关闭的连接数量增量。</summary>
+    public required long ConnectionCloseWithError { get; init; }
+
+    /// <summary>获取测试窗口内接收侧关闭的连接数量增量。</summary>
+    public required long ConnectionCloseReceive { get; init; }
+
+    /// <summary>获取测试窗口内无法归入明确原因的其他连接关闭数量增量。</summary>
+    public required long ConnectionCloseOther { get; init; }
+
+    /// <summary>获取测试窗口内命令线路任务被拒绝的数量增量。</summary>
+    public required long CommandLineRejected { get; init; }
+
+    /// <summary>获取测试窗口内生命周期状态任务被拒绝的数量增量。</summary>
+    public required long LifecycleStateRejected { get; init; }
 
     /// <summary>获取 Pipeline 固定 Worker 数量。</summary>
     public required int WorkerCount { get; init; }

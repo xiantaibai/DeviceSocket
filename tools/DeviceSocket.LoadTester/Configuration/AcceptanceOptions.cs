@@ -6,6 +6,12 @@ namespace DeviceSocket.LoadTester.Configuration;
 public sealed class AcceptanceOptions
 {
     /// <summary>
+    /// 获取或设置 <c>acceptance.usePreRestartPhaseRates</c>；默认 false 使用整轮累计连接/登录成功率，
+    /// true 时只统计首次计划重启前的预热、爬升和稳态阶段，避免预期重连风暴污染初始登录质量验收。
+    /// </summary>
+    public bool UsePreRestartPhaseRates { get; set; }
+
+    /// <summary>
     /// 获取或设置 <c>acceptance.minimumConnectionSuccessRate</c>；取值 0～1，默认空表示不验收，按 TCP 建连成功次数除以尝试次数计算。
     /// </summary>
     public double? MinimumConnectionSuccessRate { get; set; }
@@ -29,6 +35,26 @@ public sealed class AcceptanceOptions
     /// 获取或设置 <c>acceptance.maximumRecoverySeconds</c>；单位秒，默认空表示不验收，衡量故障结束后恢复目标在线规模的最长时间，零值无效。
     /// </summary>
     public double? MaximumRecoverySeconds { get; set; }
+
+    /// <summary>
+    /// 获取或设置 <c>acceptance.maximumReconnects</c>；单位为所有分片合计累计重连次数，默认空表示不验收，用于阻止仅满足最小重连数但发生级联重连的场景通过。
+    /// </summary>
+    public long? MaximumReconnects { get; set; }
+
+    /// <summary>
+    /// 获取或设置 <c>acceptance.maximumReconnectsPerDevice</c>；默认空表示不验收，按累计重连次数除以目标设备数计算，零值允许完全不重连。
+    /// </summary>
+    public double? MaximumReconnectsPerDevice { get; set; }
+
+    /// <summary>
+    /// 获取或设置 <c>acceptance.maximumSecondaryOutages</c>；单位为掉线事件数，默认空表示不验收，不包含计划重启阶段内首次被标记为计划重启的掉线事件。
+    /// </summary>
+    public int? MaximumSecondaryOutages { get; set; }
+
+    /// <summary>
+    /// 获取或设置 <c>acceptance.minimumStableOnlineSeconds</c>；单位秒，默认空表示不验收，要求测量快照时已经连续保持完整目标在线指定时长。
+    /// </summary>
+    public double? MinimumStableOnlineSeconds { get; set; }
 
     /// <summary>
     /// 获取或设置 <c>acceptance.minimumFinalOnlineCount</c>；单位为全部分片合计设备数，默认空表示不验收，多节点汇总时按节点在线数求和。

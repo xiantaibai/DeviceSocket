@@ -206,6 +206,14 @@ internal static class DetailedReportHtmlWriter
         AppendMetric(builder, "队列年龄峰值", analysis.Server is { } server ? $"{server.MaximumQueueAgeMilliseconds / 1000d:F1} 秒" : "不可评估", "Pipeline 最大等待", analysis.AcceptanceChecks.FirstOrDefault(item => item.Name == "业务管线最大排队年龄")?.Status == DetailedAcceptanceStatus.Passed);
         AppendMetric(builder, "ACK 最大耗时", analysis.Server is { } ackServer ? $"{ackServer.MaximumAckElapsedMilliseconds:N0} ms" : "不可评估", "组帧至 Socket Send 返回", analysis.AcceptanceChecks.FirstOrDefault(item => item.Name == "ACK 最大耗时")?.Status == DetailedAcceptanceStatus.Passed);
         AppendMetric(builder, "HTTP 成功率", httpRate.HasValue ? $"{httpRate:F2}%" : "无请求", $"{metrics.ApiRequestsSucceeded:N0} / {metrics.ApiRequestsStarted:N0}", httpRate is null or >= 99d);
+        AppendMetric(builder, "最严重恢复耗时", metrics.WorstRecoveryMilliseconds is { } worstRecovery ? $"{worstRecovery / 1000d:F1} 秒" : "未恢复", "按完整中断事件取最大值", metrics.WorstRecoveryMilliseconds.HasValue && !metrics.OutageActive);
+        var secondaryOutages = metrics.Outages.Count > 0
+            ? metrics.Outages.Count(item => !item.ExpectedServerRestart)
+            : analysis.ExpectedServerRestart
+                ? Math.Max(0, metrics.OutageCount - 1)
+                : metrics.OutageCount;
+        AppendMetric(builder, "非预期二次掉线", secondaryOutages.ToString("N0", CultureInfo.InvariantCulture), $"总中断 {metrics.OutageCount:N0}", secondaryOutages == 0);
+        AppendMetric(builder, "ACK 发送完成峰值", analysis.Server is { } completedServer ? $"{completedServer.MaximumAckSendCompletedElapsedMilliseconds:N0} ms" : "不可评估", "Socket Send 完成回调", analysis.AcceptanceChecks.FirstOrDefault(item => item.Name == "ACK 发送完成最大耗时")?.Status == DetailedAcceptanceStatus.Passed);
         builder.AppendLine("</div></section>");
     }
 
@@ -352,6 +360,7 @@ internal static class DetailedReportHtmlWriter
         AppendTableRow(builder, "连接尝试 / 成功 / 失败", $"{metrics.ConnectionAttempts:N0} / {metrics.ConnectionSucceeded:N0} / {metrics.ConnectionFailed:N0}");
         AppendTableRow(builder, "登录尝试 / 成功 / 失败", $"{metrics.LoginAttempts:N0} / {metrics.LoginSucceeded:N0} / {metrics.LoginFailed:N0}");
         AppendTableRow(builder, "心跳发送 / 确认 / 超时", $"{metrics.HeartbeatsSent:N0} / {metrics.HeartbeatsConfirmed:N0} / {metrics.HeartbeatTimeouts:N0}");
+        AppendTableRow(builder, "重连 / 掉线事件 / 最严重恢复", $"{metrics.ReconnectsScheduled:N0} / {metrics.OutageCount:N0} / {(metrics.WorstRecoveryMilliseconds.HasValue ? $"{metrics.WorstRecoveryMilliseconds.Value / 1000d:F1} 秒" : "未恢复")}");
         AppendTableRow(builder, "HTTP 发起 / 成功 / 失败 / 超时", $"{metrics.ApiRequestsStarted:N0} / {metrics.ApiRequestsSucceeded:N0} / {metrics.ApiRequestsFailed:N0} / {metrics.ApiRequestTimeouts:N0}");
         AppendTableRow(builder, "设备命令收到 / 应答", $"{metrics.GatherReadingCommandsReceived:N0} / {metrics.GatherReadingCommandsResponded:N0}");
         AppendTableRow(builder, "负载机 CPU / 工作集峰值", $"{analysis.LoadGeneratorResources.MaximumCpuPercent:F2}% / {Bytes(analysis.LoadGeneratorResources.MaximumWorkingSetBytes)}");
@@ -360,6 +369,12 @@ internal static class DetailedReportHtmlWriter
             AppendTableRow(builder, "物理 / 绑定 / 业务在线峰值", $"{server.MaximumSocketConnections:N0} / {server.MaximumBoundDeviceConnections:N0} / {server.MaximumBusinessOnlineDevices:N0}");
             AppendTableRow(builder, "Pipeline 队列深度 / 年龄峰值", $"{server.MaximumQueueDepth:N0} / {server.MaximumQueueAgeMilliseconds / 1000d:F1} 秒");
             AppendTableRow(builder, "Pipeline 失败 / 拒绝 / ACK 后拒绝", $"{server.PipelineFailed:N0} / {server.PipelineRejected:N0} / {server.AckedButRejected:N0}");
+            AppendTableRow(builder, "ACK 组帧发送 / 发送完成峰值", $"{server.MaximumAckElapsedMilliseconds:N0} / {server.MaximumAckSendCompletedElapsedMilliseconds:N0} ms");
+            AppendTableRow(builder, "待完成 ACK / 失败 / 中止", $"{server.MaximumPendingConfirmSend:N0} / {server.AckFailed:N0} / {server.AckSendAborted:N0}");
+            AppendTableRow(builder, "登录业务就绪最大耗时", $"{server.MaximumLoginBusinessReadyElapsedMilliseconds / 1000d:F1} 秒");
+            AppendTableRow(builder, "待建命令线路 / 命令管线深度峰值", $"{server.MaximumPendingCommandLine:N0} / {server.MaximumCommandLineQueueDepth:N0}");
+            AppendTableRow(builder, "命令线路压力保护次数 / 最长暂停", $"{server.CommandLineStartPauseCount:N0} / {server.MaximumCommandLineStartPauseElapsedMilliseconds / 1000d:F1} 秒");
+            AppendTableRow(builder, "连接关闭 / 错误 / 接收 / 其他", $"{server.ConnectionClosed:N0} / {server.ConnectionCloseWithError:N0} / {server.ConnectionCloseReceive:N0} / {server.ConnectionCloseOther:N0}");
         }
         builder.AppendLine("</tbody></table></div>");
     }

@@ -47,7 +47,8 @@ internal static class ReportMerger
             first.Options.Acceptance,
             (int)metrics.ExpectedOnline,
             gatewayObservation,
-            first.Options.Role);
+            first.Options.Role,
+            phases: reports.SelectMany(item => item.Phases).ToArray());
         var nodeOutcomes = reports
             .OrderBy(item => item.ShardIndex)
             .Select(item => new NodeRunOutcome

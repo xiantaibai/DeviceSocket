@@ -1,4 +1,5 @@
 using DeviceSocket.LoadTester.Metrics;
+using DeviceSocket.LoadTester.Configuration;
 
 namespace DeviceSocket.LoadTester.Tests.Metrics;
 
@@ -25,6 +26,33 @@ public sealed class LoadTestMetricsTests
         var snapshot = metrics.Snapshot(start.AddSeconds(3));
         Assert.Equal(2_000, snapshot.LastRecoveryMilliseconds);
         Assert.False(snapshot.OutageActive);
+    }
+
+    /// <summary>
+    /// 验证最严重恢复耗时不会被后续短暂掉线覆盖，并且计划重启阶段只有首次掉线被标记为计划事件。
+    /// </summary>
+    [Fact]
+    public void MultipleOutages_PreserveWorstRecoveryAndClassifySecondaryOutage()
+    {
+        var metrics = new LoadTestMetrics();
+        var start = DateTimeOffset.UtcNow;
+        metrics.SetCurrentPhase("restart", ScenarioPhaseKind.Fault, expectedServerRestart: true);
+        metrics.SetExpectedOnline(1, start);
+        metrics.LoginCompleted(TimeSpan.Zero, start);
+
+        metrics.ConnectionClosed(wasOnline: true, start.AddSeconds(1));
+        metrics.LoginCompleted(TimeSpan.Zero, start.AddSeconds(11));
+        metrics.ConnectionClosed(wasOnline: true, start.AddSeconds(12));
+        metrics.LoginCompleted(TimeSpan.Zero, start.AddSeconds(14));
+
+        var snapshot = metrics.Snapshot(start.AddSeconds(15));
+
+        Assert.Equal(2_000, snapshot.LastRecoveryMilliseconds);
+        Assert.Equal(10_000, snapshot.WorstRecoveryMilliseconds);
+        Assert.Equal(2, snapshot.Outages.Count);
+        Assert.True(snapshot.Outages[0].ExpectedServerRestart);
+        Assert.False(snapshot.Outages[1].ExpectedServerRestart);
+        Assert.Equal(1_000, snapshot.CurrentStableOnlineMilliseconds);
     }
 
     /// <summary>

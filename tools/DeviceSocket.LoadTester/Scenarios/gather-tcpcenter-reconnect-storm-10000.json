@@ -76,12 +76,24 @@
         "connectionsPerSecond": 300
       },
       {
-        // 进入本阶段后立即重启被测 Gather.TcpCenter；本阶段故意不配置 disconnectPercentage。
+        // 进入本阶段后按控制台准备倒计时和操作窗口重启 Gather.TcpCenter；本阶段故意不配置 disconnectPercentage。
         // 这样测到的是服务端进程冷启动、状态恢复和真实远端断线，而不是客户端自断线。
         "name": "restart-tcpcenter-now",
         "kind": "fault",
         "durationSeconds": 180,
         "targetDevicePercentage": 100,
+        // 本阶段首次掉线是操作人员主动重启导致的计划事件，后续再次全量掉线仍按非预期事件统计。
+        "expectedServerRestart": true,
+        "manualAction": {
+          "enabled": true,
+          "message": "请在操作窗口内重启被测 Gather.TcpCenter 服务；不要关闭 LoadTester。",
+          // 先给操作人员 5 秒准备并切换到服务器控制台。
+          "preparationSeconds": 5,
+          // 随后预留 30 秒执行停止、启动并确认进程拉起；所有分片都会等待同一窗口。
+          "operationSeconds": 30,
+          // 多分片时只让 shard-000 输出操作提示，避免多台负载机重复提醒。
+          "coordinatorOnlyPrompt": true
+        },
         // 重启后所有分片合计最多按 1000/s 建连，避免分片数放大全局风暴速率。
         "connectionsPerSecond": 1000
       },
@@ -111,6 +123,8 @@
     "enabled": false
   },
   "acceptance": {
+    // 初始连接、登录质量只统计计划重启前的正常阶段，避免预期风暴流量稀释成功率。
+    "usePreRestartPhaseRates": true,
     "minimumConnectionSuccessRate": 0.95,
     "minimumLoginSuccessRate": 0.95,
     "minimumFinalOnlineRate": 0.98,
@@ -119,7 +133,13 @@
     // 从首次在线连接掉线到重新达到完整阶段目标的时间上限。
     "maximumRecoverySeconds": 180,
     // 至少 98% 设备必须实际进入自动重连，未执行服务重启时该门槛会明确失败。
-    "minimumReconnects": 9800
+    "minimumReconnects": 9800,
+    // 正常一次全量重启通常每台设备只需一次重连；允许短暂失败，但禁止持续级联重连。
+    "maximumReconnectsPerDevice": 2,
+    // 计划重启后的第二次掉线即视为稳定性问题。
+    "maximumSecondaryOutages": 0,
+    // 最终重新达到一万在线后至少连续稳定 120 秒，避免刚追平就结束造成假通过。
+    "minimumStableOnlineSeconds": 120
   },
   "distributed": {
     "runId": "gather-reconnect-storm-10000",

@@ -231,7 +231,8 @@ internal static class LoadTesterApplication
             gatewayObservation,
             options.Role,
             options.Distributed.ShardIndex,
-            options.Distributed.ShardCount);
+            options.Distributed.ShardCount,
+            execution.Phases);
         var commandPhases = commandRunner?.Results.ToArray() ?? [];
         var cancelled = execution.Cancelled || cancellationObserved;
         var runStatus = ResolveRunStatus(executionFailure, cancelled, commandPhases, acceptance);

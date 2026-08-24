@@ -145,6 +145,17 @@ public static class LoadTestOptionsValidator
                 errors.Add($"scenario.phases[{phase.Name}].targetDevicePercentage: 必须在 0-100 之间。");
             if (phase.ConnectionsPerSecond is <= 0)
                 errors.Add($"scenario.phases[{phase.Name}].connectionsPerSecond: 设置后必须大于 0。");
+            if (phase.ManualAction.Enabled)
+            {
+                if (string.IsNullOrWhiteSpace(phase.ManualAction.Message))
+                    errors.Add($"scenario.phases[{phase.Name}].manualAction.message: 启用人工操作时不能为空。");
+                if (phase.ManualAction.PreparationSeconds < 0)
+                    errors.Add($"scenario.phases[{phase.Name}].manualAction.preparationSeconds: 不能小于 0。");
+                if (phase.ManualAction.OperationSeconds <= 0)
+                    errors.Add($"scenario.phases[{phase.Name}].manualAction.operationSeconds: 启用人工操作时必须大于 0。");
+            }
+            if (phase.ExpectedServerRestart && !phase.ManualAction.Enabled)
+                errors.Add($"scenario.phases[{phase.Name}]: expectedServerRestart=true 时必须启用 manualAction，确保计划重启具有明确时间标记。");
             ValidateFaults(phase, errors);
         }
 
@@ -191,6 +202,20 @@ public static class LoadTestOptionsValidator
             errors.Add("acceptance.maximumApiP95Milliseconds: 设置后必须大于 0。");
         if (options.Acceptance.MaximumRecoverySeconds is <= 0)
             errors.Add("acceptance.maximumRecoverySeconds: 设置后必须大于 0。");
+        if (options.Acceptance.MaximumReconnects is < 0)
+            errors.Add("acceptance.maximumReconnects: 不能小于 0。");
+        if (options.Acceptance.MinimumReconnects.HasValue &&
+            options.Acceptance.MaximumReconnects.HasValue &&
+            options.Acceptance.MinimumReconnects > options.Acceptance.MaximumReconnects)
+        {
+            errors.Add("acceptance: 最小重连次数不能大于最大重连次数。");
+        }
+        if (options.Acceptance.MaximumReconnectsPerDevice is < 0)
+            errors.Add("acceptance.maximumReconnectsPerDevice: 不能小于 0。");
+        if (options.Acceptance.MaximumSecondaryOutages is < 0)
+            errors.Add("acceptance.maximumSecondaryOutages: 不能小于 0。");
+        if (options.Acceptance.MinimumStableOnlineSeconds is < 0)
+            errors.Add("acceptance.minimumStableOnlineSeconds: 不能小于 0。");
         if (options.Acceptance.MinimumFinalOnlineCount is < 0)
             errors.Add("acceptance.minimumFinalOnlineCount: 不能小于 0。");
         if (options.Acceptance.MaximumFinalOnlineCount is < 0)

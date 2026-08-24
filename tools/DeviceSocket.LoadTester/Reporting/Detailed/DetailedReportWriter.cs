@@ -201,6 +201,8 @@ internal static class DetailedReportWriter
         builder.AppendLine($"| 建连尝试/成功/失败 | {metrics.ConnectionAttempts:N0}/{metrics.ConnectionSucceeded:N0}/{metrics.ConnectionFailed:N0} |");
         builder.AppendLine($"| 登录尝试/成功/失败 | {metrics.LoginAttempts:N0}/{metrics.LoginSucceeded:N0}/{metrics.LoginFailed:N0} |");
         builder.AppendLine($"| 心跳发送/确认/超时 | {metrics.HeartbeatsSent:N0}/{metrics.HeartbeatsConfirmed:N0}/{metrics.HeartbeatTimeouts:N0} |");
+        builder.AppendLine($"| 重连/掉线事件/非预期事件 | {metrics.ReconnectsScheduled:N0}/{metrics.OutageCount:N0}/{CountSecondaryOutages(analysis):N0} |");
+        builder.AppendLine($"| 最严重恢复/当前连续稳定 | {FormatRecovery(metrics.WorstRecoveryMilliseconds)}/{metrics.CurrentStableOnlineMilliseconds / 1000d:F1} 秒 |");
         builder.AppendLine($"| HTTP发起/成功/失败/超时 | {metrics.ApiRequestsStarted:N0}/{metrics.ApiRequestsSucceeded:N0}/{metrics.ApiRequestsFailed:N0}/{metrics.ApiRequestTimeouts:N0} |");
         builder.AppendLine($"| 设备命令收到/应答 | {metrics.GatherReadingCommandsReceived:N0}/{metrics.GatherReadingCommandsResponded:N0} |");
         builder.AppendLine($"| 连接 P50/P95/P99 | {metrics.ConnectionLatency.Percentile(0.5)}/{metrics.ConnectionLatency.Percentile(0.95)}/{metrics.ConnectionLatency.Percentile(0.99)} ms |");
@@ -214,10 +216,35 @@ internal static class DetailedReportWriter
             builder.AppendLine($"| Pipeline队列深度/年龄峰值 | {server.MaximumQueueDepth:N0}/{server.MaximumQueueAgeMilliseconds / 1000d:F1} 秒 |");
             builder.AppendLine($"| Pipeline失败/拒绝/ACK后拒绝 | {server.PipelineFailed:N0}/{server.PipelineRejected:N0}/{server.AckedButRejected:N0} |");
             builder.AppendLine($"| StaleBusiness/HeartbeatCoalesced | {server.StaleBusiness:N0}/{server.HeartbeatCoalesced:N0} |");
-            builder.AppendLine($"| ACK最大耗时 | {server.MaximumAckElapsedMilliseconds:N0} ms |");
+            builder.AppendLine($"| ACK组帧发送/发送完成最大耗时 | {server.MaximumAckElapsedMilliseconds:N0}/{server.MaximumAckSendCompletedElapsedMilliseconds:N0} ms |");
+            builder.AppendLine($"| ACK待完成峰值/失败/中止 | {server.MaximumPendingConfirmSend:N0}/{server.AckFailed:N0}/{server.AckSendAborted:N0} |");
+            builder.AppendLine($"| 登录业务就绪最大耗时 | {server.MaximumLoginBusinessReadyElapsedMilliseconds / 1000d:F1} 秒 |");
+            builder.AppendLine($"| 待建命令线路/命令管线深度峰值 | {server.MaximumPendingCommandLine:N0}/{server.MaximumCommandLineQueueDepth:N0} |");
+            builder.AppendLine($"| 命令线路压力保护次数/最长暂停 | {server.CommandLineStartPauseCount:N0}/{server.MaximumCommandLineStartPauseElapsedMilliseconds / 1000d:F1} 秒 |");
+            builder.AppendLine($"| 连接关闭/错误/接收/其他 | {server.ConnectionClosed:N0}/{server.ConnectionCloseWithError:N0}/{server.ConnectionCloseReceive:N0}/{server.ConnectionCloseOther:N0} |");
         }
         builder.AppendLine();
     }
+
+    /// <summary>
+    /// 统计非计划重启中断；旧报告没有事件明细时按总事件减去一次计划重启近似计算。
+    /// </summary>
+    /// <param name="analysis">包含客户端事件和场景计划重启语义的分析模型。</param>
+    /// <returns>非预期中断事件数。</returns>
+    private static long CountSecondaryOutages(DetailedReportAnalysis analysis) =>
+        analysis.ClientMetrics.Outages.Count > 0
+            ? analysis.ClientMetrics.Outages.Count(item => !item.ExpectedServerRestart)
+            : analysis.ExpectedServerRestart
+                ? Math.Max(0, analysis.ClientMetrics.OutageCount - 1)
+                : analysis.ClientMetrics.OutageCount;
+
+    /// <summary>
+    /// 将可空恢复毫秒值格式化为秒，缺少完整恢复事件时返回“未恢复”。
+    /// </summary>
+    /// <param name="milliseconds">恢复耗时毫秒数。</param>
+    /// <returns>适合报告展示的恢复时间。</returns>
+    private static string FormatRecovery(long? milliseconds) =>
+        milliseconds.HasValue ? $"{milliseconds.Value / 1000d:F1} 秒" : "未恢复";
 
     /// <summary>
     /// 输出自动诊断问题的分级证据列表。

@@ -77,6 +77,25 @@ internal static class AggregateReportWriter
         builder.AppendLine($"| 建连延迟 P50/P95/P99 | {metrics.ConnectionLatency.Percentile(0.50)}/{metrics.ConnectionLatency.Percentile(0.95)}/{metrics.ConnectionLatency.Percentile(0.99)} ms |");
         builder.AppendLine($"| HTTP 端到端延迟 P50/P95/P99 | {metrics.ApiRequestLatency.Percentile(0.50)}/{metrics.ApiRequestLatency.Percentile(0.95)}/{metrics.ApiRequestLatency.Percentile(0.99)} ms |");
         builder.AppendLine($"| Gather 读表本地响应延迟 P50/P95/P99 | {metrics.GatherReadingResponseLatency.Percentile(0.50)}/{metrics.GatherReadingResponseLatency.Percentile(0.95)}/{metrics.GatherReadingResponseLatency.Percentile(0.99)} ms |");
+        builder.AppendLine($"| 掉线事件/非预期事件 | {metrics.Outages.Count:N0}/{metrics.Outages.Count(item => !item.ExpectedServerRestart):N0} |");
+        builder.AppendLine($"| 最严重恢复耗时/当前连续稳定 | {FormatOptionalMilliseconds(metrics.WorstRecoveryMilliseconds)}/{metrics.CurrentStableOnlineMilliseconds / 1000d:F1} s |");
+        if (metrics.Outages.Count > 0)
+        {
+            builder.AppendLine();
+            builder.AppendLine("## 掉线与恢复事件");
+            builder.AppendLine();
+            builder.AppendLine("| # | 阶段 | 性质 | 开始 | 恢复 | 耗时 | 最低在线 | 最大离线 | 重连 | 端口占用 |");
+            builder.AppendLine("| ---: | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: |");
+            foreach (var outage in metrics.Outages)
+            {
+                builder.AppendLine(
+                    $"| {outage.Sequence:N0} | {EscapeMarkdownCell(outage.PhaseName)} | " +
+                    $"{(outage.ExpectedServerRestart ? "计划重启" : "非预期")} | {outage.StartedAtUtc:HH:mm:ss} UTC | " +
+                    $"{(outage.RecoveredAtUtc.HasValue ? $"{outage.RecoveredAtUtc:HH:mm:ss} UTC" : "未恢复")} | " +
+                    $"{FormatOptionalMilliseconds(outage.DurationMilliseconds)} | {outage.MinimumProtocolOnline:N0} | " +
+                    $"{outage.MaximumOfflineDevices:N0} | {outage.ReconnectsScheduled:N0} | {outage.AddressAlreadyInUse:N0} |");
+            }
+        }
         builder.AppendLine();
         builder.AppendLine("## 节点运行状态");
         builder.AppendLine();
@@ -127,4 +146,12 @@ internal static class AggregateReportWriter
     /// <param name="bytes">字节数。</param>
     /// <returns>保留两位小数的 MiB 文本。</returns>
     private static string FormatBytes(long bytes) => $"{bytes / 1024d / 1024d:F2} MiB";
+
+    /// <summary>
+    /// 将可空毫秒值转换为秒；未恢复事件显示“未恢复”。
+    /// </summary>
+    /// <param name="milliseconds">可空毫秒值。</param>
+    /// <returns>带秒单位的报告文本。</returns>
+    private static string FormatOptionalMilliseconds(long? milliseconds) =>
+        milliseconds.HasValue ? $"{milliseconds.Value / 1000d:F1} s" : "未恢复";
 }

@@ -73,7 +73,10 @@ public static class LoadTestConfigurationLoader
         options.Scenario ??= new ScenarioOptions();
         options.Scenario.Phases ??= [];
         foreach (var phase in options.Scenario.Phases)
+        {
+            phase.ManualAction ??= new ManualActionOptions();
             phase.Faults ??= new FaultInjectionOptions();
+        }
         options.Reporting ??= new ReportingOptions();
         options.ServerObservation ??= new ServerObservationOptions();
         options.Acceptance ??= new AcceptanceOptions();

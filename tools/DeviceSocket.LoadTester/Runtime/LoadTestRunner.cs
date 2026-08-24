@@ -61,13 +61,16 @@ internal sealed class LoadTestRunner(
                 }
                 var phaseStartedAt = DateTimeOffset.UtcNow;
                 var desired = GetLocalTargetCount(phase.TargetDevicePercentage);
+                metrics.SetCurrentPhase(phase.Name, phase.Kind, phase.ExpectedServerRestart);
                 metrics.SetExpectedOnline(desired, phaseStartedAt);
                 pacer.UpdateRate(ResolveConnectionRate(phase));
                 faultController.Apply(phase.Faults);
+                var phaseStartedMetrics = metrics.Snapshot(phaseStartedAt);
                 Console.WriteLine(
                     $"[阶段开始] {phase.Name} ({phase.Kind})，持续 {phase.DurationSeconds} 秒，" +
                     $"本地目标设备 {desired:N0}/{devices.Count:N0}");
                 await ResizeAsync(desired);
+                var manualAction = await RunManualActionAsync(phase, cancellationToken);
                 using var phaseCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 var disconnectTask = RunDisconnectWaveAsync(phase.Faults, phaseCancellation.Token);
 
@@ -100,16 +103,26 @@ internal sealed class LoadTestRunner(
 
                 var phaseEndedAt = DateTimeOffset.UtcNow;
                 var snapshot = metrics.Snapshot(phaseEndedAt);
+                var onlineRange = metrics.GetCurrentPhaseOnlineRange();
                 phaseResults.Add(new PhaseResult(
                     phase.Name,
                     phase.Kind,
                     phaseStartedAt,
                     phaseEndedAt,
                     desired,
-                    snapshot));
+                    snapshot,
+                    phaseStartedMetrics,
+                    PhaseMetricDelta.Between(phaseStartedMetrics, snapshot),
+                    onlineRange.Minimum,
+                    onlineRange.Maximum,
+                    phase.ExpectedServerRestart,
+                    manualAction.PromptedAtUtc,
+                    manualAction.WindowStartedAtUtc,
+                    manualAction.WindowEndedAtUtc));
                 Console.WriteLine(
                     $"[阶段结束] {phase.Name}，在线 {snapshot.ProtocolOnline:N0}/{snapshot.ExpectedOnline:N0}，" +
-                    $"累计重连 {snapshot.ReconnectsScheduled:N0}");
+                    $"阶段重连 {snapshot.ReconnectsScheduled - phaseStartedMetrics.ReconnectsScheduled:N0}，" +
+                    $"阶段最低在线 {onlineRange.Minimum:N0}");
                 if (phase.Kind != ScenarioPhaseKind.Cooldown)
                     measurement = snapshot;
                 if (cancelled)
@@ -128,7 +141,12 @@ internal sealed class LoadTestRunner(
                     ProtocolOnline = measurement.ProtocolOnline,
                     BackoffWaiting = measurement.BackoffWaiting,
                     OutageActive = measurement.OutageActive,
-                    LastRecoveryMilliseconds = measurement.LastRecoveryMilliseconds
+                    LastRecoveryMilliseconds = measurement.LastRecoveryMilliseconds,
+                    Outages = measurement.Outages,
+                    WorstRecoveryMilliseconds = measurement.WorstRecoveryMilliseconds,
+                    CurrentStableOnlineMilliseconds = measurement.CurrentStableOnlineMilliseconds,
+                    MaximumStableOnlineMilliseconds = measurement.MaximumStableOnlineMilliseconds,
+                    CurrentPhaseName = measurement.CurrentPhaseName
                 };
             }
 
@@ -146,6 +164,10 @@ internal sealed class LoadTestRunner(
         }
     }
 
+    /// <summary>
+    /// 获取显式阶段列表；未配置阶段时根据顶层场景时长构造单一全量稳态阶段。
+    /// </summary>
+    /// <returns>至少包含一个阶段的有序列表。</returns>
     private IReadOnlyList<ScenarioPhaseOptions> GetPhases()
     {
         if (options.Scenario.Phases.Count > 0)
@@ -195,12 +217,94 @@ internal sealed class LoadTestRunner(
         return globalConnectionsPerSecond / (double)shardCount;
     }
 
+    /// <summary>
+    /// 按全局设备序号和目标百分比计算当前分片应启动的设备数，保证多分片合计值与全局目标一致。
+    /// </summary>
+    /// <param name="percentage">全局目标设备百分比，取值由配置校验限制在 0～100。</param>
+    /// <returns>当前分片应保持运行的设备数。</returns>
     private int GetLocalTargetCount(double percentage)
     {
         var globalTarget = (int)Math.Ceiling(options.Devices.Count * percentage / 100d);
         return devices.Count(device => device.GlobalOrdinal < globalTarget);
     }
 
+    /// <summary>
+    /// 在启用手工动作的阶段显示准备提示和操作窗口倒计时；所有分片等待相同时间，仅协调节点按配置输出提示。
+    /// </summary>
+    /// <param name="phase">当前阶段及其手工动作配置。</param>
+    /// <param name="cancellationToken">取消整轮测试的令牌。</param>
+    /// <returns>操作提示和窗口的 UTC 时间标记；未启用时全部为空。</returns>
+    private async Task<ManualActionTiming> RunManualActionAsync(
+        ScenarioPhaseOptions phase,
+        CancellationToken cancellationToken)
+    {
+        var action = phase.ManualAction;
+        if (!action.Enabled)
+            return new ManualActionTiming(null, null, null);
+
+        var shouldPrompt = !action.CoordinatorOnlyPrompt || options.Distributed.ShardIndex == 0;
+        var promptedAt = DateTimeOffset.UtcNow;
+        if (shouldPrompt)
+        {
+            Console.WriteLine();
+            Console.WriteLine($"[需要人工操作] 阶段：{phase.Name}");
+            Console.WriteLine($"[需要人工操作] {action.Message}");
+            Console.WriteLine(
+                $"[需要人工操作] {action.PreparationSeconds} 秒后开始操作窗口，" +
+                $"窗口持续 {action.OperationSeconds} 秒。测试程序会自动等待，无需按键确认。");
+        }
+
+        await RunCountdownAsync(
+            action.PreparationSeconds,
+            "准备倒计时",
+            shouldPrompt,
+            cancellationToken);
+        var windowStartedAt = DateTimeOffset.UtcNow;
+        if (shouldPrompt)
+        {
+            Console.WriteLine();
+            Console.WriteLine($"[请立即操作] {action.Message}");
+            Console.WriteLine($"[请立即操作] 请在 {action.OperationSeconds} 秒内完成，期间连接与掉线指标已经开始记录。");
+        }
+        await RunCountdownAsync(
+            action.OperationSeconds,
+            "操作窗口",
+            shouldPrompt,
+            cancellationToken);
+        var windowEndedAt = DateTimeOffset.UtcNow;
+        if (shouldPrompt)
+            Console.WriteLine("[人工操作窗口结束] 继续执行当前阶段的稳定性观察。");
+
+        return new ManualActionTiming(promptedAt, windowStartedAt, windowEndedAt);
+    }
+
+    /// <summary>
+    /// 执行可取消的秒级倒计时，并在长窗口中按五秒间隔、最后五秒按每秒输出，兼顾可操作性与控制台噪声。
+    /// </summary>
+    /// <param name="seconds">倒计时总秒数；零表示不等待。</param>
+    /// <param name="title">控制台倒计时标签。</param>
+    /// <param name="writeConsole">是否在当前分片输出倒计时。</param>
+    /// <param name="cancellationToken">取消整轮测试的令牌。</param>
+    /// <returns>倒计时完成的异步任务。</returns>
+    private static async Task RunCountdownAsync(
+        int seconds,
+        string title,
+        bool writeConsole,
+        CancellationToken cancellationToken)
+    {
+        for (var remaining = seconds; remaining > 0; remaining--)
+        {
+            if (writeConsole && (remaining <= 5 || remaining == seconds || remaining % 5 == 0))
+                Console.WriteLine($"[{title}] 剩余 {remaining} 秒");
+            await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// 将当前分片设备会话扩缩到指定数量；缩容会等待旧任务完整退出后再释放取消源。
+    /// </summary>
+    /// <param name="desired">当前分片期望运行的设备数。</param>
+    /// <returns>全部新增会话已启动且待移除会话已退出时完成。</returns>
     private async Task ResizeAsync(int desired)
     {
         var desiredDevices = devices.Take(desired).Select(item => item.GlobalOrdinal).ToHashSet();
@@ -239,6 +343,10 @@ internal sealed class LoadTestRunner(
         }
     }
 
+    /// <summary>
+    /// 把目标在线数先降为零，再取消并等待所有设备会话退出，避免正常收尾被记录成掉线事件。
+    /// </summary>
+    /// <returns>所有设备任务已退出且资源已释放时完成。</returns>
     private async Task StopAllAsync()
     {
         metrics.SetExpectedOnline(0, DateTimeOffset.UtcNow);
@@ -250,6 +358,12 @@ internal sealed class LoadTestRunner(
         _handles.Clear();
     }
 
+    /// <summary>
+    /// 按阶段故障比例、批大小和间隔向稳定顺序的设备发送主动断线请求。
+    /// </summary>
+    /// <param name="faults">当前阶段故障注入参数。</param>
+    /// <param name="cancellationToken">阶段结束时取消剩余断线批次的令牌。</param>
+    /// <returns>全部计划断线批次已发出或阶段已取消时完成。</returns>
     private async Task RunDisconnectWaveAsync(
         FaultInjectionOptions faults,
         CancellationToken cancellationToken)
@@ -289,4 +403,15 @@ internal sealed class LoadTestRunner(
         VirtualDeviceSession Session,
         CancellationTokenSource Cancellation,
         Task Task);
+
+    /// <summary>
+    /// 保存人工操作提示、窗口开始和窗口结束时间，写入阶段报告后可与服务端 PID、连接和 ACK 指标对齐。
+    /// </summary>
+    /// <param name="PromptedAtUtc">首次显示或逻辑触发提示的 UTC 时间。</param>
+    /// <param name="WindowStartedAtUtc">正式操作窗口开始的 UTC 时间。</param>
+    /// <param name="WindowEndedAtUtc">正式操作窗口结束的 UTC 时间。</param>
+    private sealed record ManualActionTiming(
+        DateTimeOffset? PromptedAtUtc,
+        DateTimeOffset? WindowStartedAtUtc,
+        DateTimeOffset? WindowEndedAtUtc);
 }

@@ -461,4 +461,35 @@ public sealed class LoadTestOptionsValidatorTests
 
         Assert.Contains(errors, item => item.Contains("checkpointIntervalSeconds", StringComparison.Ordinal));
     }
+
+    /// <summary>
+    /// 验证计划服务端重启必须配置明确的人工操作窗口，避免报告无法判断哪次进程变化属于预期行为。
+    /// </summary>
+    [Fact]
+    public void ExpectedServerRestart_RequiresValidManualActionWindow()
+    {
+        var options = TestOptionsFactory.Create();
+        options.Scenario.Phases =
+        [
+            new ScenarioPhaseOptions
+            {
+                Name = "restart",
+                DurationSeconds = 60,
+                ExpectedServerRestart = true
+            }
+        ];
+
+        var missingWindowErrors = LoadTestOptionsValidator.Validate(options);
+        options.Scenario.Phases[0].ManualAction = new ManualActionOptions
+        {
+            Enabled = true,
+            Message = "请重启服务",
+            PreparationSeconds = 5,
+            OperationSeconds = 30
+        };
+        var validErrors = LoadTestOptionsValidator.Validate(options);
+
+        Assert.Contains(missingWindowErrors, item => item.Contains("manualAction", StringComparison.Ordinal));
+        Assert.Empty(validErrors);
+    }
 }

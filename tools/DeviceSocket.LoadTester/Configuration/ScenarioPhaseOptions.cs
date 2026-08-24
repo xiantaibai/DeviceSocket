@@ -31,6 +31,16 @@ public sealed class ScenarioPhaseOptions
     public int? ConnectionsPerSecond { get; set; }
 
     /// <summary>
+    /// 获取或设置 <c>scenario.phases[].expectedServerRestart</c>；默认 false，true 表示该阶段预期服务端进程恰好发生一次计划重启，供详细报告区分计划操作和异常退出。
+    /// </summary>
+    public bool ExpectedServerRestart { get; set; }
+
+    /// <summary>
+    /// 获取或设置 <c>scenario.phases[].manualAction</c>；默认禁用，启用后在阶段负载开始前显示提示并等待固定的准备与操作时间。
+    /// </summary>
+    public ManualActionOptions ManualAction { get; set; } = new();
+
+    /// <summary>
     /// 获取或设置 <c>scenario.phases[].faults</c>；默认全部故障参数为零，阶段进入时替换当前故障快照，离开后由下一阶段配置覆盖。
     /// </summary>
     public FaultInjectionOptions Faults { get; set; } = new();

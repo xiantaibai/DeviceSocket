@@ -124,6 +124,63 @@ public sealed class ReportMergerTests
         }
     }
 
+    /// <summary>
+    /// 验证两个分片记录的同一次计划重启只形成一个集群事件，并以最早掉线到最晚恢复计算整体恢复耗时。
+    /// </summary>
+    [Fact]
+    public void SameRestartOutageAcrossShards_IsMergedOnce()
+    {
+        var startedAt = DateTimeOffset.UtcNow;
+        var first = new MetricSnapshot
+        {
+            OutageCount = 1,
+            Outages = [CreateOutage(startedAt, startedAt.AddSeconds(10), minimumOnline: 0)]
+        };
+        var second = new MetricSnapshot
+        {
+            OutageCount = 1,
+            Outages = [CreateOutage(startedAt.AddSeconds(1), startedAt.AddSeconds(12), minimumOnline: 100)]
+        };
+
+        var merged = MetricSnapshotAggregator.Merge([first, second]);
+
+        Assert.Equal(1, merged.OutageCount);
+        var outage = Assert.Single(merged.Outages);
+        Assert.Equal(12_000, outage.DurationMilliseconds);
+        Assert.Equal(100, outage.MinimumProtocolOnline);
+        Assert.Equal(12_000, merged.WorstRecoveryMilliseconds);
+    }
+
+    /// <summary>
+    /// 创建单分片计划重启事件，用于验证集群事件合并口径。
+    /// </summary>
+    /// <param name="startedAtUtc">分片掉线开始时间。</param>
+    /// <param name="recoveredAtUtc">分片恢复时间。</param>
+    /// <param name="minimumOnline">分片事件最低在线数。</param>
+    /// <returns>包含固定计数的事件快照。</returns>
+    private static OutageEventSnapshot CreateOutage(
+        DateTimeOffset startedAtUtc,
+        DateTimeOffset recoveredAtUtc,
+        long minimumOnline) => new()
+        {
+            Sequence = 1,
+            PhaseName = "restart",
+            PhaseKind = ScenarioPhaseKind.Fault,
+            ExpectedServerRestart = true,
+            StartedAtUtc = startedAtUtc,
+            RecoveredAtUtc = recoveredAtUtc,
+            DurationMilliseconds = (long)(recoveredAtUtc - startedAtUtc).TotalMilliseconds,
+            ExpectedOnline = 5_000,
+            MinimumProtocolOnline = minimumOnline,
+            MaximumOfflineDevices = 5_000 - minimumOnline,
+            ConnectionAttempts = 5_000,
+            ConnectionFailures = 0,
+            LoginFailures = 0,
+            HeartbeatTimeouts = 0,
+            ReconnectsScheduled = 5_000,
+            AddressAlreadyInUse = 0
+        };
+
     private static NodeReport CreateReport(int shardIndex, string nodeName)
     {
         var options = TestOptionsFactory.Create();

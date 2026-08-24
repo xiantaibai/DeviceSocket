@@ -231,7 +231,21 @@ meterId,deviceId
 | `scenario.phases[].durationSeconds` | int | `60` | 阶段保持时间秒数，必须大于 0 | 稳态阶段通常比爬升阶段更长 |
 | `scenario.phases[].targetDevicePercentage` | double | `100` | 0～100，按全局设备数计算本阶段目标在线设备；0 会缩容并停止所有设备 | 50 表示保持一半规模，100 表示全部设备 |
 | `scenario.phases[].connectionsPerSecond` | int/null | `null` | null 继承 `connection.connectionsPerSecond`；设置后必须大于 0 | 为不同爬升阶段配置不同速率 |
+| `scenario.phases[].expectedServerRestart` | bool | `false` | true 表示本阶段首次从完整在线跌落是计划内服务端重启；同阶段恢复后再次掉线仍属于非预期事件。true 时必须启用 `manualAction.enabled` | 真实停止并启动 Gather.TcpCenter 的重启恢复场景 |
+| `scenario.phases[].manualAction` | object | 见下表 | 阶段扩容完成后先执行准备倒计时和操作窗口，再开始 `durationSeconds` 保持计时；所有分片都会等待相同总时长 | 需要人工重启、切换网络或执行外部操作的阶段 |
 | `scenario.phases[].faults` | object | 全部为 0 | 本阶段故障快照；进入下一阶段时被下一阶段配置覆盖 | 只在 fault 阶段设置非零值，恢复阶段恢复为零 |
+
+### 人工操作窗口：`scenario.phases[].manualAction`
+
+| 字段 | 类型 | 默认值 | 意义与约束 | 使用场景 |
+| --- | --- | --- | --- | --- |
+| `scenario.phases[].manualAction.enabled` | bool | `false` | 是否在阶段开始时暂停并显示人工操作倒计时；false 时其他人工操作字段不生效 | 真实服务重启或需要手工切换外部状态 |
+| `scenario.phases[].manualAction.message` | string | `请准备重启被测服务端。` | 启用后不能为空，原样显示在协调节点控制台 | 写清被测服务名、操作动作和禁止误关 LoadTester 等注意事项 |
+| `scenario.phases[].manualAction.preparationSeconds` | int | `5` | 准备倒计时秒数，不能小于 0；0 表示立即进入操作窗口 | 给操作人员切换到服务器控制台、打开服务管理器 |
+| `scenario.phases[].manualAction.operationSeconds` | int | `20` | 实际操作窗口秒数，必须大于 0；窗口结束后才开始阶段保持计时 | 按停止、启动、确认进程就绪所需时间设置，通常 20～60 秒 |
+| `scenario.phases[].manualAction.coordinatorOnlyPrompt` | bool | `true` | true 时仅 `shardIndex=0` 输出提示和逐秒倒计时，但所有分片仍同步等待；false 时每个分片都提示 | 多负载机推荐 true，单机取值无差异 |
+
+人工操作不是自动远程控制服务。正式重启场景进入准备倒计时后，操作人员应在 `operationSeconds` 窗口内完成重启；节点报告会记录提示、窗口开始和结束 UTC 时间，用于与服务端指标及 PerfView 对齐。
 
 ### 故障注入：`scenario.phases[].faults`
 
@@ -273,14 +287,19 @@ meterId,deviceId
 
 | 字段 | 类型 | 默认值 | 意义与约束 | 使用场景 |
 | --- | --- | --- | --- | --- |
-| `acceptance.minimumConnectionSuccessRate` | double/null | `null` | TCP 建连成功次数/尝试次数的下限 | 容量爬升和网络质量验收 |
-| `acceptance.minimumLoginSuccessRate` | double/null | `null` | 协议登录成功次数/登录尝试次数的下限 | 区分仅连上端口与真正设备上线 |
+| `acceptance.usePreRestartPhaseRates` | bool | `false` | false 按整轮累计计数计算连接/登录成功率；true 时只统计首次计划重启前的 warmup、ramp、steady 阶段。阶段明细缺失时回退整轮口径 | 真实服务重启场景，避免预期重连失败污染初始登录质量 |
+| `acceptance.minimumConnectionSuccessRate` | double/null | `null` | TCP 建连成功次数/尝试次数的下限；统计范围受 `usePreRestartPhaseRates` 控制 | 容量爬升和网络质量验收 |
+| `acceptance.minimumLoginSuccessRate` | double/null | `null` | 协议登录成功次数/登录尝试次数的下限；统计范围受 `usePreRestartPhaseRates` 控制 | 区分仅连上端口与真正设备上线 |
 | `acceptance.minimumFinalOnlineRate` | double/null | `0.95` | 结束测量时在线设备数/期望在线数的下限 | 常规稳定性测试建议 0.95～0.99 |
 | `acceptance.maximumProtocolErrorRate` | double/null | `0.01` | 非法帧数/接收帧数的上限 | 检测拆包、协议兼容和校验异常 |
-| `acceptance.maximumRecoverySeconds` | double/null | `null` | 故障结束后恢复目标在线规模的最长秒数，设置后必须大于 0 | 服务重启和断线风暴恢复测试 |
+| `acceptance.maximumRecoverySeconds` | double/null | `null` | 单次在线中断从首次低于目标到重新达到目标的最大秒数，取整轮最严重事件而不是最后一次事件；存在未恢复事件时失败，设置后必须大于 0 | 服务重启和断线风暴恢复测试 |
 | `acceptance.minimumFinalOnlineCount` | int/null | `null` | 最终在线设备数下限，不能小于 0 | 需要精确要求 9800 或 10000 台时使用 |
 | `acceptance.maximumFinalOnlineCount` | int/null | `null` | 最终在线设备数上限，不能小于 0且不能小于最小值 | 验证缩容阶段只保留预期设备数 |
 | `acceptance.minimumReconnects` | long/null | `null` | 所有分片合计的累计自动重连次数下限，不能小于 0；节点退出码按全局序号分摊本地配额，汇总报告按全局值重新验收 | 确认断线故障确实触发重连链路 |
+| `acceptance.maximumReconnects` | long/null | `null` | 所有分片合计的累计自动重连次数上限，不能小于 0，且不得小于 `minimumReconnects` | 防止达到最小重连要求后仍发生无界重试 |
+| `acceptance.maximumReconnectsPerDevice` | double/null | `null` | 累计重连次数/目标设备数上限，不能小于 0；0 表示不允许重连 | 不同设备规模复用同一级联重连门槛 |
+| `acceptance.maximumSecondaryOutages` | int/null | `null` | 非预期掉线事件数上限，不能小于 0；计划重启阶段首次掉线不计入，恢复后的再次掉线计入 | 重启恢复后必须持续稳定的验收 |
+| `acceptance.minimumStableOnlineSeconds` | double/null | `null` | 报告测量快照前已经连续保持完整目标在线的最短秒数，不能小于 0；0 仅要求快照时在线 | 防止刚恢复满在线就结束造成假通过 |
 | `acceptance.minimumObservedAuthenticatedDevices` | int/null | `null` | 服务端观测到的本轮新增认证设备峰值下限 | 校验客户端认为在线与服务端认证数一致；必须启用 serverObservation |
 | `acceptance.maximumObservedAuthenticatedDevices` | int/null | `null` | 服务端观测到的本轮新增认证设备峰值上限 | 限制重复 Session 或连接泄漏；必须启用 serverObservation |
 | `acceptance.minimumApiSuccessRate` | double/null | `null` | HTTP 状态和响应体 `success=true` 的业务成功率下限 | HTTP 指令负载验收 |
