@@ -16,7 +16,7 @@ public sealed class DeviceOptions
     public DeviceAddressGenerationMode GenerationMode { get; set; } = DeviceAddressGenerationMode.Sequential;
 
     /// <summary>
-    /// 获取或设置 <c>devices.deviceMappingFile</c>；默认空，仅 CSV 模式必填，文件每行格式为 <c>meterId,deviceId</c>，相对路径按场景 JSON 所在目录解析。
+    /// 获取或设置 <c>devices.deviceMappingFile</c>；默认空，仅 CSV 模式必填，文件每行格式为 <c>meterId,deviceId</c>，相对路径按场景 JSON 所在目录解析；仅 <c>qGdw3761 + gatherTcpCenter</c> 兼容配置允许真实特殊终端地址 <c>00000</c>。
     /// </summary>
     public string? DeviceMappingFile { get; set; }
 

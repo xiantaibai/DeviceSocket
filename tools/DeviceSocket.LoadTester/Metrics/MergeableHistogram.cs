@@ -8,7 +8,8 @@ public sealed class MergeableHistogram
     private static readonly long[] UpperBounds =
     [
         1, 2, 5, 10, 20, 50, 100, 200, 500, 1_000, 2_000, 5_000,
-        10_000, 30_000, 60_000, 120_000, 300_000, long.MaxValue
+        10_000, 30_000, 45_000, 55_000, 60_000, 65_000, 70_000, 75_000,
+        90_000, 120_000, 300_000, long.MaxValue
     ];
 
     private readonly long[] _counts = new long[UpperBounds.Length];

@@ -173,7 +173,9 @@ public sealed class LoadTestOptionsValidatorTests
         {
             "gather-tcpcenter-connections-10000.json",
             "gather-tcpcenter-http-reading-10000.json",
+            "gather-tcpcenter-http-reading-50000.json",
             "gather-tcpcenter-reconnect-storm-10000.json",
+            "gather-tcpcenter-reconnect-storm-50000.json",
             "gather-tcpcenter-soak-10000.json"
         };
 
@@ -191,7 +193,7 @@ public sealed class LoadTestOptionsValidatorTests
     }
 
     /// <summary>
-    /// 验证标准 HTTP 场景覆盖全部在线设备，并使用面向 8 核 16 GiB 服务器的正常请求速率。
+    /// 验证标准 HTTP 场景等待一万台稳定在线、覆盖全部设备，并使用可逐级排空的基准请求速率。
     /// </summary>
     [Fact]
     public async Task StandardGatherHttpScenario_CoversAllOnlineDevicesAndUsesNormalRequestRate()
@@ -214,21 +216,80 @@ public sealed class LoadTestOptionsValidatorTests
         Assert.Equal(CommandTargetSource.OnlineRegistry, options.CommandWorkload.TargetDeviceSource);
         Assert.Equal(0, allDevicesPhase.TargetDeviceCount);
         Assert.Equal(1, allDevicesPhase.RequestsPerDevice);
-        Assert.Equal(200, allDevicesPhase.RequestsPerSecond);
+        Assert.Equal(10_000, options.CommandWorkload.MinimumOnlineCount);
+        Assert.Equal(60, options.CommandWorkload.OnlineStableSeconds);
+        Assert.Equal(50, allDevicesPhase.RequestsPerSecond);
         Assert.Equal(100, allDevicesPhase.MaxConcurrency);
         Assert.False(allDevicesPhase.ShowResult);
+        Assert.True(allDevicesPhase.DrainEnabled);
+        Assert.Equal(0.98, allDevicesPhase.MinimumRawDeliveryRate);
+        Assert.Equal(0.98, allDevicesPhase.MinimumDeliveryRate);
+        Assert.Equal(CommandDrainFailureAction.AbortRun, allDevicesPhase.DrainFailureAction);
+        Assert.True(allDevicesPhase.CircuitBreakerEnabled);
     }
 
     /// <summary>
-    /// 验证四台负载机读取同一份万人 CSV 时，每个真实设备只会分配给一个分片且全局没有遗漏。
+    /// 验证两个五万台正式场景均使用四分片、完整真实 CSV 和已经按五万规模校正的关键门槛。
     /// </summary>
     [Fact]
-    public async Task GatherCsvScenario_FourShardsPartitionAllDevicesWithoutDuplicates()
+    public async Task FiftyThousandGatherScenarios_UseFourShardsAndScaledThresholds()
+    {
+        var scenarioDirectory = Path.Combine(AppContext.BaseDirectory, "Scenarios");
+        var reconnectOptions = await LoadTestConfigurationLoader.LoadAsync(
+            Path.Combine(scenarioDirectory, "gather-tcpcenter-reconnect-storm-50000.json"),
+            new RunCommandOverrides(),
+            CancellationToken.None);
+        var httpOptions = await LoadTestConfigurationLoader.LoadAsync(
+            Path.Combine(scenarioDirectory, "gather-tcpcenter-http-reading-50000.json"),
+            new RunCommandOverrides(),
+            CancellationToken.None);
+        var allDevicesPhase = Assert.Single(
+            httpOptions.CommandWorkload.Phases,
+            phase => phase.Name == "all-devices-async-once-50000");
+
+        Assert.Equal(50_000, reconnectOptions.Devices.Count);
+        Assert.Equal(4, reconnectOptions.Distributed.ShardCount);
+        Assert.Equal("gather-tcpcenter-reconnect-storm-50000", reconnectOptions.Scenario.Name);
+        Assert.Equal(49_000, reconnectOptions.Acceptance.MinimumReconnects);
+        Assert.Contains(reconnectOptions.Scenario.Phases, phase => phase.Name == "ramp-50000");
+        Assert.Contains(reconnectOptions.Scenario.Phases, phase => phase.Name == "recovery-50000");
+        Assert.Equal(20, reconnectOptions.Scenario.Phases.Single(
+            phase => phase.Name == "restart-tcpcenter-now").ManualAction.PreparationSeconds);
+        Assert.Equal(60, reconnectOptions.Scenario.Phases.Single(
+            phase => phase.Name == "restart-tcpcenter-now").ManualAction.OperationSeconds);
+
+        Assert.Equal(50_000, httpOptions.Devices.Count);
+        Assert.Equal(4, httpOptions.Distributed.ShardCount);
+        Assert.Equal(LoadTestRole.Combined, httpOptions.Role);
+        Assert.Equal(CommandTargetSource.OnlineRegistry, httpOptions.CommandWorkload.TargetDeviceSource);
+        Assert.Equal(50_000, httpOptions.CommandWorkload.MinimumOnlineCount);
+        Assert.Equal(0, allDevicesPhase.TargetDeviceCount);
+        Assert.Equal(1, allDevicesPhase.RequestsPerDevice);
+        Assert.Equal(50, allDevicesPhase.RequestsPerSecond);
+        Assert.Equal(100, allDevicesPhase.MaxConcurrency);
+        Assert.Equal(1_500, allDevicesPhase.MaximumDurationSeconds);
+        Assert.Equal(1_800, allDevicesPhase.DrainTimeoutSeconds);
+        Assert.Equal(2_400, httpOptions.Reporting.DownstreamDiagnostics.CorrelationTimeoutSeconds);
+    }
+
+    /// <summary>
+    /// 验证四台负载机读取同一份完整 CSV 时，每个真实设备只会分配给一个分片且全局没有遗漏。
+    /// </summary>
+    /// <param name="scenarioFileName">需要验证的正式场景文件名。</param>
+    /// <param name="globalDeviceCount">四个分片合计的预期设备数。</param>
+    /// <param name="localDeviceCount">每个分片的预期固定设备数。</param>
+    [Theory]
+    [InlineData("gather-tcpcenter-connections-10000.json", 10_000, 2_500)]
+    [InlineData("gather-tcpcenter-reconnect-storm-50000.json", 50_000, 12_500)]
+    public async Task GatherCsvScenario_FourShardsPartitionAllDevicesWithoutDuplicates(
+        string scenarioFileName,
+        int globalDeviceCount,
+        int localDeviceCount)
     {
         var path = Path.Combine(
             AppContext.BaseDirectory,
             "Scenarios",
-            "gather-tcpcenter-connections-10000.json");
+            scenarioFileName);
         var ordinals = new HashSet<int>();
 
         for (var shardIndex = 0; shardIndex < 4; shardIndex++)
@@ -239,12 +300,12 @@ public sealed class LoadTestOptionsValidatorTests
                 CancellationToken.None);
             var devices = DeviceAddressAllocator.Allocate(options);
 
-            Assert.Equal(2_500, devices.Count);
+            Assert.Equal(localDeviceCount, devices.Count);
             Assert.All(devices, device => Assert.True(ordinals.Add(device.GlobalOrdinal)));
         }
 
-        Assert.Equal(10_000, ordinals.Count);
-        Assert.Equal(Enumerable.Range(0, 10_000), ordinals.Order());
+        Assert.Equal(globalDeviceCount, ordinals.Count);
+        Assert.Equal(Enumerable.Range(0, globalDeviceCount), ordinals.Order());
     }
 
     /// <summary>
@@ -410,7 +471,7 @@ public sealed class LoadTestOptionsValidatorTests
     }
 
     /// <summary>
-    /// 验证 HTTP 阶段在线门槛不能超过当前阶段目标数，且阶段等待上限设置后必须大于零。
+    /// 验证 HTTP 阶段在线门槛不能超过全局设备数，且阶段等待上限设置后必须大于零。
     /// </summary>
     [Fact]
     public void CommandPhaseOnlineGate_InvalidValuesAreRejected()
@@ -433,7 +494,7 @@ public sealed class LoadTestOptionsValidatorTests
                     RequestsPerDevice = 1,
                     RequestsPerSecond = 10,
                     MaxConcurrency = 5,
-                    MinimumOnlineCount = 11,
+                    MinimumOnlineCount = 21,
                     OnlineStableSeconds = -1,
                     OnlineWaitTimeoutSeconds = 0
                 }
@@ -460,6 +521,29 @@ public sealed class LoadTestOptionsValidatorTests
         var errors = LoadTestOptionsValidator.Validate(options);
 
         Assert.Contains(errors, item => item.Contains("checkpointIntervalSeconds", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// 验证下行诊断样本上限、Hex 长度和关联窗口越界时会在压测启动前被拒绝。
+    /// </summary>
+    [Fact]
+    public void DownstreamDiagnostics_InvalidBoundsAreRejected()
+    {
+        var options = TestOptionsFactory.Create();
+        options.Reporting.DownstreamDiagnostics = new DownstreamDiagnosticsOptions
+        {
+            MaxSamplesPerFingerprint = 101,
+            MaxTotalSamples = 10_001,
+            RawHexMaxBytes = 4097,
+            CorrelationTimeoutSeconds = 0
+        };
+
+        var errors = LoadTestOptionsValidator.Validate(options);
+
+        Assert.Contains(errors, item => item.Contains("maxSamplesPerFingerprint", StringComparison.Ordinal));
+        Assert.Contains(errors, item => item.Contains("maxTotalSamples", StringComparison.Ordinal));
+        Assert.Contains(errors, item => item.Contains("rawHexMaxBytes", StringComparison.Ordinal));
+        Assert.Contains(errors, item => item.Contains("correlationTimeoutSeconds", StringComparison.Ordinal));
     }
 
     /// <summary>

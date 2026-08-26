@@ -31,7 +31,10 @@ internal static class GatherDeviceMeterMappingLoader
         var path = !string.IsNullOrWhiteSpace(options.CommandWorkload.DeviceMappingFile)
             ? options.CommandWorkload.DeviceMappingFile
             : options.Devices.DeviceMappingFile;
-        return LoadCsv(path!, devices);
+        var allowZeroTerminalAddress =
+            options.Target.Protocol == LoadProtocol.QGdw3761 &&
+            options.Target.CompatibilityProfile == ServerCompatibilityProfile.GatherTcpCenter;
+        return LoadCsv(path!, devices, allowZeroTerminalAddress);
     }
 
     /// <summary>
@@ -39,15 +42,17 @@ internal static class GatherDeviceMeterMappingLoader
     /// </summary>
     /// <param name="path">包含 <c>meterId,deviceId</c> 两列的 CSV 绝对路径。</param>
     /// <param name="devices">当前分片设备。</param>
+    /// <param name="allowZeroTerminalAddress">是否接受 Gather 老库真实存在的特殊终端地址 <c>00000</c>。</param>
     /// <returns>按全局设备序号排序的本地映射。</returns>
     private static IReadOnlyList<GatherDeviceMeterMapping> LoadCsv(
         string path,
-        IReadOnlyList<VirtualDeviceDescriptor> devices)
+        IReadOnlyList<VirtualDeviceDescriptor> devices,
+        bool allowZeroTerminalAddress)
     {
         var localDevices = devices.ToDictionary(
             device => device.DeviceId,
             StringComparer.OrdinalIgnoreCase);
-        return DeviceIdentityCsvLoader.Load(path)
+        return DeviceIdentityCsvLoader.Load(path, allowZeroTerminalAddress)
             .Where(entry => localDevices.ContainsKey(entry.DeviceId))
             .Select(entry => new GatherDeviceMeterMapping(localDevices[entry.DeviceId], entry.MeterId))
             .OrderBy(item => item.Device.GlobalOrdinal)

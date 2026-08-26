@@ -101,4 +101,34 @@ public sealed class AcceptanceOptions
     /// 获取或设置 <c>acceptance.maximumApiP95Milliseconds</c>；单位毫秒，默认空表示不验收，限制 HTTP 请求端到端延迟第 95 百分位，零值无效。
     /// </summary>
     public long? MaximumApiP95Milliseconds { get; set; }
+
+    /// <summary>
+    /// 获取或设置 <c>acceptance.minimumAsyncApiAcceptanceRate</c>；取值 0～1，默认空表示不验收，
+    /// 只汇总 <c>showResult=false</c> 阶段的 HTTP 业务成功数除以发起数。
+    /// </summary>
+    public double? MinimumAsyncApiAcceptanceRate { get; set; }
+
+    /// <summary>
+    /// 获取或设置 <c>acceptance.minimumSyncResultSuccessRate</c>；取值 0～1，默认空表示不验收，
+    /// 只汇总 <c>showResult=true</c> 阶段的同步业务成功数除以发起数。
+    /// </summary>
+    public double? MinimumSyncResultSuccessRate { get; set; }
+
+    /// <summary>
+    /// 获取或设置 <c>acceptance.minimumCommandDeliveryRate</c>；取值 0～1，默认空表示不验收，
+    /// 按全部已执行 HTTP 阶段的原始下行唯一命令数除以 API 估算已入队数计算，未知协议格式也计为已交付。
+    /// </summary>
+    public double? MinimumCommandDeliveryRate { get; set; }
+
+    /// <summary>
+    /// 获取或设置 <c>acceptance.minimumCommandRecognitionRate</c>；取值 0～1，默认空表示不验收，
+    /// 按协议已识别唯一命令数除以原始下行唯一命令数计算，用于把“服务端未下发”和“模拟器未兼容报文”分开判定。
+    /// </summary>
+    public double? MinimumCommandRecognitionRate { get; set; }
+
+    /// <summary>
+    /// 获取或设置 <c>acceptance.maximumUnobservedCommands</c>；单位命令数，默认空表示不验收，
+    /// 表示 API 估算已入队但在阶段排空窗口内没有关联到任何原始下行的最大允许数量，零表示不允许缺口。
+    /// </summary>
+    public long? MaximumUnobservedCommands { get; set; }
 }

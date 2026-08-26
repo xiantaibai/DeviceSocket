@@ -11,7 +11,7 @@ public enum ServerCompatibilityProfile
     DeviceSocket,
 
     /// <summary>
-    /// 兼容 Gather.TcpCenter 老服务的376.1确认帧和指令关联规则。
+    /// 兼容 Gather.TcpCenter 老服务的376.1确认帧、指令关联规则，以及 CSV 真实设备映射中的特殊终端地址 <c>00000</c>。
     /// </summary>
     GatherTcpCenter
 }

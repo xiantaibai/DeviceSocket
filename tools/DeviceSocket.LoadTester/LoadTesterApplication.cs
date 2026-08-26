@@ -123,6 +123,9 @@ internal static class LoadTesterApplication
         var outputDirectory = GetNodeOutputDirectory(options);
         var metrics = new LoadTestMetrics();
         var onlineRegistry = new DeviceOnlineRegistry();
+        var commandTraceRegistry = options.CommandWorkload.Enabled && options.Reporting.DownstreamDiagnostics.Enabled
+            ? new GatherCommandTraceRegistry(options.Reporting.DownstreamDiagnostics)
+            : null;
         var protocol = LoadTestProtocolFactory.Create(options);
         var initialGlobalRate = options.Connection.StartMode == ConnectionStartMode.Burst
             ? 0
@@ -143,7 +146,8 @@ internal static class LoadTesterApplication
                 onlineRegistry,
                 pacer,
                 connectionGate,
-                faultController);
+                faultController,
+                commandTraceRegistry);
         GatherCommandWorkloadRunner? commandRunner = null;
         ScenarioExecutionResult? execution = null;
         Exception? executionFailure = null;
@@ -163,9 +167,10 @@ internal static class LoadTesterApplication
                     devices,
                     metrics,
                     options.Role == LoadTestRole.Combined &&
-                    options.CommandWorkload.TargetDeviceSource == CommandTargetSource.OnlineRegistry
-                        ? onlineRegistry
-                        : null);
+                     options.CommandWorkload.TargetDeviceSource == CommandTargetSource.OnlineRegistry
+                         ? onlineRegistry
+                         : null,
+                    commandTraceRegistry);
             // 多节点必须在统一启动时刻之前各自完成基线采样，避免先启动的分片进入后启动分片的环境基线。
             await reporter.CaptureBaselineAsync(cancellationToken);
             await WaitForScheduledStartAsync(options.Distributed.StartAtUtc, cancellationToken);
@@ -216,7 +221,7 @@ internal static class LoadTesterApplication
         }
         var gatewayObservation = reporter.GatewaySummary;
 
-        execution ??= new ScenarioExecutionResult(
+        execution ??= runner?.LastExecution ?? new ScenarioExecutionResult(
             runStartedAtUtc,
             DateTimeOffset.UtcNow,
             metrics.Snapshot(DateTimeOffset.UtcNow),
@@ -224,6 +229,7 @@ internal static class LoadTesterApplication
             cancellationObserved);
 
         var expectedOnline = checked((int)execution.Measurement.ExpectedOnline);
+        var commandPhases = commandRunner?.Results.ToArray() ?? [];
         var acceptance = AcceptanceEvaluator.Evaluate(
             execution.Measurement,
             options.Acceptance,
@@ -232,8 +238,8 @@ internal static class LoadTesterApplication
             options.Role,
             options.Distributed.ShardIndex,
             options.Distributed.ShardCount,
-            execution.Phases);
-        var commandPhases = commandRunner?.Results.ToArray() ?? [];
+            execution.Phases,
+            commandPhases);
         var cancelled = execution.Cancelled || cancellationObserved;
         var runStatus = ResolveRunStatus(executionFailure, cancelled, commandPhases, acceptance);
         using var resourceSampler = new ResourceSampler();
@@ -253,6 +259,10 @@ internal static class LoadTesterApplication
             GatewayObservation = gatewayObservation,
             Phases = execution.Phases,
             CommandPhases = commandPhases,
+            HttpRequestErrors = commandRunner?.ErrorDetails.ToArray() ?? [],
+            CommandTraces = commandRunner?.CommandTraces ?? [],
+            DownstreamDiagnosticSamples = commandRunner?.DownstreamSamples ?? [],
+            DownstreamDiagnostics = commandRunner?.DownstreamSummary,
             Acceptance = acceptance,
             PreflightWarnings = preflight.Warnings,
             RunStatus = runStatus,
@@ -270,7 +280,7 @@ internal static class LoadTesterApplication
     }
 
     /// <summary>
-    /// 根据异常、取消、HTTP 阶段跳过和自动验收结果计算节点运行状态，避免把“报告成功写出”误认为“压测通过”。
+    /// 根据异常、取消、HTTP 阶段失败或跳过和自动验收结果计算节点运行状态，避免把“报告成功写出”误认为“压测通过”。
     /// </summary>
     /// <param name="executionFailure">运行期间未恢复的异常；正常完成时为空。</param>
     /// <param name="cancelled">是否由用户或外部取消令牌终止。</param>
@@ -287,6 +297,8 @@ internal static class LoadTesterApplication
             return LoadTestRunStatus.Cancelled;
         if (executionFailure is not null)
             return LoadTestRunStatus.Aborted;
+        if (commandPhases.Any(item => item.Status == CommandPhaseStatus.Failed))
+            return LoadTestRunStatus.Failed;
         if (commandPhases.Any(item => item.Status == CommandPhaseStatus.Skipped))
             return LoadTestRunStatus.CompletedWithSkippedPhases;
         return acceptance.Passed ? LoadTestRunStatus.Passed : LoadTestRunStatus.Failed;
@@ -298,7 +310,7 @@ internal static class LoadTesterApplication
     /// <param name="executionFailure">运行期间未恢复的异常。</param>
     /// <param name="cancelled">是否由用户或外部令牌取消。</param>
     /// <param name="commandPhases">已经完成、跳过或失败的 HTTP 指令阶段。</param>
-    /// <returns>取消、异常或阶段跳过的简要中文说明；完全正常结束时为空。</returns>
+    /// <returns>取消、异常、阶段失败或跳过的简要中文说明；完全正常结束时为空。</returns>
     private static string? ResolveFailureReason(
         Exception? executionFailure,
         bool cancelled,
@@ -309,13 +321,15 @@ internal static class LoadTesterApplication
         if (executionFailure is not null)
             return $"{executionFailure.GetType().Name}: {executionFailure.Message}";
 
-        var skipped = commandPhases
-            .Where(item => item.Status == CommandPhaseStatus.Skipped)
-            .Select(item => $"{item.Name}: {item.StatusReason ?? "在线门槛未满足"}")
+        var unsuccessful = commandPhases
+            .Where(item => item.Status is CommandPhaseStatus.Skipped or CommandPhaseStatus.Failed)
+            .Select(item =>
+                $"{item.Name}({(item.Status == CommandPhaseStatus.Skipped ? "跳过" : "失败")}): " +
+                $"{item.StatusReason ?? "未提供原因"}")
             .ToArray();
-        return skipped.Length == 0
+        return unsuccessful.Length == 0
             ? null
-            : $"HTTP 指令阶段已跳过：{string.Join("；", skipped)}";
+            : $"HTTP 指令阶段未成功完成：{string.Join("；", unsuccessful)}";
     }
 
     /// <summary>

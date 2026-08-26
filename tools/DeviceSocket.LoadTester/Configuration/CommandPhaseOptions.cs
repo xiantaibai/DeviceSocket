@@ -66,4 +66,87 @@ public sealed class CommandPhaseOptions
     /// 用于决定在线门槛超时后跳过当前阶段、带风险继续执行，还是终止整轮测试。
     /// </summary>
     public OnlineGateFailureAction OnlineGateFailureAction { get; set; } = OnlineGateFailureAction.SkipPhase;
+
+    /// <summary>
+    /// 获取或设置 <c>commandWorkload.phases[].drainEnabled</c>；默认 false 保持旧场景行为，true 表示请求发送完毕后等待设备侧命令收到和应答指标追平。
+    /// </summary>
+    public bool DrainEnabled { get; set; }
+
+    /// <summary>
+    /// 获取或设置 <c>commandWorkload.phases[].minimumRawDeliveryRate</c>；取值 0～1，默认 0.95，
+    /// 按“至少收到一帧关联下行的唯一命令数 / API 估算已入队数”计算；未知协议帧也算原始下行到达，
+    /// 只在 <see cref="DrainEnabled"/> 为 true 且启用下行诊断时生效。
+    /// </summary>
+    public double MinimumRawDeliveryRate { get; set; } = 0.95;
+
+    /// <summary>
+    /// 获取或设置 <c>commandWorkload.phases[].minimumDeliveryRate</c>；取值 0～1，默认 0.95，
+    /// 按“排空窗口内被识别为支持命令的唯一请求数 / API 估算已入队数”计算；该字段保留原名称以兼容旧场景，
+    /// 报告中明确展示为协议识别率；只在 <see cref="DrainEnabled"/> 为 true 时生效。
+    /// </summary>
+    public double MinimumDeliveryRate { get; set; } = 0.95;
+
+    /// <summary>
+    /// 获取或设置 <c>commandWorkload.phases[].minimumResponseRate</c>；取值 0～1，默认 0.99，
+    /// 按“设备完成应答的唯一命令数 / 协议已识别唯一命令数”计算；只在 <see cref="DrainEnabled"/> 为 true 时生效。
+    /// </summary>
+    public double MinimumResponseRate { get; set; } = 0.99;
+
+    /// <summary>
+    /// 获取或设置 <c>commandWorkload.phases[].drainTimeoutSeconds</c>；单位秒，默认 600，必须大于零，表示等待业务队列追平的最长时间。
+    /// </summary>
+    public int DrainTimeoutSeconds { get; set; } = 600;
+
+    /// <summary>
+    /// 获取或设置 <c>commandWorkload.phases[].quietSeconds</c>；单位秒，默认 10，达到交付和应答门槛后指标还需连续不变化该时长才认为排空，零表示达到门槛立即完成。
+    /// </summary>
+    public int QuietSeconds { get; set; } = 10;
+
+    /// <summary>
+    /// 获取或设置 <c>commandWorkload.phases[].drainFailureAction</c>；默认 <see cref="CommandDrainFailureAction.Continue"/>，决定排空超时后继续、跳过下一阶段或终止测试。
+    /// </summary>
+    public CommandDrainFailureAction DrainFailureAction { get; set; } = CommandDrainFailureAction.Continue;
+
+    /// <summary>
+    /// 获取或设置 <c>commandWorkload.phases[].minimumApiSuccessRate</c>；取值 0～1，默认空表示不做阶段级 HTTP 成功率验收；
+    /// <c>showResult=false</c> 表示 API 接受率，<c>showResult=true</c> 表示同步结果成功率。
+    /// </summary>
+    public double? MinimumApiSuccessRate { get; set; }
+
+    /// <summary>
+    /// 获取或设置 <c>commandWorkload.phases[].maximumP95Milliseconds</c>；单位毫秒，默认空表示不做阶段级 P95 延迟验收，设置值必须大于零。
+    /// </summary>
+    public long? MaximumP95Milliseconds { get; set; }
+
+    /// <summary>
+    /// 获取或设置 <c>commandWorkload.phases[].circuitBreakerEnabled</c>；默认 false，启用后可按连续失败、超时率或最大阶段时长停止继续生产请求。
+    /// </summary>
+    public bool CircuitBreakerEnabled { get; set; }
+
+    /// <summary>
+    /// 获取或设置 <c>commandWorkload.phases[].maximumDurationSeconds</c>；单位秒，默认空表示不限制阶段生产时长，设置值必须大于零。
+    /// 已经进入本地有界队列的少量请求仍会正常完成。
+    /// </summary>
+    public int? MaximumDurationSeconds { get; set; }
+
+    /// <summary>
+    /// 获取或设置 <c>commandWorkload.phases[].maximumConsecutiveFailures</c>；默认 0 表示不按连续失败熔断，大于零时达到该次数停止生产新请求。
+    /// </summary>
+    public int MaximumConsecutiveFailures { get; set; }
+
+    /// <summary>
+    /// 获取或设置 <c>commandWorkload.phases[].maximumTimeoutRate</c>；取值 0～1，默认空表示不按超时率熔断，按已发起请求中的超时比例计算。
+    /// </summary>
+    public double? MaximumTimeoutRate { get; set; }
+
+    /// <summary>
+    /// 获取或设置 <c>commandWorkload.phases[].circuitBreakerMinimumRequests</c>；单位请求数，默认 20，
+    /// 超时率至少积累该数量样本后才参与熔断，避免首个偶发超时误停阶段。
+    /// </summary>
+    public int CircuitBreakerMinimumRequests { get; set; } = 20;
+
+    /// <summary>
+    /// 获取或设置 <c>commandWorkload.phases[].circuitBreakerAction</c>；默认 <see cref="CommandCircuitBreakerAction.StopPhase"/>，决定仅停止当前阶段或终止整轮测试。
+    /// </summary>
+    public CommandCircuitBreakerAction CircuitBreakerAction { get; set; } = CommandCircuitBreakerAction.StopPhase;
 }

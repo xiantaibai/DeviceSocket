@@ -134,6 +134,58 @@ public sealed class DeviceAddressAllocatorTests
     }
 
     /// <summary>
+    /// 验证 Gather 老服务兼容配置允许 CSV 中真实存在的特殊终端地址00000，并保持规范身份中的五位补零格式。
+    /// </summary>
+    [Fact]
+    public void QGdwCsvMode_GatherCompatibilityAllowsZeroTerminalAddress()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"device-identities-{Guid.NewGuid():N}.csv");
+        try
+        {
+            File.WriteAllText(path, "meterId,deviceId\n104505,163500000\n");
+            var options = TestOptionsFactory.Create();
+            options.Target.CompatibilityProfile = ServerCompatibilityProfile.GatherTcpCenter;
+            options.Devices.Count = 1;
+            options.Devices.GenerationMode = DeviceAddressGenerationMode.Csv;
+            options.Devices.DeviceMappingFile = path;
+
+            var device = Assert.Single(DeviceAddressAllocator.Allocate(options));
+
+            Assert.Equal("3761:1635-00000", device.DeviceId);
+            Assert.Equal((ushort)0, device.TerminalAddress);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    /// <summary>
+    /// 验证当前 DeviceSocket 标准376.1配置仍拒绝 CSV 中的零终端地址，避免扩大老服务兼容范围。
+    /// </summary>
+    [Fact]
+    public void QGdwCsvMode_DeviceSocketCompatibilityRejectsZeroTerminalAddress()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"device-identities-{Guid.NewGuid():N}.csv");
+        try
+        {
+            File.WriteAllText(path, "meterId,deviceId\n104505,163500000\n");
+            var options = TestOptionsFactory.Create();
+            options.Devices.Count = 1;
+            options.Devices.GenerationMode = DeviceAddressGenerationMode.Csv;
+            options.Devices.DeviceMappingFile = path;
+
+            var exception = Assert.Throws<InvalidDataException>(() => DeviceAddressAllocator.Allocate(options));
+
+            Assert.Contains("终端地址范围为1-65535", exception.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    /// <summary>
     /// 验证 CSV 数据行全局序号在多分片合并后不重复、不遗漏，并保持原文件顺序。
     /// </summary>
     [Fact]

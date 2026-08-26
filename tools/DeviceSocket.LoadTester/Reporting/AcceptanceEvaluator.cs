@@ -19,6 +19,7 @@ public static class AcceptanceEvaluator
     /// <param name="shardIndex">当前节点零基分片编号；汇总报告保持默认零。</param>
     /// <param name="shardCount">当前运行的分片总数；汇总报告保持默认一，节点报告用它换算全局数量门槛。</param>
     /// <param name="phases">可选阶段结果；启用重启前阶段成功率时用于排除计划故障和恢复流量。</param>
+    /// <param name="commandPhases">可选 HTTP 指令阶段结果；用于分别验收异步接受率、同步结果率和设备侧交付缺口。</param>
     /// <returns>全部已启用规则的逐项结果和总判定。</returns>
     public static AcceptanceResult Evaluate(
         MetricSnapshot metrics,
@@ -28,7 +29,8 @@ public static class AcceptanceEvaluator
         LoadTestRole role = LoadTestRole.DevicesOnly,
         int shardIndex = 0,
         int shardCount = 1,
-        IReadOnlyCollection<PhaseResult>? phases = null)
+        IReadOnlyCollection<PhaseResult>? phases = null,
+        IReadOnlyCollection<CommandPhaseResult>? commandPhases = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(shardCount, 1);
         ArgumentOutOfRangeException.ThrowIfNegative(shardIndex);
@@ -98,6 +100,60 @@ public static class AcceptanceEvaluator
                 "apiP95Milliseconds",
                 metrics.ApiRequestLatency.Percentile(0.95),
                 options.MaximumApiP95Milliseconds);
+            var completedCommandPhases = commandPhases?
+                .Where(item => item.Status != CommandPhaseStatus.Skipped)
+                .ToArray() ?? [];
+            var asyncPhases = completedCommandPhases.Where(item => !item.ShowResult).ToArray();
+            var syncPhases = completedCommandPhases.Where(item => item.ShowResult).ToArray();
+            var asyncRequests = asyncPhases.Sum(item => item.ApiRequestsStarted);
+            if (asyncRequests > 0)
+            {
+                AddMinimum(
+                    checks,
+                    "asyncApiAcceptanceRate",
+                    Rate(asyncPhases.Sum(item => item.ApiBusinessAccepted), asyncRequests),
+                    options.MinimumAsyncApiAcceptanceRate);
+            }
+            var syncRequests = syncPhases.Sum(item => item.ApiRequestsStarted);
+            if (syncRequests > 0)
+            {
+                AddMinimum(
+                    checks,
+                    "syncResultSuccessRate",
+                    Rate(syncPhases.Sum(item => item.SyncResultsSucceeded), syncRequests),
+                    options.MinimumSyncResultSuccessRate);
+            }
+            var estimatedEnqueued = completedCommandPhases.Sum(item => item.ApiEstimatedEnqueued);
+            if (estimatedEnqueued > 0)
+            {
+                var rawDelivered = completedCommandPhases.Sum(item => item.RawDownstreamCommandsObserved);
+                var recognized = completedCommandPhases.Sum(item => item.ProtocolRecognizedCommands);
+                var legacyReceived = completedCommandPhases.Sum(item => item.GatherReadingCommandsReceived);
+                // SchemaVersion 1/2 节点报告没有原始交付与协议识别字段，读取历史报告时沿用旧的设备收到计数。
+                if (rawDelivered == 0 && recognized == 0 && legacyReceived > 0)
+                {
+                    rawDelivered = legacyReceived;
+                    recognized = legacyReceived;
+                }
+                AddMinimum(
+                    checks,
+                    "commandDeliveryRate",
+                    Rate(Math.Min(rawDelivered, estimatedEnqueued), estimatedEnqueued),
+                    options.MinimumCommandDeliveryRate);
+                if (rawDelivered > 0)
+                {
+                    AddMinimum(
+                        checks,
+                        "commandRecognitionRate",
+                        Rate(recognized, rawDelivered),
+                        options.MinimumCommandRecognitionRate);
+                }
+                AddMaximum(
+                    checks,
+                    "unobservedCommands",
+                    completedCommandPhases.Sum(item => item.GatherReadingCommandsUnobserved),
+                    options.MaximumUnobservedCommands);
+            }
         }
         if (options.MinimumObservedAuthenticatedDevices.HasValue ||
             options.MaximumObservedAuthenticatedDevices.HasValue)

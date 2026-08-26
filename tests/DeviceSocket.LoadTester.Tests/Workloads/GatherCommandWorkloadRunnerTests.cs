@@ -311,11 +311,151 @@ public sealed class GatherCommandWorkloadRunnerTests
     }
 
     /// <summary>
+    /// 验证老 API 的 407 数据预校验拒绝会进入逐请求明细，并从阶段估算入队数中排除。
+    /// </summary>
+    [Fact]
+    public async Task Business407_IsClassifiedAsPrevalidationAndWrittenToPhaseResult()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            var options = TestOptionsFactory.Create();
+            options.Role = LoadTestRole.ApiOnly;
+            options.Target.CompatibilityProfile = ServerCompatibilityProfile.GatherTcpCenter;
+            options.Devices.Count = 1;
+            options.CommandWorkload = new CommandWorkloadOptions
+            {
+                Enabled = true,
+                BaseUrl = $"http://127.0.0.1:{port}",
+                AuthorizationHeaderName = string.Empty,
+                MeterIdStart = 7_001,
+                Phases =
+                [
+                    new CommandPhaseOptions
+                    {
+                        Name = "prevalidation",
+                        TargetDeviceCount = 1,
+                        RequestsPerSecond = 100,
+                        MaxConcurrency = 1
+                    }
+                ]
+            };
+            var devices = DeviceAddressAllocator.Allocate(options);
+            var metrics = new LoadTestMetrics();
+            var traceRegistry = new GatherCommandTraceRegistry(new DownstreamDiagnosticsOptions());
+            var serverTask = ServeOneResponseAsync(
+                listener,
+                "{\"success\":false,\"code\":407,\"msg\":\"设备已停用\"}");
+            using var runner = new GatherCommandWorkloadRunner(
+                options,
+                devices,
+                metrics,
+                commandTraceRegistry: traceRegistry);
+
+            await runner.RunAsync(waitForOnline: false, CancellationToken.None);
+            await serverTask;
+
+            var phase = Assert.Single(runner.Results);
+            Assert.Equal(1, phase.ApiRequestsStarted);
+            Assert.Equal(1, phase.ApiPrevalidationRejected);
+            Assert.Equal(0, phase.ApiEstimatedEnqueued);
+            Assert.Equal(1, phase.Errors["API_BUSINESS_407"]);
+            var error = Assert.Single(runner.ErrorDetails);
+            Assert.True(error.PrevalidationRejected);
+            Assert.Equal(7_001, error.MeterId);
+            Assert.Equal("API_BUSINESS_407", error.ErrorCode);
+            Assert.Equal("设备已停用", error.ErrorMessage);
+            var trace = Assert.Single(runner.CommandTraces);
+            Assert.True(trace.PrevalidationRejected);
+            Assert.Equal(CommandTraceOutcome.PrevalidationRejected, trace.Outcome);
+            Assert.Null(trace.FirstDownstreamAtUtc);
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
+    /// <summary>
+    /// 验证排空阶段会等待设备侧收到和应答指标追平，并把端到端交付率写入独立阶段结果。
+    /// </summary>
+    [Fact]
+    public async Task DrainEnabled_WaitsForDeviceObservationAndRecordsDeliveryRate()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            var options = TestOptionsFactory.Create();
+            options.Role = LoadTestRole.ApiOnly;
+            options.Target.CompatibilityProfile = ServerCompatibilityProfile.GatherTcpCenter;
+            options.Devices.Count = 1;
+            options.CommandWorkload = new CommandWorkloadOptions
+            {
+                Enabled = true,
+                BaseUrl = $"http://127.0.0.1:{port}",
+                AuthorizationHeaderName = string.Empty,
+                MeterIdStart = 7_001,
+                Phases =
+                [
+                    new CommandPhaseOptions
+                    {
+                        Name = "drain",
+                        TargetDeviceCount = 1,
+                        RequestsPerSecond = 100,
+                        MaxConcurrency = 1,
+                        DrainEnabled = true,
+                        MinimumDeliveryRate = 1,
+                        MinimumResponseRate = 1,
+                        DrainTimeoutSeconds = 3,
+                        QuietSeconds = 0
+                    }
+                ]
+            };
+            var devices = DeviceAddressAllocator.Allocate(options);
+            var metrics = new LoadTestMetrics();
+            var serverTask = ServeOneSuccessAsync(listener);
+            using var runner = new GatherCommandWorkloadRunner(options, devices, metrics);
+
+            var runTask = runner.RunAsync(waitForOnline: false, CancellationToken.None);
+            await serverTask;
+            metrics.GatherReadingCommandReceived();
+            metrics.GatherReadingCommandResponded(TimeSpan.Zero);
+            await runTask;
+
+            var phase = Assert.Single(runner.Results);
+            Assert.True(phase.DrainSatisfied);
+            Assert.Equal(1, phase.ApiEstimatedEnqueued);
+            Assert.Equal(1, phase.GatherReadingCommandsReceived);
+            Assert.Equal(1, phase.GatherReadingCommandsResponded);
+            Assert.Equal(0, phase.GatherReadingCommandsUnobserved);
+            Assert.Equal(1, phase.GatherReadingDeliveryRate);
+            Assert.Equal(1, phase.GatherReadingResponseRate);
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
+    /// <summary>
     /// 接收一次最小 HTTP/1.1 请求，返回老 BaseDto 成功 JSON 并返回请求体供断言。
     /// </summary>
     /// <param name="listener">回环 TCP HTTP 监听器。</param>
     /// <returns>客户端发送的 UTF-8 JSON 请求体。</returns>
     private static async Task<string> ServeOneSuccessAsync(TcpListener listener)
+        => await ServeOneResponseAsync(listener, "{\"success\":true,\"code\":200,\"msg\":\"操作成功\"}");
+
+    /// <summary>
+    /// 接收一次最小 HTTP/1.1 请求并返回指定老 BaseDto JSON。
+    /// </summary>
+    /// <param name="listener">回环 TCP HTTP 监听器。</param>
+    /// <param name="responseBody">要返回的 UTF-8 JSON 响应体。</param>
+    /// <returns>客户端发送的 UTF-8 JSON 请求体。</returns>
+    private static async Task<string> ServeOneResponseAsync(TcpListener listener, string responseBody)
     {
         using var client = await listener.AcceptTcpClientAsync();
         var stream = client.GetStream();
@@ -335,7 +475,6 @@ public sealed class GatherCommandWorkloadRunnerTests
         while (count - bodyOffset < contentLength)
             count += await stream.ReadAsync(buffer.AsMemory(count));
         var body = Encoding.UTF8.GetString(buffer, bodyOffset, contentLength);
-        var responseBody = "{\"success\":true,\"code\":200,\"msg\":\"操作成功\"}";
         var responseBytes = Encoding.UTF8.GetBytes(
             $"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {Encoding.UTF8.GetByteCount(responseBody)}\r\nConnection: close\r\n\r\n{responseBody}");
         await stream.WriteAsync(responseBytes);

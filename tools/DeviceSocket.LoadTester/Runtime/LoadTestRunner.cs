@@ -3,6 +3,7 @@ using DeviceSocket.LoadTester.Devices;
 using DeviceSocket.LoadTester.Metrics;
 using DeviceSocket.LoadTester.Protocols;
 using DeviceSocket.LoadTester.Reporting;
+using DeviceSocket.LoadTester.Workloads.Gather;
 
 namespace DeviceSocket.LoadTester.Runtime;
 
@@ -25,9 +26,15 @@ internal sealed class LoadTestRunner(
     IDeviceOnlineRegistry onlineRegistry,
     ConnectionPacer pacer,
     SemaphoreSlim connectionGate,
-    FaultInjectionController faultController)
+    FaultInjectionController faultController,
+    GatherCommandTraceRegistry? commandTraceRegistry = null)
 {
     private readonly Dictionary<int, DeviceHandle> _handles = [];
+
+    /// <summary>
+    /// 获取最近一次正常完成或异常中止前保存的执行快照；尚未执行时为空。
+    /// </summary>
+    internal ScenarioExecutionResult? LastExecution { get; private set; }
 
     /// <summary>
     /// 执行 TCP 设备阶段，并可并行运行独立 HTTP 工作负载；阶段结束后会等待工作负载完成再关闭设备连接。
@@ -150,12 +157,25 @@ internal sealed class LoadTestRunner(
                 };
             }
 
-            return new ScenarioExecutionResult(
+            LastExecution = new ScenarioExecutionResult(
                 startedAt,
                 DateTimeOffset.UtcNow,
                 measurement,
                 phaseResults,
                 cancelled);
+            return LastExecution;
+        }
+        catch
+        {
+            var failedAt = DateTimeOffset.UtcNow;
+            // 必须在 finally 关闭全部设备前保留现场，否则异常报告会把在线数和连接状态误写成清理后的零值。
+            LastExecution = new ScenarioExecutionResult(
+                startedAt,
+                failedAt,
+                metrics.Snapshot(failedAt),
+                phaseResults,
+                cancelled);
+            throw;
         }
         finally
         {
@@ -337,7 +357,8 @@ internal sealed class LoadTestRunner(
                 onlineRegistry,
                 pacer,
                 connectionGate,
-                faultController);
+                faultController,
+                commandTraceRegistry);
             var task = session.RunAsync(cancellation.Token);
             _handles.Add(descriptor.GlobalOrdinal, new DeviceHandle(descriptor, session, cancellation, task));
         }

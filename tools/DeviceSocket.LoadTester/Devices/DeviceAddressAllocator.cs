@@ -91,7 +91,13 @@ public static class DeviceAddressAllocator
         List<VirtualDeviceDescriptor> devices,
         int runSeed)
     {
-        var entries = DeviceIdentityCsvLoader.Load(options.Devices.DeviceMappingFile!);
+        // 00000 是 Gather 老库中的真实特殊地址，只允许在明确选择老服务兼容配置且从 CSV 读取真实身份时透传。
+        var allowZeroTerminalAddress =
+            options.Target.Protocol == LoadProtocol.QGdw3761 &&
+            options.Target.CompatibilityProfile == ServerCompatibilityProfile.GatherTcpCenter;
+        var entries = DeviceIdentityCsvLoader.Load(
+            options.Devices.DeviceMappingFile!,
+            allowZeroTerminalAddress);
         if (entries.Count != options.Devices.Count)
         {
             throw new ConfigurationValidationException(

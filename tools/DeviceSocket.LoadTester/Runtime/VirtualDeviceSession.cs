@@ -5,6 +5,7 @@ using DeviceSocket.LoadTester.Configuration;
 using DeviceSocket.LoadTester.Devices;
 using DeviceSocket.LoadTester.Metrics;
 using DeviceSocket.LoadTester.Protocols;
+using DeviceSocket.LoadTester.Workloads.Gather;
 
 namespace DeviceSocket.LoadTester.Runtime;
 
@@ -19,6 +20,7 @@ namespace DeviceSocket.LoadTester.Runtime;
 /// <param name="pacer">所有设备共享的连接速率调度器。</param>
 /// <param name="connectionGate">限制同时处于连接和登录过程中的设备数量。</param>
 /// <param name="faultController">提供当前场景阶段的故障参数快照。</param>
+/// <param name="commandTraceRegistry">可选 HTTP 期望命令关联器；未启用下行诊断时为空。</param>
 internal sealed class VirtualDeviceSession(
     VirtualDeviceDescriptor descriptor,
     LoadTestOptions options,
@@ -27,7 +29,8 @@ internal sealed class VirtualDeviceSession(
     IDeviceOnlineRegistry onlineRegistry,
     ConnectionPacer pacer,
     SemaphoreSlim connectionGate,
-    FaultInjectionController faultController)
+    FaultInjectionController faultController,
+    GatherCommandTraceRegistry? commandTraceRegistry = null)
 {
     private readonly Random _random = new(descriptor.RandomSeed);
     private readonly object _activeCycleLock = new();
@@ -378,6 +381,12 @@ internal sealed class VirtualDeviceSession(
         CancellationToken cancellationToken)
     {
         metrics.DownstreamFrame();
+        var classification = protocol is IDownstreamFrameClassifier classifier
+            ? classifier.ClassifyDownstream(response, descriptor)
+            : null;
+        var traceMatch = classification is null
+            ? null
+            : commandTraceRegistry?.RecordDownstream(descriptor, classification, DateTimeOffset.UtcNow);
         var plan = protocol.CreateDownstreamResponse(response, descriptor, NextSequence());
         if (plan is null)
             return;
@@ -408,6 +417,7 @@ internal sealed class VirtualDeviceSession(
                 if (!responded)
                 {
                     metrics.GatherReadingCommandResponded(stopwatch.Elapsed);
+                    commandTraceRegistry?.RecordResponse(traceMatch?.RequestId, DateTimeOffset.UtcNow);
                     responded = true;
                 }
             }

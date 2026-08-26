@@ -84,4 +84,32 @@ public sealed class GatherDeviceMeterMappingLoaderTests
             File.Delete(path);
         }
     }
+
+    /// <summary>
+    /// 验证 Gather HTTP 指令映射再次读取设备 CSV 时同样接受00000，避免设备已上线后在命令阶段失败。
+    /// </summary>
+    [Fact]
+    public void CsvDeviceMode_GatherCompatibilityReusesZeroAddressMapping()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"gather-map-{Guid.NewGuid():N}.csv");
+        try
+        {
+            File.WriteAllText(path, "meterId,deviceId\n104505,163500000\n");
+            var options = TestOptionsFactory.Create();
+            options.Target.CompatibilityProfile = ServerCompatibilityProfile.GatherTcpCenter;
+            options.Devices.Count = 1;
+            options.Devices.GenerationMode = DeviceAddressGenerationMode.Csv;
+            options.Devices.DeviceMappingFile = path;
+            var devices = DeviceAddressAllocator.Allocate(options);
+
+            var mapping = Assert.Single(GatherDeviceMeterMappingLoader.Load(options, devices));
+
+            Assert.Equal(104505, mapping.MeterId);
+            Assert.Equal("3761:1635-00000", mapping.Device.DeviceId);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
 }

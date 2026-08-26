@@ -30,6 +30,36 @@ internal static class NodeReportWriter
             new UTF8Encoding(false),
             cancellationToken);
         await File.WriteAllTextAsync(
+            Path.Combine(outputDirectory, "http-errors.csv"),
+            BuildHttpErrorsCsv(report.HttpRequestErrors),
+            new UTF8Encoding(false),
+            cancellationToken);
+        await File.WriteAllTextAsync(
+            Path.Combine(outputDirectory, "http-errors.jsonl"),
+            BuildHttpErrorsJsonLines(report.HttpRequestErrors, serializerOptions),
+            new UTF8Encoding(false),
+            cancellationToken);
+        await File.WriteAllTextAsync(
+            Path.Combine(outputDirectory, "command-traces.jsonl"),
+            BuildJsonLines(report.CommandTraces, serializerOptions),
+            new UTF8Encoding(false),
+            cancellationToken);
+        await File.WriteAllTextAsync(
+            Path.Combine(outputDirectory, "phase-targets.csv"),
+            BuildPhaseTargetsCsv(report.CommandTraces),
+            new UTF8Encoding(false),
+            cancellationToken);
+        await File.WriteAllTextAsync(
+            Path.Combine(outputDirectory, "downstream-unknown-samples.jsonl"),
+            BuildJsonLines(report.DownstreamDiagnosticSamples, serializerOptions),
+            new UTF8Encoding(false),
+            cancellationToken);
+        await File.WriteAllTextAsync(
+            Path.Combine(outputDirectory, "downstream-classification.csv"),
+            BuildDownstreamClassificationCsv(report.DownstreamDiagnostics),
+            new UTF8Encoding(false),
+            cancellationToken);
+        await File.WriteAllTextAsync(
             Path.Combine(outputDirectory, "report.md"),
             BuildMarkdown(report),
             new UTF8Encoding(false),
@@ -50,6 +80,114 @@ internal static class NodeReportWriter
     }
 
     /// <summary>
+    /// 生成可直接由 Excel 打开的逐请求 HTTP 失败明细 CSV；字段值使用标准双引号转义。
+    /// </summary>
+    /// <param name="errors">按请求完成时间收集的失败明细。</param>
+    /// <returns>包含表头的 UTF-8 CSV 文本。</returns>
+    private static string BuildHttpErrorsCsv(IEnumerable<HttpRequestErrorDetail> errors)
+    {
+        var builder = new StringBuilder(
+            "timestampUtc,phase,meterId,deviceId,showResult,requestSequence,httpStatusCode,errorCode,errorMessage,elapsedMilliseconds,timedOut,prevalidationRejected,shardIndex\n");
+        foreach (var error in errors.OrderBy(item => item.TimestampUtc).ThenBy(item => item.RequestSequence))
+        {
+            builder.Append(Csv(error.TimestampUtc.ToString("O"))).Append(',')
+                .Append(Csv(error.PhaseName)).Append(',')
+                .Append(error.MeterId).Append(',')
+                .Append(Csv(error.DeviceId)).Append(',')
+                .Append(error.ShowResult).Append(',')
+                .Append(error.RequestSequence).Append(',')
+                .Append(error.HttpStatusCode?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty).Append(',')
+                .Append(Csv(error.ErrorCode)).Append(',')
+                .Append(Csv(error.ErrorMessage)).Append(',')
+                .Append(error.ElapsedMilliseconds).Append(',')
+                .Append(error.TimedOut).Append(',')
+                .Append(error.PrevalidationRejected).Append(',')
+                .Append(error.ShardIndex).Append('\n');
+        }
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// 生成逐请求 HTTP 失败 JSON Lines，便于使用脚本按阶段、设备和错误码流式分析。
+    /// </summary>
+    /// <param name="errors">失败明细。</param>
+    /// <param name="serializerOptions">与节点报告一致的 JSON 配置。</param>
+    /// <returns>每行一个完整 JSON 对象的文本。</returns>
+    private static string BuildHttpErrorsJsonLines(
+        IEnumerable<HttpRequestErrorDetail> errors,
+        JsonSerializerOptions serializerOptions)
+    {
+        var jsonLinesOptions = new JsonSerializerOptions(serializerOptions) { WriteIndented = false };
+        var builder = new StringBuilder();
+        foreach (var error in errors.OrderBy(item => item.TimestampUtc).ThenBy(item => item.RequestSequence))
+            builder.AppendLine(JsonSerializer.Serialize(error, jsonLinesOptions));
+        return builder.ToString();
+    }
+
+    /// <summary>生成通用 JSON Lines 文本，支持逐请求关联和未知报文样本流式分析。</summary>
+    /// <typeparam name="T">单行报告模型类型。</typeparam>
+    /// <param name="items">待序列化记录。</param>
+    /// <param name="serializerOptions">与节点摘要一致的 JSON 配置。</param>
+    /// <returns>每行一个 JSON 对象的文本；没有记录时为空字符串。</returns>
+    private static string BuildJsonLines<T>(
+        IEnumerable<T> items,
+        JsonSerializerOptions serializerOptions)
+    {
+        var jsonLinesOptions = new JsonSerializerOptions(serializerOptions) { WriteIndented = false };
+        var builder = new StringBuilder();
+        foreach (var item in items)
+            builder.AppendLine(JsonSerializer.Serialize(item, jsonLinesOptions));
+        return builder.ToString();
+    }
+
+    /// <summary>生成每个 HTTP 阶段实际请求目标及端到端结果 CSV，便于按电表或设备定位缺口。</summary>
+    /// <param name="traces">逐请求关联明细。</param>
+    /// <returns>包含固定表头的 UTF-8 CSV 文本。</returns>
+    private static string BuildPhaseTargetsCsv(IEnumerable<CommandTraceDetail> traces)
+    {
+        var builder = new StringBuilder(
+            "phase,requestSequence,meterId,deviceId,showResult,httpStatusCode,apiSucceeded,prevalidationRejected," +
+            "downstreamKind,associationConfidence,duplicateDownstreamFrames,responseSent,outcome," +
+            "registeredAtUtc,httpCompletedAtUtc,firstDownstreamAtUtc,responseSentAtUtc\n");
+        foreach (var trace in traces.OrderBy(item => item.RequestSequence))
+        {
+            builder.Append(Csv(trace.PhaseName)).Append(',')
+                .Append(trace.RequestSequence).Append(',')
+                .Append(trace.MeterId).Append(',')
+                .Append(Csv(trace.DeviceId)).Append(',')
+                .Append(trace.ShowResult).Append(',')
+                .Append(trace.HttpStatusCode?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty).Append(',')
+                .Append(trace.ApiSucceeded?.ToString() ?? string.Empty).Append(',')
+                .Append(trace.PrevalidationRejected).Append(',')
+                .Append(Csv(trace.DownstreamKind?.ToString())).Append(',')
+                .Append(Csv(trace.AssociationConfidence.ToString())).Append(',')
+                .Append(trace.DuplicateDownstreamFrames).Append(',')
+                .Append(trace.ResponseSent).Append(',')
+                .Append(Csv(trace.Outcome.ToString())).Append(',')
+                .Append(Csv(trace.RegisteredAtUtc.ToString("O"))).Append(',')
+                .Append(Csv(trace.HttpCompletedAtUtc?.ToString("O"))).Append(',')
+                .Append(Csv(trace.FirstDownstreamAtUtc?.ToString("O"))).Append(',')
+                .Append(Csv(trace.ResponseSentAtUtc?.ToString("O"))).Append('\n');
+        }
+        return builder.ToString();
+    }
+
+    /// <summary>生成节点级下行分类计数 CSV，并附加未关联帧和重复帧诊断计数。</summary>
+    /// <param name="summary">可选下行诊断汇总。</param>
+    /// <returns>包含固定表头的 UTF-8 CSV 文本；未启用诊断时只包含表头。</returns>
+    private static string BuildDownstreamClassificationCsv(DownstreamDiagnosticSummary? summary)
+    {
+        var builder = new StringBuilder("classification,count\n");
+        if (summary is null)
+            return builder.ToString();
+        foreach (var item in summary.Classifications.OrderBy(item => item.Key.ToString(), StringComparer.Ordinal))
+            builder.Append(Csv(item.Key.ToString())).Append(',').Append(item.Value).Append('\n');
+        builder.Append(Csv("UnmatchedDownstreamFrames")).Append(',').Append(summary.UnmatchedDownstreamFrames).Append('\n');
+        builder.Append(Csv("DuplicateDownstreamFrames")).Append(',').Append(summary.DuplicateDownstreamFrames).Append('\n');
+        return builder.ToString();
+    }
+
+    /// <summary>
     /// 生成包含客户端指标和 Gateway 观测值的节点 Markdown 报告。
     /// </summary>
     /// <param name="report">单节点执行报告。</param>
@@ -57,6 +195,13 @@ internal static class NodeReportWriter
     private static string BuildMarkdown(NodeReport report)
     {
         var metrics = report.Metrics;
+        var commandPhases = report.CommandPhases.Where(item => item.Status != CommandPhaseStatus.Skipped).ToArray();
+        var estimatedEnqueued = commandPhases.Sum(item => item.ApiEstimatedEnqueued);
+        var rawObservedCommands = commandPhases.Sum(item => item.RawDownstreamCommandsObserved);
+        var recognizedCommands = commandPhases.Sum(item => item.ProtocolRecognizedCommands);
+        var unsupportedCommands = commandPhases.Sum(item => item.UnsupportedCommands);
+        var duplicateCommands = commandPhases.Sum(item => item.DuplicateDownstreamFrames);
+        var unobservedCommands = commandPhases.Sum(item => item.GatherReadingCommandsUnobserved);
         var builder = new StringBuilder();
         builder.AppendLine($"# DeviceSocket 负载测试报告：{report.RunId}");
         builder.AppendLine();
@@ -85,6 +230,15 @@ internal static class NodeReportWriter
         builder.AppendLine($"| HTTP 目标设备累计要求/在线/离线跳过 | {metrics.ApiTargetsRequired:N0}/{metrics.ApiTargetsOnline:N0}/{metrics.ApiRequestsSkippedOffline:N0} |");
         builder.AppendLine($"| Gather 读表命令收到/已应答/丢弃 | {metrics.GatherReadingCommandsReceived:N0}/{metrics.GatherReadingCommandsResponded:N0}/{metrics.GatherReadingResponsesDropped:N0} |");
         builder.AppendLine($"| Gather 读表响应帧/业务失败/重复帧 | {metrics.GatherReadingResponsesSent:N0}/{metrics.GatherReadingBusinessFailuresSent:N0}/{metrics.GatherReadingDuplicateResponsesSent:N0} |");
+        if (commandPhases.Length > 0)
+        {
+            builder.AppendLine(
+                $"| HTTP 估算入队/原始下行/协议识别/不支持/未观测 | " +
+                $"{estimatedEnqueued:N0}/{rawObservedCommands:N0}/{recognizedCommands:N0}/{unsupportedCommands:N0}/{unobservedCommands:N0} |");
+            builder.AppendLine($"| HTTP 原始下行交付率 | {Rate(Math.Min(rawObservedCommands, estimatedEnqueued), estimatedEnqueued):P2} |");
+            builder.AppendLine($"| HTTP 协议识别率 | {Rate(recognizedCommands, rawObservedCommands):P2} |");
+            builder.AppendLine($"| HTTP 重复或重试下行帧 | {duplicateCommands:N0} |");
+        }
         if (report.GatewayObservation is { } gateway)
         {
             builder.AppendLine($"| Gateway 测试前基线 TCP/认证设备 | {gateway.BaselineTcpConnections?.ToString("N0") ?? "不可用"}/{gateway.BaselineAuthenticatedDevices?.ToString("N0") ?? "不可用"} |");
@@ -103,7 +257,7 @@ internal static class NodeReportWriter
         builder.AppendLine($"| 建连延迟 P50/P95/P99 | {metrics.ConnectionLatency.Percentile(0.50)}/{metrics.ConnectionLatency.Percentile(0.95)}/{metrics.ConnectionLatency.Percentile(0.99)} ms |");
         builder.AppendLine($"| HTTP 端到端延迟 P50/P95/P99 | {metrics.ApiRequestLatency.Percentile(0.50)}/{metrics.ApiRequestLatency.Percentile(0.95)}/{metrics.ApiRequestLatency.Percentile(0.99)} ms |");
         builder.AppendLine($"| Gather 读表本地响应延迟 P50/P95/P99 | {metrics.GatherReadingResponseLatency.Percentile(0.50)}/{metrics.GatherReadingResponseLatency.Percentile(0.95)}/{metrics.GatherReadingResponseLatency.Percentile(0.99)} ms |");
-        builder.AppendLine($"| 最严重恢复耗时/当前连续稳定 | {FormatOptionalMilliseconds(metrics.WorstRecoveryMilliseconds)}/{metrics.CurrentStableOnlineMilliseconds / 1000d:F1} s |");
+        builder.AppendLine($"| 最严重恢复耗时/当前连续稳定 | {FormatRecovery(metrics)}/{metrics.CurrentStableOnlineMilliseconds / 1000d:F1} s |");
         if (report.Phases.Count > 0)
         {
             builder.AppendLine();
@@ -147,19 +301,22 @@ internal static class NodeReportWriter
             builder.AppendLine();
             builder.AppendLine("## HTTP 指令阶段");
             builder.AppendLine();
-            builder.AppendLine("| 阶段 | 状态 | 在线门槛峰值/要求 | 等待 | 本地设备 | 计划请求 | show_result | 目标在线/要求 | 离线跳过 | API 成功/失败/超时 | 读表收到/应答 | 耗时 | 说明 |");
-            builder.AppendLine("| --- | --- | ---: | ---: | ---: | ---: | :---: | ---: | ---: | ---: | ---: | ---: | --- |");
+            builder.AppendLine("| 阶段 | 状态 | show_result | API 发起/成功/失败/超时 | 预校验拒绝/估算入队 | 原始下行/识别/不支持/应答/未观测 | 原始交付率/识别率/应答率 | 重复帧 | 排空 | P95 | 在线门槛峰值/要求 | 耗时 | 说明 |");
+            builder.AppendLine("| --- | --- | :---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | --- |");
             foreach (var phase in report.CommandPhases)
             {
                 var onlineGate = phase.OnlineGateSatisfied.HasValue
                     ? $"{phase.MaximumObservedOnlineCount:N0}/{phase.RequiredOnlineCount:N0}"
                     : "不适用";
                 builder.AppendLine(
-                    $"| {EscapeMarkdownCell(phase.Name)} | {FormatCommandPhaseStatus(phase.Status)} | {onlineGate} | " +
-                    $"{phase.OnlineGateWaitMilliseconds / 1000d:F1} s | {phase.LocalDeviceCount:N0} | {phase.PlannedRequests:N0} | {phase.ShowResult} | " +
-                    $"{phase.ApiTargetsOnline:N0}/{phase.ApiTargetsRequired:N0} | {phase.ApiRequestsSkippedOffline:N0} | " +
-                    $"{phase.ApiRequestsSucceeded:N0}/{phase.ApiRequestsFailed:N0}/{phase.ApiRequestTimeouts:N0} | " +
-                    $"{phase.GatherReadingCommandsReceived:N0}/{phase.GatherReadingCommandsResponded:N0} | " +
+                    $"| {EscapeMarkdownCell(phase.Name)} | {FormatCommandPhaseStatus(phase.Status)} | {phase.ShowResult} | " +
+                    $"{phase.ApiRequestsStarted:N0}/{phase.ApiRequestsSucceeded:N0}/{phase.ApiRequestsFailed:N0}/{phase.ApiRequestTimeouts:N0} | " +
+                    $"{phase.ApiPrevalidationRejected:N0}/{phase.ApiEstimatedEnqueued:N0} | " +
+                    $"{phase.RawDownstreamCommandsObserved:N0}/{phase.ProtocolRecognizedCommands:N0}/{phase.UnsupportedCommands:N0}/" +
+                    $"{phase.GatherReadingCommandsResponded:N0}/{phase.GatherReadingCommandsUnobserved:N0} | " +
+                    $"{phase.RawDeliveryRate:P2}/{phase.ProtocolRecognitionRate:P2}/{phase.GatherReadingResponseRate:P2} | " +
+                    $"{phase.DuplicateDownstreamFrames:N0} | " +
+                    $"{FormatDrain(phase)} | {phase.ApiRequestLatency.Percentile(0.95):N0} ms | {onlineGate} | " +
                     $"{(phase.EndedAtUtc - phase.StartedAtUtc).TotalSeconds:F1} s | " +
                     $"{EscapeMarkdownCell(phase.StatusReason ?? "-")} |");
             }
@@ -195,6 +352,39 @@ internal static class NodeReportWriter
     /// <returns>带秒单位的报告文本。</returns>
     private static string FormatOptionalMilliseconds(long? milliseconds) =>
         milliseconds.HasValue ? $"{milliseconds.Value / 1000d:F1} s" : "未恢复";
+
+    /// <summary>区分“没有掉线事件”和“发生掉线但尚未恢复”，避免正常场景显示未恢复。</summary>
+    /// <param name="metrics">最终指标快照。</param>
+    /// <returns>无掉线、未恢复或恢复耗时。</returns>
+    private static string FormatRecovery(DeviceSocket.LoadTester.Metrics.MetricSnapshot metrics)
+    {
+        if (metrics.Outages.Count == 0 && !metrics.OutageActive)
+            return "无掉线";
+        return FormatOptionalMilliseconds(metrics.WorstRecoveryMilliseconds);
+    }
+
+    /// <summary>把阶段排空三态转换为中文报告文本。</summary>
+    /// <param name="phase">HTTP 指令阶段结果。</param>
+    /// <returns>未启用、通过或超时及等待时长。</returns>
+    private static string FormatDrain(CommandPhaseResult phase) => phase.DrainSatisfied switch
+    {
+        true => $"通过/{phase.DrainWaitMilliseconds / 1000d:F1} s",
+        false => $"超时/{phase.DrainWaitMilliseconds / 1000d:F1} s",
+        null => "未启用"
+    };
+
+    /// <summary>计算安全比例，分母不大于零时返回零。</summary>
+    /// <param name="numerator">分子。</param>
+    /// <param name="denominator">分母。</param>
+    /// <returns>双精度比例。</returns>
+    private static double Rate(long numerator, long denominator) =>
+        denominator <= 0 ? 0 : numerator / (double)denominator;
+
+    /// <summary>按 RFC 4180 规则转义单个 CSV 字段。</summary>
+    /// <param name="value">可空字段值。</param>
+    /// <returns>始终使用双引号包围的安全字段。</returns>
+    private static string Csv(string? value) =>
+        $"\"{(value ?? string.Empty).Replace("\"", "\"\"", StringComparison.Ordinal)}\"";
 
     /// <summary>
     /// 将节点运行状态转换为适合中文报告阅读的稳定文本。

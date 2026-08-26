@@ -26,8 +26,10 @@
 | `gather-tcpcenter-reconnect-storm-10000.json` | 一万台稳定在线后重启 TCP 服务，验证真实断线和全量重连恢复 | 否 | 需要重启服务 |
 | `gather-tcpcenter-http-reading-10000.json` | 一万台在线并调用读表 API，模拟设备应答和同设备多命令排队 | 是 | 否 |
 | `gather-tcpcenter-soak-10000.json` | 一万台六小时长稳，观察内存、线程、句柄、Socket 和在线数趋势 | 否 | 否 |
+| `gather-tcpcenter-reconnect-storm-50000.json` | 四分片共五万台稳定在线后重启 TCP 服务，验证大规模真实重连风暴 | 否 | 需要重启服务 |
+| `gather-tcpcenter-http-reading-50000.json` | 四分片共五万台在线、全局最高 50 RPS，并对全部设备各异步抄读一次 | 是 | 否 |
 
-`Scenarios/gather-device-10000.csv` 是当前一万台正式设备映射。CSV 格式示例移到 `docs/examples/gather-meter-device-map.example.csv`，示例数据不能直接用于正式压测。
+`Scenarios/gather-device-10000.csv` 和 `Scenarios/gather-device-50000.csv` 分别是当前一万台、五万台正式设备映射。多分片运行时每台负载机都部署同一份完整 CSV，由工具自动固定分配设备；CSV 格式示例移到 `docs/examples/gather-meter-device-map.example.csv`，示例数据不能直接用于正式压测。
 
 ## 运行前检查
 
@@ -88,10 +90,11 @@ dotnet run --project tools\DeviceSocket.LoadTester\DeviceSocket.LoadTester.cspro
 
 当前脚本面向 8 核 16 GiB 测试服务器，不再保留低性能服务器的“最多 1,000 请求、5 RPS”专版。标准阶段为：
 
-1. `functional-sync-100`：100 条同步请求验证 HTTP → TCP 下发 → 终端应答 → 结果返回闭环。
-2. `all-devices-async-once`：对全部在线设备各提交一次异步抄读；一万台时为 10,000 条。
-3. `same-device-queue-1000x5`：1,000 台设备各连续提交 5 条异步命令，观察同设备队列和队头阻塞。
-4. `same-device-sync-100x5`：100 台设备各提交 5 条同步命令，观察结果订阅和 HTTP 等待资源。
+1. `functional-sync-smoke-20`：20 条同步请求验证 HTTP → TCP 下发 → 终端应答 → 结果返回闭环。
+2. `async-ramp-5/10/20/50rps`：每级 500 台设备，逐级确认服务端命令消费和终端应答可以排空。
+3. `all-devices-async-once`：对全部在线设备各提交一次异步抄读；一万台时为 10,000 条。
+4. `same-device-queue-1000x5`：1,000 台设备各连续提交 5 条异步命令，观察同设备队列和队头阻塞。
+5. `final-sync-20x2`：大流量排空后再执行 40 条同步请求，检查结果订阅和 HTTP 等待资源是否退化。
 
 不要直接把全部设备请求都改为 `showResult=true`。同步接口可能为每条请求创建结果订阅并长时间等待设备，容易先耗尽 HTTP 请求线程或 Redis 连接，掩盖 TCP 服务本身的结论。
 
@@ -109,7 +112,7 @@ dotnet run --project tools\DeviceSocket.LoadTester\DeviceSocket.LoadTester.cspro
 
 ## 3～5 万台多分片扩展
 
-四个正式场景中的设备数量、阶段比例、连接速率和 HTTP 目标均按全局口径设计，可以复制后扩展到 30,000～50,000 台。扩容时必须同时调整：
+正式场景中的设备数量、阶段比例、连接速率和 HTTP 目标均按全局口径设计。仓库已经提供两个五万台四分片场景；继续复制扩容时必须同时调整：
 
 1. 从数据库导出包含全部目标设备的完整 CSV，例如 `gather-device-30000.csv` 或 `gather-device-50000.csv`。
 2. 把 `devices.count` 改为 CSV 的有效数据行数，并修改 `devices.deviceMappingFile`。
@@ -119,17 +122,19 @@ dotnet run --project tools\DeviceSocket.LoadTester\DeviceSocket.LoadTester.cspro
 
 CSV 数据行从零开始形成 `GlobalOrdinal`。第 `n` 行由 `n % shardCount` 对应的节点负责，因此设备不会重复，也不会因节点数量变化而改变全局设备集合。
 
-以 4 个分片运行 50,000 台为例：
+以 4 个分片运行 50,000 台重连风暴为例：
 
 ```powershell
 # 四台负载机使用相同命令，只把 shard-index 分别改为 0、1、2、3。
 DeviceSocket.LoadTester run `
-  --config Scenarios\gather-tcpcenter-connections-50000.json `
-  --run-id gather-connections-50000-r1 `
+  --config Scenarios\gather-tcpcenter-reconnect-storm-50000.json `
+  --run-id gather-reconnect-storm-50000-r1 `
   --shard-index 0 `
   --shard-count 4 `
   --start-at-utc 2026-08-22T14:00:00Z
 ```
+
+五万台 HTTP 场景把 50 RPS、HTTP 并发和目标数都视为四个分片合计值，运行命令只需把配置换成 `gather-tcpcenter-http-reading-50000.json`。默认会对五万台设备各提交一次异步命令，理论发送时间约 1,000 秒；只做抽样时可复制场景并把 `all-devices-async-once-50000.targetDeviceCount` 从 `0` 改为 `1000`。
 
 多分片配置口径：
 
@@ -154,8 +159,15 @@ HTTP combined 场景在多分片时由每台负载机同时发请求。全局 20
 ├─ run-checkpoint.json
 ├─ node-summary.json
 ├─ errors.csv
+├─ http-errors.csv
+├─ command-traces.jsonl
+├─ phase-targets.csv
+├─ downstream-classification.csv
+├─ downstream-unknown-samples.jsonl
 └─ report.md
 ```
+
+HTTP 指令场景中，`phase-targets.csv`/`command-traces.jsonl` 用于按 meterId、设备号和请求序号定位端到端缺口；`downstream-classification.csv`/`downstream-unknown-samples.jsonl` 用于区分服务端未下发与模拟器尚未兼容的 376.1 报文格式。纯连接场景仍会创建空表头文件，便于自动收集脚本保持固定文件清单。
 
 收集所有分片目录后执行：
 

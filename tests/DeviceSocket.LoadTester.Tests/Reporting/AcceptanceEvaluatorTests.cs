@@ -230,6 +230,117 @@ public sealed class AcceptanceEvaluatorTests
     }
 
     /// <summary>
+    /// 验证异步 API 接受率、同步结果率、设备交付率和未观测数量使用 HTTP 阶段独立口径验收。
+    /// </summary>
+    [Fact]
+    public void CommandPhases_AreAcceptedBySeparateEndToEndRules()
+    {
+        var options = new AcceptanceOptions
+        {
+            MinimumFinalOnlineRate = null,
+            MaximumProtocolErrorRate = null,
+            MinimumAsyncApiAcceptanceRate = 0.95,
+            MinimumSyncResultSuccessRate = 0.75,
+            MinimumCommandDeliveryRate = 0.95,
+            MaximumUnobservedCommands = 1
+        };
+        var now = DateTimeOffset.UtcNow;
+        var commandPhases = new[]
+        {
+            CreateCommandPhase("async", showResult: false, started: 10, succeeded: 9, estimatedEnqueued: 10, received: 8),
+            CreateCommandPhase("sync", showResult: true, started: 10, succeeded: 8, estimatedEnqueued: 10, received: 10)
+        };
+
+        var result = AcceptanceEvaluator.Evaluate(
+            new MetricSnapshot { TimestampUtc = now },
+            options,
+            expectedOnline: 0,
+            role: LoadTestRole.ApiOnly,
+            commandPhases: commandPhases);
+
+        Assert.False(result.Passed);
+        Assert.Contains(result.Checks, item => item.Name == "asyncApiAcceptanceRate" && item.Actual == 0.9 && !item.Passed);
+        Assert.Contains(result.Checks, item => item.Name == "syncResultSuccessRate" && item.Actual == 0.8 && item.Passed);
+        Assert.Contains(result.Checks, item => item.Name == "commandDeliveryRate" && item.Actual == 0.9 && !item.Passed);
+        Assert.Contains(result.Checks, item => item.Name == "unobservedCommands" && item.Actual == 2 && !item.Passed);
+    }
+
+    /// <summary>
+    /// 验证原始交付通过但协议识别率不足时只让识别规则失败，并且未执行的同步阶段不会产生零样本假失败。
+    /// </summary>
+    [Fact]
+    public void CommandPhases_SeparateRawDeliveryFromRecognition_AndSkipEmptyModes()
+    {
+        var options = new AcceptanceOptions
+        {
+            MinimumFinalOnlineRate = null,
+            MaximumProtocolErrorRate = null,
+            MinimumSyncResultSuccessRate = 0.99,
+            MinimumCommandDeliveryRate = 0.95,
+            MinimumCommandRecognitionRate = 0.95
+        };
+        var phase = CreateCommandPhase(
+            "async",
+            showResult: false,
+            started: 100,
+            succeeded: 100,
+            estimatedEnqueued: 100,
+            received: 80) with
+        {
+            RawDownstreamCommandsObserved = 100,
+            ProtocolRecognizedCommands = 80
+        };
+
+        var result = AcceptanceEvaluator.Evaluate(
+            new MetricSnapshot { TimestampUtc = DateTimeOffset.UtcNow },
+            options,
+            expectedOnline: 0,
+            role: LoadTestRole.ApiOnly,
+            commandPhases: [phase]);
+
+        Assert.False(result.Passed);
+        Assert.Contains(result.Checks, item => item.Name == "commandDeliveryRate" && item.Actual == 1 && item.Passed);
+        Assert.Contains(result.Checks, item => item.Name == "commandRecognitionRate" && item.Actual == 0.8 && !item.Passed);
+        Assert.DoesNotContain(result.Checks, item => item.Name == "syncResultSuccessRate");
+    }
+
+    /// <summary>创建端到端 HTTP 验收测试使用的最小阶段结果。</summary>
+    /// <param name="name">阶段名称。</param>
+    /// <param name="showResult">是否同步结果阶段。</param>
+    /// <param name="started">发起数。</param>
+    /// <param name="succeeded">业务成功数。</param>
+    /// <param name="estimatedEnqueued">估算入队数。</param>
+    /// <param name="received">设备侧观测数。</param>
+    /// <returns>包含独立异步或同步成功字段的阶段结果。</returns>
+    private static CommandPhaseResult CreateCommandPhase(
+        string name,
+        bool showResult,
+        long started,
+        long succeeded,
+        long estimatedEnqueued,
+        long received) => new()
+        {
+            Name = name,
+            StartedAtUtc = DateTimeOffset.UtcNow,
+            EndedAtUtc = DateTimeOffset.UtcNow,
+            LocalDeviceCount = 10,
+            PlannedRequests = 10,
+            ShowResult = showResult,
+            ApiRequestsStarted = started,
+            ApiRequestsSucceeded = succeeded,
+            ApiRequestsFailed = started - succeeded,
+            ApiRequestTimeouts = 0,
+            ApiEstimatedEnqueued = estimatedEnqueued,
+            ApiBusinessAccepted = showResult ? 0 : succeeded,
+            SyncResultsSucceeded = showResult ? succeeded : 0,
+            GatherReadingCommandsReceived = received,
+            GatherReadingCommandsResponded = received,
+            RawDownstreamCommandsObserved = received,
+            ProtocolRecognizedCommands = received,
+            GatherReadingCommandsUnobserved = Math.Max(0, estimatedEnqueued - received)
+        };
+
+    /// <summary>
     /// 创建验收测试使用的完整掉线事件快照。
     /// </summary>
     /// <param name="sequence">事件编号。</param>

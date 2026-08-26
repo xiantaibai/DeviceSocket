@@ -13,7 +13,7 @@
     // 这里始终填写全部分片合计的设备总数，不填写单台负载机数量。
     "count": 10000,
     "generationMode": "csv",
-    // CSV 必须包含 10000 条数据库真实存在且互不重复的 meterId,deviceId 映射。
+    // CSV 必须包含 10000 条数据库真实存在且互不重复的 meterId,deviceId 映射；老库特殊终端地址 00000 会按原值透传。
     "deviceMappingFile": "gather-device-10000.csv"
   },
   "connection": {

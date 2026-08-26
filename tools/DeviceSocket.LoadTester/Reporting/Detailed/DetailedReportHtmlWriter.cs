@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net;
 using System.Text;
+using DeviceSocket.LoadTester.Metrics;
 
 namespace DeviceSocket.LoadTester.Reporting.Detailed;
 
@@ -206,7 +207,24 @@ internal static class DetailedReportHtmlWriter
         AppendMetric(builder, "队列年龄峰值", analysis.Server is { } server ? $"{server.MaximumQueueAgeMilliseconds / 1000d:F1} 秒" : "不可评估", "Pipeline 最大等待", analysis.AcceptanceChecks.FirstOrDefault(item => item.Name == "业务管线最大排队年龄")?.Status == DetailedAcceptanceStatus.Passed);
         AppendMetric(builder, "ACK 最大耗时", analysis.Server is { } ackServer ? $"{ackServer.MaximumAckElapsedMilliseconds:N0} ms" : "不可评估", "组帧至 Socket Send 返回", analysis.AcceptanceChecks.FirstOrDefault(item => item.Name == "ACK 最大耗时")?.Status == DetailedAcceptanceStatus.Passed);
         AppendMetric(builder, "HTTP 成功率", httpRate.HasValue ? $"{httpRate:F2}%" : "无请求", $"{metrics.ApiRequestsSucceeded:N0} / {metrics.ApiRequestsStarted:N0}", httpRate is null or >= 99d);
-        AppendMetric(builder, "最严重恢复耗时", metrics.WorstRecoveryMilliseconds is { } worstRecovery ? $"{worstRecovery / 1000d:F1} 秒" : "未恢复", "按完整中断事件取最大值", metrics.WorstRecoveryMilliseconds.HasValue && !metrics.OutageActive);
+        var rawCommands = analysis.CommandPhases.Sum(item => item.RawDownstreamCommands);
+        var recognizedCommands = analysis.CommandPhases.Sum(item => item.RecognizedCommands);
+        var estimatedCommands = analysis.CommandPhases.Sum(item => item.EstimatedEnqueued);
+        AppendMetric(
+            builder,
+            "原始下行交付率",
+            estimatedCommands > 0
+                ? $"{Rate(rawCommands, estimatedCommands) * 100:F2}%"
+                : "无命令",
+            $"{rawCommands:N0} 条原始下行",
+            estimatedCommands == 0 || Rate(rawCommands, estimatedCommands) >= 0.95);
+        AppendMetric(
+            builder,
+            "协议识别率",
+            rawCommands > 0 ? $"{Rate(recognizedCommands, rawCommands) * 100:F2}%" : "无下行",
+            $"{recognizedCommands:N0} 条已识别",
+            rawCommands == 0 || Rate(recognizedCommands, rawCommands) >= 0.95);
+        AppendMetric(builder, "最严重恢复耗时", FormatRecovery(metrics), "按完整中断事件取最大值", (metrics.OutageCount == 0 || metrics.WorstRecoveryMilliseconds.HasValue) && !metrics.OutageActive);
         var secondaryOutages = metrics.Outages.Count > 0
             ? metrics.Outages.Count(item => !item.ExpectedServerRestart)
             : analysis.ExpectedServerRestart
@@ -360,9 +378,20 @@ internal static class DetailedReportHtmlWriter
         AppendTableRow(builder, "连接尝试 / 成功 / 失败", $"{metrics.ConnectionAttempts:N0} / {metrics.ConnectionSucceeded:N0} / {metrics.ConnectionFailed:N0}");
         AppendTableRow(builder, "登录尝试 / 成功 / 失败", $"{metrics.LoginAttempts:N0} / {metrics.LoginSucceeded:N0} / {metrics.LoginFailed:N0}");
         AppendTableRow(builder, "心跳发送 / 确认 / 超时", $"{metrics.HeartbeatsSent:N0} / {metrics.HeartbeatsConfirmed:N0} / {metrics.HeartbeatTimeouts:N0}");
-        AppendTableRow(builder, "重连 / 掉线事件 / 最严重恢复", $"{metrics.ReconnectsScheduled:N0} / {metrics.OutageCount:N0} / {(metrics.WorstRecoveryMilliseconds.HasValue ? $"{metrics.WorstRecoveryMilliseconds.Value / 1000d:F1} 秒" : "未恢复")}");
+        AppendTableRow(builder, "重连 / 掉线事件 / 最严重恢复", $"{metrics.ReconnectsScheduled:N0} / {metrics.OutageCount:N0} / {FormatRecovery(metrics)}");
         AppendTableRow(builder, "HTTP 发起 / 成功 / 失败 / 超时", $"{metrics.ApiRequestsStarted:N0} / {metrics.ApiRequestsSucceeded:N0} / {metrics.ApiRequestsFailed:N0} / {metrics.ApiRequestTimeouts:N0}");
-        AppendTableRow(builder, "设备命令收到 / 应答", $"{metrics.GatherReadingCommandsReceived:N0} / {metrics.GatherReadingCommandsResponded:N0}");
+        AppendTableRow(builder, "设备命令收到 / 应答（旧累计口径）", $"{metrics.GatherReadingCommandsReceived:N0} / {metrics.GatherReadingCommandsResponded:N0}");
+        if (analysis.CommandPhases.Count > 0)
+        {
+            AppendTableRow(
+                builder,
+                "原始下行 / 协议识别 / 不支持 / 应答 / 重复帧",
+                $"{analysis.CommandPhases.Sum(item => item.RawDownstreamCommands):N0} / " +
+                $"{analysis.CommandPhases.Sum(item => item.RecognizedCommands):N0} / " +
+                $"{analysis.CommandPhases.Sum(item => item.UnsupportedCommands):N0} / " +
+                $"{analysis.CommandPhases.Sum(item => item.CommandsResponded):N0} / " +
+                $"{analysis.CommandPhases.Sum(item => item.DuplicateDownstreamFrames):N0}");
+        }
         AppendTableRow(builder, "负载机 CPU / 工作集峰值", $"{analysis.LoadGeneratorResources.MaximumCpuPercent:F2}% / {Bytes(analysis.LoadGeneratorResources.MaximumWorkingSetBytes)}");
         if (analysis.Server is { } server)
         {
@@ -376,6 +405,13 @@ internal static class DetailedReportHtmlWriter
             AppendTableRow(builder, "命令线路压力保护次数 / 最长暂停", $"{server.CommandLineStartPauseCount:N0} / {server.MaximumCommandLineStartPauseElapsedMilliseconds / 1000d:F1} 秒");
             AppendTableRow(builder, "连接关闭 / 错误 / 接收 / 其他", $"{server.ConnectionClosed:N0} / {server.ConnectionCloseWithError:N0} / {server.ConnectionCloseReceive:N0} / {server.ConnectionCloseOther:N0}");
         }
+        if (analysis.CooldownServer is { } cooldown)
+        {
+            AppendTableRow(
+                builder,
+                "冷却窗口连接关闭 / ACK 中止 / 命令暂停",
+                $"{cooldown.ConnectionClosed:N0} / {cooldown.AckSendAborted:N0} / {cooldown.CommandLineStartPauseCount:N0}（不参与验收）");
+        }
         builder.AppendLine("</tbody></table></div>");
     }
 
@@ -386,16 +422,51 @@ internal static class DetailedReportHtmlWriter
     /// <param name="phases">合并后的阶段摘要。</param>
     private static void AppendCommandPhasesTable(StringBuilder builder, IReadOnlyList<DetailedCommandPhaseSummary> phases)
     {
-        builder.AppendLine("<h3 class=\"table-title\">HTTP 阶段明细</h3><div class=\"table-wrap\"><table><thead><tr><th>阶段</th><th>同步结果</th><th>计划 / 发起</th><th>成功 / 失败 / 超时</th><th>设备收到 / 应答</th><th>耗时</th></tr></thead><tbody>");
+        builder.AppendLine("<h3 class=\"table-title\">HTTP 阶段明细</h3><div class=\"table-wrap\"><table><thead><tr><th>阶段</th><th>同步结果</th><th>计划 / 发起</th><th>成功 / 失败 / 超时</th><th>预校验 / 估算入队</th><th>原始下行 / 识别 / 不支持 / 应答 / 未观测</th><th>原始交付率 / 识别率 / 应答率</th><th>重复帧</th><th>排空</th><th>P95</th><th>熔断</th><th>耗时</th></tr></thead><tbody>");
         foreach (var phase in phases)
         {
             builder.Append("<tr><td>").Append(Html(phase.Name)).Append("</td><td>").Append(phase.ShowResult ? "是" : "否")
                 .Append("</td><td>").Append($"{phase.PlannedRequests:N0} / {phase.StartedRequests:N0}")
                 .Append("</td><td>").Append($"{phase.SucceededRequests:N0} / {phase.FailedRequests:N0} / {phase.TimeoutRequests:N0}")
-                .Append("</td><td>").Append($"{phase.CommandsReceived:N0} / {phase.CommandsResponded:N0}")
+                .Append("</td><td>").Append($"{phase.PrevalidationRejected:N0} / {phase.EstimatedEnqueued:N0}")
+                .Append("</td><td>").Append($"{phase.RawDownstreamCommands:N0} / {phase.RecognizedCommands:N0} / {phase.UnsupportedCommands:N0} / {phase.CommandsResponded:N0} / {phase.CommandsUnobserved:N0}")
+                .Append("</td><td>").Append($"{phase.RawDeliveryRate:P2} / {phase.RecognitionRate:P2} / {phase.ResponseRate:P2}")
+                .Append("</td><td>").Append($"{phase.DuplicateDownstreamFrames:N0}")
+                .Append("</td><td>").Append(FormatDrain(phase))
+                .Append("</td><td>").Append($"{phase.P95Milliseconds:N0} ms")
+                .Append("</td><td>").Append(phase.CircuitBreakerTripped ? "是" : "否")
                 .Append("</td><td>").Append((phase.EndedAtUtc - phase.StartedAtUtc).TotalSeconds.ToString("F1", CultureInfo.InvariantCulture)).AppendLine(" 秒</td></tr>");
         }
         builder.AppendLine("</tbody></table></div>");
+    }
+
+    /// <summary>将详细 HTML 阶段排空三态转换为简短文本。</summary>
+    /// <param name="phase">合并后的 HTTP 阶段。</param>
+    /// <returns>未启用、通过或超时以及最长等待秒数。</returns>
+    private static string FormatDrain(DetailedCommandPhaseSummary phase) => phase.DrainSatisfied switch
+    {
+        true => $"通过 / {phase.MaximumDrainWaitMilliseconds / 1000d:F1} 秒",
+        false => $"超时 / {phase.MaximumDrainWaitMilliseconds / 1000d:F1} 秒",
+        null => "未启用"
+    };
+
+    /// <summary>安全计算计数比例，分母不大于零时返回零。</summary>
+    /// <param name="numerator">分子计数。</param>
+    /// <param name="denominator">分母计数。</param>
+    /// <returns>双精度比例。</returns>
+    private static double Rate(long numerator, long denominator) =>
+        denominator <= 0 ? 0 : numerator / (double)denominator;
+
+    /// <summary>区分没有掉线事件和发生掉线但尚未恢复。</summary>
+    /// <param name="metrics">客户端最终指标。</param>
+    /// <returns>无掉线、未恢复或最严重恢复耗时。</returns>
+    private static string FormatRecovery(MetricSnapshot metrics)
+    {
+        if (metrics.OutageCount == 0 && !metrics.OutageActive)
+            return "无掉线";
+        return metrics.WorstRecoveryMilliseconds.HasValue
+            ? $"{metrics.WorstRecoveryMilliseconds.Value / 1000d:F1} 秒"
+            : "未恢复";
     }
 
     /// <summary>

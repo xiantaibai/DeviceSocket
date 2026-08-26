@@ -16,7 +16,7 @@ public enum DeviceAddressGenerationMode
     Random,
 
     /// <summary>
-    /// 从 <c>devices.deviceMappingFile</c> 的 <c>meterId,deviceId</c> 行读取真实376.1设备身份，适合数据库设备编号不连续的场景。
+    /// 从 <c>devices.deviceMappingFile</c> 的 <c>meterId,deviceId</c> 行读取真实376.1设备身份，适合数据库设备编号不连续的场景；Gather 老服务兼容配置还允许读取真实特殊终端地址 <c>00000</c>。
     /// </summary>
     Csv
 }

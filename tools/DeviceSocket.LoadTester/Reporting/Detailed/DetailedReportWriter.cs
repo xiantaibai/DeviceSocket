@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using DeviceSocket.LoadTester.Metrics;
 
 namespace DeviceSocket.LoadTester.Reporting.Detailed;
 
@@ -202,9 +203,19 @@ internal static class DetailedReportWriter
         builder.AppendLine($"| 登录尝试/成功/失败 | {metrics.LoginAttempts:N0}/{metrics.LoginSucceeded:N0}/{metrics.LoginFailed:N0} |");
         builder.AppendLine($"| 心跳发送/确认/超时 | {metrics.HeartbeatsSent:N0}/{metrics.HeartbeatsConfirmed:N0}/{metrics.HeartbeatTimeouts:N0} |");
         builder.AppendLine($"| 重连/掉线事件/非预期事件 | {metrics.ReconnectsScheduled:N0}/{metrics.OutageCount:N0}/{CountSecondaryOutages(analysis):N0} |");
-        builder.AppendLine($"| 最严重恢复/当前连续稳定 | {FormatRecovery(metrics.WorstRecoveryMilliseconds)}/{metrics.CurrentStableOnlineMilliseconds / 1000d:F1} 秒 |");
+        builder.AppendLine($"| 最严重恢复/当前连续稳定 | {FormatRecovery(metrics)}/{metrics.CurrentStableOnlineMilliseconds / 1000d:F1} 秒 |");
         builder.AppendLine($"| HTTP发起/成功/失败/超时 | {metrics.ApiRequestsStarted:N0}/{metrics.ApiRequestsSucceeded:N0}/{metrics.ApiRequestsFailed:N0}/{metrics.ApiRequestTimeouts:N0} |");
-        builder.AppendLine($"| 设备命令收到/应答 | {metrics.GatherReadingCommandsReceived:N0}/{metrics.GatherReadingCommandsResponded:N0} |");
+        builder.AppendLine($"| 设备命令收到/应答（旧累计口径） | {metrics.GatherReadingCommandsReceived:N0}/{metrics.GatherReadingCommandsResponded:N0} |");
+        if (analysis.CommandPhases.Count > 0)
+        {
+            builder.AppendLine(
+                $"| 原始下行/协议识别/不支持/应答/重复帧 | " +
+                $"{analysis.CommandPhases.Sum(item => item.RawDownstreamCommands):N0}/" +
+                $"{analysis.CommandPhases.Sum(item => item.RecognizedCommands):N0}/" +
+                $"{analysis.CommandPhases.Sum(item => item.UnsupportedCommands):N0}/" +
+                $"{analysis.CommandPhases.Sum(item => item.CommandsResponded):N0}/" +
+                $"{analysis.CommandPhases.Sum(item => item.DuplicateDownstreamFrames):N0} |");
+        }
         builder.AppendLine($"| 连接 P50/P95/P99 | {metrics.ConnectionLatency.Percentile(0.5)}/{metrics.ConnectionLatency.Percentile(0.95)}/{metrics.ConnectionLatency.Percentile(0.99)} ms |");
         builder.AppendLine($"| 登录 P50/P95/P99 | {metrics.LoginLatency.Percentile(0.5)}/{metrics.LoginLatency.Percentile(0.95)}/{metrics.LoginLatency.Percentile(0.99)} ms |");
         builder.AppendLine($"| HTTP P50/P95/P99 | {metrics.ApiRequestLatency.Percentile(0.5)}/{metrics.ApiRequestLatency.Percentile(0.95)}/{metrics.ApiRequestLatency.Percentile(0.99)} ms |");
@@ -222,6 +233,12 @@ internal static class DetailedReportWriter
             builder.AppendLine($"| 待建命令线路/命令管线深度峰值 | {server.MaximumPendingCommandLine:N0}/{server.MaximumCommandLineQueueDepth:N0} |");
             builder.AppendLine($"| 命令线路压力保护次数/最长暂停 | {server.CommandLineStartPauseCount:N0}/{server.MaximumCommandLineStartPauseElapsedMilliseconds / 1000d:F1} 秒 |");
             builder.AppendLine($"| 连接关闭/错误/接收/其他 | {server.ConnectionClosed:N0}/{server.ConnectionCloseWithError:N0}/{server.ConnectionCloseReceive:N0}/{server.ConnectionCloseOther:N0} |");
+        }
+        if (analysis.CooldownServer is { } cooldown)
+        {
+            builder.AppendLine(
+                $"| 冷却窗口连接关闭/ACK中止/命令暂停 | " +
+                $"{cooldown.ConnectionClosed:N0}/{cooldown.AckSendAborted:N0}/{cooldown.CommandLineStartPauseCount:N0}（不参与验收） |");
         }
         builder.AppendLine();
     }
@@ -243,8 +260,14 @@ internal static class DetailedReportWriter
     /// </summary>
     /// <param name="milliseconds">恢复耗时毫秒数。</param>
     /// <returns>适合报告展示的恢复时间。</returns>
-    private static string FormatRecovery(long? milliseconds) =>
-        milliseconds.HasValue ? $"{milliseconds.Value / 1000d:F1} 秒" : "未恢复";
+    private static string FormatRecovery(MetricSnapshot metrics)
+    {
+        if (metrics.OutageCount == 0 && !metrics.OutageActive)
+            return "无掉线";
+        return metrics.WorstRecoveryMilliseconds.HasValue
+            ? $"{metrics.WorstRecoveryMilliseconds.Value / 1000d:F1} 秒"
+            : "未恢复";
+    }
 
     /// <summary>
     /// 输出自动诊断问题的分级证据列表。
@@ -279,14 +302,24 @@ internal static class DetailedReportWriter
         if (phases.Count == 0)
             return;
         builder.AppendLine("## HTTP 阶段明细").AppendLine();
-        builder.AppendLine("| 阶段 | 同步结果 | 计划/发起 | 成功/失败/超时 | 离线跳过 | 设备收到/应答 | 耗时 |");
-        builder.AppendLine("| --- | :---: | ---: | ---: | ---: | ---: | ---: |");
+        builder.AppendLine("| 阶段 | 同步结果 | 计划/发起 | 成功/失败/超时 | 预校验/估算入队 | 原始下行/识别/不支持/应答/未观测 | 原始交付率/识别率/应答率 | 重复帧 | 排空 | P95 | 熔断 | 耗时 |");
+        builder.AppendLine("| --- | :---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | :---: | ---: |");
         foreach (var phase in phases)
         {
-            builder.AppendLine($"| {Md(phase.Name)} | {(phase.ShowResult ? "是" : "否")} | {phase.PlannedRequests:N0}/{phase.StartedRequests:N0} | {phase.SucceededRequests:N0}/{phase.FailedRequests:N0}/{phase.TimeoutRequests:N0} | {phase.SkippedOfflineRequests:N0} | {phase.CommandsReceived:N0}/{phase.CommandsResponded:N0} | {(phase.EndedAtUtc - phase.StartedAtUtc).TotalSeconds:F1} 秒 |");
+            builder.AppendLine($"| {Md(phase.Name)} | {(phase.ShowResult ? "是" : "否")} | {phase.PlannedRequests:N0}/{phase.StartedRequests:N0} | {phase.SucceededRequests:N0}/{phase.FailedRequests:N0}/{phase.TimeoutRequests:N0} | {phase.PrevalidationRejected:N0}/{phase.EstimatedEnqueued:N0} | {phase.RawDownstreamCommands:N0}/{phase.RecognizedCommands:N0}/{phase.UnsupportedCommands:N0}/{phase.CommandsResponded:N0}/{phase.CommandsUnobserved:N0} | {phase.RawDeliveryRate:P2}/{phase.RecognitionRate:P2}/{phase.ResponseRate:P2} | {phase.DuplicateDownstreamFrames:N0} | {FormatDrain(phase)} | {phase.P95Milliseconds:N0} ms | {(phase.CircuitBreakerTripped ? "是" : "否")} | {(phase.EndedAtUtc - phase.StartedAtUtc).TotalSeconds:F1} 秒 |");
         }
         builder.AppendLine();
     }
+
+    /// <summary>将详细报告阶段排空三态转换为简短文本。</summary>
+    /// <param name="phase">合并后的 HTTP 阶段。</param>
+    /// <returns>未启用、通过或超时以及最长等待秒数。</returns>
+    private static string FormatDrain(DetailedCommandPhaseSummary phase) => phase.DrainSatisfied switch
+    {
+        true => $"通过/{phase.MaximumDrainWaitMilliseconds / 1000d:F1}秒",
+        false => $"超时/{phase.MaximumDrainWaitMilliseconds / 1000d:F1}秒",
+        null => "未启用"
+    };
 
     /// <summary>
     /// 输出客户端错误码降序表。
@@ -360,14 +393,20 @@ internal static class DetailedReportWriter
     /// <returns>阶段 CSV。</returns>
     private static string BuildPhaseCsv(DetailedReportAnalysis analysis)
     {
-        var builder = new StringBuilder("name,showResult,planned,started,succeeded,failed,timeouts,skippedOffline,commandsReceived,commandsResponded,durationSeconds\n");
+        var builder = new StringBuilder("name,showResult,planned,started,succeeded,failed,timeouts,skippedOffline,estimatedEnqueued,rawDownstream,recognized,unsupported,commandsResponded,unobserved,duplicateFrames,rawDeliveryRate,recognitionRate,responseRate,durationSeconds\n");
         foreach (var phase in analysis.CommandPhases)
         {
             builder.Append(Csv(phase.Name)).Append(',').Append(phase.ShowResult).Append(',')
                 .Append(phase.PlannedRequests).Append(',').Append(phase.StartedRequests).Append(',')
                 .Append(phase.SucceededRequests).Append(',').Append(phase.FailedRequests).Append(',')
                 .Append(phase.TimeoutRequests).Append(',').Append(phase.SkippedOfflineRequests).Append(',')
-                .Append(phase.CommandsReceived).Append(',').Append(phase.CommandsResponded).Append(',')
+                .Append(phase.EstimatedEnqueued).Append(',').Append(phase.RawDownstreamCommands).Append(',')
+                .Append(phase.RecognizedCommands).Append(',').Append(phase.UnsupportedCommands).Append(',')
+                .Append(phase.CommandsResponded).Append(',').Append(phase.CommandsUnobserved).Append(',')
+                .Append(phase.DuplicateDownstreamFrames).Append(',')
+                .Append(phase.RawDeliveryRate.ToString("F6", CultureInfo.InvariantCulture)).Append(',')
+                .Append(phase.RecognitionRate.ToString("F6", CultureInfo.InvariantCulture)).Append(',')
+                .Append(phase.ResponseRate.ToString("F6", CultureInfo.InvariantCulture)).Append(',')
                 .Append((phase.EndedAtUtc - phase.StartedAtUtc).TotalSeconds.ToString("F1", CultureInfo.InvariantCulture)).Append('\n');
         }
         return builder.ToString();

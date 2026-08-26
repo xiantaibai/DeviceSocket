@@ -1,0 +1,371 @@
+{
+  // 四台负载机共同维持五万台真实设备在线，并以全局最高 50 RPS 调用读表 API、模拟终端业务应答。
+  "role": "combined",
+  "target": {
+    "host": "192.168.111.222",
+    "port": 6666,
+    "protocol": "qGdw3761",
+    "compatibilityProfile": "gatherTcpCenter"
+  },
+  "devices": {
+    // 四个分片都部署同一份完整 CSV，工具按数据行全局序号取模，每台固定负责 12500 台。
+    "count": 50000,
+    "generationMode": "csv",
+    // Gather 兼容模式允许 CSV 中数据库真实存在的特殊终端地址 00000。
+    "deviceMappingFile": "gather-device-50000.csv"
+  },
+  "connection": {
+    "startMode": "ramp",
+    // 所有分片合计速率，四台机器会各自换算为约 75 次/秒，不会放大为 1200 次/秒。
+    "connectionsPerSecond": 300,
+    // 该字段是单个负载进程的本地建连和登录并发闸门。
+    "maxConcurrentConnecting": 500,
+    "connectTimeoutSeconds": 5,
+    "loginTimeoutSeconds": 5,
+    "writeTimeoutSeconds": 5,
+    "noDelay": true
+  },
+  "heartbeat": {
+    "enabled": true,
+    "intervalSeconds": 60,
+    "jitterSeconds": 10,
+    "responseTimeoutSeconds": 5
+  },
+  "workload": {
+    "reportsEnabled": false,
+    "reportIntervalSeconds": 300,
+    "jitterSeconds": 30,
+    "gatherReadingResponse": {
+      // 收到 Gather AFN=0CH/F129 读表命令后生成老 CmdCenter 可解析的 A15/A14 业务应答。
+      "enabled": true,
+      "mode": "normal",
+      "affectedDevicePercentage": 100,
+      "delayMilliseconds": 1000,
+      "rateCount": 4,
+      "baseReadingKwh": 1000,
+      "deviceStepKwh": 0.01
+    }
+  },
+  "commandWorkload": {
+    // 每个分片只从本机真正在线的设备中选择 HTTP 目标，四个分片合计仍覆盖全局设备集合一次。
+    "targetDeviceSource": "onlineRegistry",
+    "enabled": true,
+    // 运行前替换为与 TCP 服务同一套环境的 Gather.Control.Api 地址。
+    "baseUrl": "http://192.168.111.18:9011",
+    "endpointPath": "/api/ammeter/reading",
+    "authorizationHeaderName": "gather-authorize-key",
+    // 需要鉴权时改为 GATHER_AUTHORIZE_KEY，并只在四台机器的进程环境变量中保存同一个密钥。
+    "authorizationKeyEnvironmentVariable": "",
+    "operatorUserId": 0,
+    "operationSource": 6,
+    "readingModel": 0,
+    "readingCode": 0,
+    "requestTimeoutSeconds": 70,
+    // 无论当前 HTTP 阶段抽取多少设备，都必须先等五万台业务在线，隔离登录爬升和指令负载。
+    "minimumOnlineCount": 50000,
+    "requiredOnlineRate": 0.98,
+    "onlineStableSeconds": 120,
+    "onlineWaitTimeoutSeconds": 1800,
+    "startDelaySeconds": 0,
+    "phases": [
+      {
+        // 小样本同步冒烟先验证 API、TCP 下发、设备应答和结果订阅闭环；失败即终止整轮。
+        "name": "functional-sync-smoke-20",
+        "targetDeviceCount": 20,
+        "requestsPerDevice": 1,
+        "requestsPerSecond": 2,
+        "maxConcurrency": 5,
+        "showResult": true,
+        "pauseAfterSeconds": 10,
+        "onlineGateFailureAction": "abortRun",
+        "minimumApiSuccessRate": 0.95,
+        "maximumP95Milliseconds": 70000,
+        "drainEnabled": true,
+        "minimumRawDeliveryRate": 0.95,
+        "minimumDeliveryRate": 0.95,
+        "minimumResponseRate": 0.99,
+        "drainTimeoutSeconds": 180,
+        "quietSeconds": 10,
+        "drainFailureAction": "abortRun",
+        "circuitBreakerEnabled": true,
+        "maximumDurationSeconds": 300,
+        "maximumConsecutiveFailures": 10,
+        "maximumTimeoutRate": 0.1,
+        "circuitBreakerMinimumRequests": 10,
+        "circuitBreakerAction": "abortRun"
+      },
+      {
+        // 四级小样本阶梯用于确认服务端命令消费速度可以持续追平，再进入五万条全量命令阶段。
+        "name": "async-ramp-5rps",
+        "targetDeviceCount": 500,
+        "requestsPerDevice": 1,
+        "requestsPerSecond": 5,
+        "maxConcurrency": 10,
+        "showResult": false,
+        "pauseAfterSeconds": 10,
+        "onlineGateFailureAction": "abortRun",
+        "minimumApiSuccessRate": 0.98,
+        "drainEnabled": true,
+        "minimumRawDeliveryRate": 0.98,
+        "minimumDeliveryRate": 0.98,
+        "minimumResponseRate": 0.99,
+        "drainTimeoutSeconds": 300,
+        "quietSeconds": 15,
+        "drainFailureAction": "abortRun",
+        "circuitBreakerEnabled": true,
+        "maximumDurationSeconds": 300,
+        "maximumConsecutiveFailures": 20,
+        "maximumTimeoutRate": 0.05,
+        "circuitBreakerMinimumRequests": 20,
+        "circuitBreakerAction": "abortRun"
+      },
+      {
+        "name": "async-ramp-10rps",
+        "targetDeviceCount": 500,
+        "requestsPerDevice": 1,
+        "requestsPerSecond": 10,
+        "maxConcurrency": 20,
+        "showResult": false,
+        "pauseAfterSeconds": 10,
+        "onlineGateFailureAction": "abortRun",
+        "minimumApiSuccessRate": 0.98,
+        "drainEnabled": true,
+        "minimumRawDeliveryRate": 0.98,
+        "minimumDeliveryRate": 0.98,
+        "minimumResponseRate": 0.99,
+        "drainTimeoutSeconds": 300,
+        "quietSeconds": 15,
+        "drainFailureAction": "abortRun",
+        "circuitBreakerEnabled": true,
+        "maximumDurationSeconds": 300,
+        "maximumConsecutiveFailures": 20,
+        "maximumTimeoutRate": 0.05,
+        "circuitBreakerMinimumRequests": 20,
+        "circuitBreakerAction": "abortRun"
+      },
+      {
+        "name": "async-ramp-20rps",
+        "targetDeviceCount": 500,
+        "requestsPerDevice": 1,
+        "requestsPerSecond": 20,
+        "maxConcurrency": 40,
+        "showResult": false,
+        "pauseAfterSeconds": 10,
+        "onlineGateFailureAction": "abortRun",
+        "minimumApiSuccessRate": 0.98,
+        "drainEnabled": true,
+        "minimumRawDeliveryRate": 0.98,
+        "minimumDeliveryRate": 0.98,
+        "minimumResponseRate": 0.99,
+        "drainTimeoutSeconds": 300,
+        "quietSeconds": 15,
+        "drainFailureAction": "abortRun",
+        "circuitBreakerEnabled": true,
+        "maximumDurationSeconds": 300,
+        "maximumConsecutiveFailures": 20,
+        "maximumTimeoutRate": 0.05,
+        "circuitBreakerMinimumRequests": 20,
+        "circuitBreakerAction": "abortRun"
+      },
+      {
+        "name": "async-ramp-50rps",
+        "targetDeviceCount": 500,
+        "requestsPerDevice": 1,
+        "requestsPerSecond": 50,
+        "maxConcurrency": 80,
+        "showResult": false,
+        "pauseAfterSeconds": 15,
+        "onlineGateFailureAction": "abortRun",
+        "minimumApiSuccessRate": 0.98,
+        "drainEnabled": true,
+        "minimumRawDeliveryRate": 0.98,
+        "minimumDeliveryRate": 0.98,
+        "minimumResponseRate": 0.99,
+        "drainTimeoutSeconds": 300,
+        "quietSeconds": 15,
+        "drainFailureAction": "abortRun",
+        "circuitBreakerEnabled": true,
+        "maximumDurationSeconds": 300,
+        "maximumConsecutiveFailures": 20,
+        "maximumTimeoutRate": 0.05,
+        "circuitBreakerMinimumRequests": 20,
+        "circuitBreakerAction": "abortRun"
+      },
+      {
+        // 五万台在线设备各提交一次异步命令；50 RPS 为四个分片合计值，理论发送时间约 1000 秒。
+        // 如果本轮只想抽样 1000 台，把 targetDeviceCount 从 0 改为 1000，其余排空和验收规则不变。
+        "name": "all-devices-async-once-50000",
+        "targetDeviceCount": 0,
+        "requestsPerDevice": 1,
+        "requestsPerSecond": 50,
+        "maxConcurrency": 100,
+        "showResult": false,
+        "pauseAfterSeconds": 60,
+        "onlineGateFailureAction": "abortRun",
+        "minimumApiSuccessRate": 0.98,
+        "drainEnabled": true,
+        "minimumRawDeliveryRate": 0.98,
+        "minimumDeliveryRate": 0.98,
+        "minimumResponseRate": 0.99,
+        "drainTimeoutSeconds": 1800,
+        "quietSeconds": 30,
+        "drainFailureAction": "abortRun",
+        "circuitBreakerEnabled": true,
+        "maximumDurationSeconds": 1500,
+        "maximumConsecutiveFailures": 50,
+        "maximumTimeoutRate": 0.05,
+        "circuitBreakerMinimumRequests": 100,
+        "circuitBreakerAction": "abortRun"
+      },
+      {
+        // 向 1000 台在线设备各连续提交 5 条异步命令，验证五万在线背景下的同设备队列和队头阻塞。
+        "name": "same-device-queue-1000x5",
+        "targetDeviceCount": 1000,
+        "requestsPerDevice": 5,
+        "requestsPerSecond": 50,
+        "maxConcurrency": 100,
+        "showResult": false,
+        "pauseAfterSeconds": 30,
+        "onlineGateFailureAction": "abortRun",
+        "minimumApiSuccessRate": 0.98,
+        "drainEnabled": true,
+        "minimumRawDeliveryRate": 0.98,
+        "minimumDeliveryRate": 0.98,
+        "minimumResponseRate": 0.99,
+        "drainTimeoutSeconds": 900,
+        "quietSeconds": 20,
+        "drainFailureAction": "abortRun",
+        "circuitBreakerEnabled": true,
+        "maximumDurationSeconds": 600,
+        "maximumConsecutiveFailures": 50,
+        "maximumTimeoutRate": 0.05,
+        "circuitBreakerMinimumRequests": 100,
+        "circuitBreakerAction": "abortRun"
+      },
+      {
+        // 大流量排空后再次执行同步闭环，检查结果订阅、Redis 连接和 HTTP 等待资源是否退化。
+        "name": "final-sync-20x2",
+        "targetDeviceCount": 20,
+        "requestsPerDevice": 2,
+        "requestsPerSecond": 2,
+        "maxConcurrency": 5,
+        "showResult": true,
+        "pauseAfterSeconds": 0,
+        "onlineGateFailureAction": "abortRun",
+        "minimumApiSuccessRate": 0.95,
+        "maximumP95Milliseconds": 70000,
+        "drainEnabled": true,
+        "minimumRawDeliveryRate": 0.95,
+        "minimumDeliveryRate": 0.95,
+        "minimumResponseRate": 0.99,
+        "drainTimeoutSeconds": 300,
+        "quietSeconds": 10,
+        "drainFailureAction": "abortRun",
+        "circuitBreakerEnabled": true,
+        "maximumDurationSeconds": 300,
+        "maximumConsecutiveFailures": 10,
+        "maximumTimeoutRate": 0.1,
+        "circuitBreakerMinimumRequests": 10,
+        "circuitBreakerAction": "abortRun"
+      }
+    ]
+  },
+  "reconnect": {
+    "mode": "exponentialJitter",
+    "initialDelayMilliseconds": 250,
+    "maximumDelaySeconds": 10,
+    "multiplier": 2,
+    "jitterRatio": 0.5,
+    "maximumAttempts": 0
+  },
+  "scenario": {
+    "name": "gather-tcpcenter-http-reading-50000",
+    "durationSeconds": 1,
+    "phases": [
+      {
+        "name": "canary-500",
+        "kind": "warmup",
+        "durationSeconds": 30,
+        "targetDevicePercentage": 1,
+        "connectionsPerSecond": 25
+      },
+      {
+        "name": "ramp-5000",
+        "kind": "ramp",
+        "durationSeconds": 120,
+        "targetDevicePercentage": 10,
+        "connectionsPerSecond": 100
+      },
+      {
+        "name": "ramp-25000",
+        "kind": "ramp",
+        "durationSeconds": 240,
+        "targetDevicePercentage": 50,
+        "connectionsPerSecond": 200
+      },
+      {
+        "name": "ramp-50000",
+        "kind": "ramp",
+        "durationSeconds": 420,
+        "targetDevicePercentage": 100,
+        "connectionsPerSecond": 300
+      },
+      {
+        // HTTP 尚未结束时运行器会继续保持设备在线，不会因固定时长结束而提前进入 cooldown。
+        "name": "command-steady-50000",
+        "kind": "steady",
+        "durationSeconds": 1800,
+        "targetDevicePercentage": 100,
+        "connectionsPerSecond": 300
+      },
+      {
+        "name": "cooldown",
+        "kind": "cooldown",
+        "durationSeconds": 30,
+        "targetDevicePercentage": 0,
+        "connectionsPerSecond": 300
+      }
+    ]
+  },
+  "reporting": {
+    "outputDirectory": "load-test-results",
+    "sampleIntervalSeconds": 1,
+    "checkpointIntervalSeconds": 10,
+    "writeConsoleSummary": true,
+    "downstreamDiagnostics": {
+      "enabled": true,
+      "captureUnknownFrames": true,
+      // 该上限按单节点计算，四台机器最多各保存 500 个未知样本，不会随五万设备无限增长。
+      "maxSamplesPerFingerprint": 5,
+      "maxTotalSamples": 500,
+      "rawHexMaxBytes": 512,
+      // 覆盖最长 1800 秒排空窗口和慢下发余量，避免全量阶段后半段失去请求关联。
+      "correlationTimeoutSeconds": 2400
+    }
+  },
+  "serverObservation": {
+    "enabled": false
+  },
+  "acceptance": {
+    "minimumConnectionSuccessRate": 0.95,
+    "minimumLoginSuccessRate": 0.95,
+    "minimumFinalOnlineRate": 0.98,
+    "minimumFinalOnlineCount": null,
+    "maximumProtocolErrorRate": 0.01,
+    "minimumApiSuccessRate": 0.98,
+    "minimumApiTargetCoverageRate": 0.98,
+    "minimumGatherReadingResponseRate": 0.99,
+    "maximumApiP95Milliseconds": 70000,
+    "minimumAsyncApiAcceptanceRate": 0.98,
+    "minimumSyncResultSuccessRate": 0.95,
+    "minimumCommandDeliveryRate": 0.98,
+    "minimumCommandRecognitionRate": 0.98,
+    // 五万条全量命令中最多允许 500 条在排空窗口内没有观测到原始下行，绝对缺口不得被比例掩盖。
+    "maximumUnobservedCommands": 500
+  },
+  "distributed": {
+    "runId": "gather-http-reading-50000",
+    "shardIndex": 0,
+    "shardCount": 4
+  }
+}

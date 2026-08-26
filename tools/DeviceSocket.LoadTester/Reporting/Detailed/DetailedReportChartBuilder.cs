@@ -94,13 +94,19 @@ internal static class DetailedReportChartBuilder
             new BarItem($"{item.Name}-失败", item.FailedRequests, "#dc2626")
         }).ToArray();
         var metrics = analysis.ClientMetrics;
+        var estimatedCommands = analysis.CommandPhases.Sum(item => item.EstimatedEnqueued);
+        var rawCommands = analysis.CommandPhases.Sum(item => item.RawDownstreamCommands);
+        var recognizedCommands = analysis.CommandPhases.Sum(item => item.RecognizedCommands);
+        var respondedCommands = analysis.CommandPhases.Sum(item => item.CommandsResponded);
         var funnelBars = new[]
         {
             new BarItem("计划目标", metrics.ApiTargetsRequired, "#64748b"),
             new BarItem("HTTP发起", metrics.ApiRequestsStarted, "#2563eb"),
             new BarItem("API成功", metrics.ApiRequestsSucceeded, "#7c3aed"),
-            new BarItem("设备收到", metrics.GatherReadingCommandsReceived, "#ea580c"),
-            new BarItem("设备应答", metrics.GatherReadingCommandsResponded, "#059669")
+            new BarItem("估算入队", estimatedCommands, "#0f766e"),
+            new BarItem("原始下行", rawCommands, "#ea580c"),
+            new BarItem("协议识别", recognizedCommands, "#d97706"),
+            new BarItem("设备应答", respondedCommands, "#059669")
         };
         return new DetailedReportCharts
         {

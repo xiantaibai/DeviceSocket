@@ -1,5 +1,6 @@
 using DeviceSocket.LoadTester.Configuration;
 using DeviceSocket.LoadTester.Metrics;
+using System.Text.Json.Serialization;
 
 namespace DeviceSocket.LoadTester.Reporting;
 
@@ -8,8 +9,8 @@ namespace DeviceSocket.LoadTester.Reporting;
 /// </summary>
 public sealed record NodeReport
 {
-    /// <summary>获取节点报告结构版本；版本 1 在新增可选执行状态字段后仍保持向后兼容。</summary>
-    public int SchemaVersion { get; init; } = 1;
+    /// <summary>获取节点报告结构版本；版本 3 新增逐请求命令关联、原始下行分类和未知报文诊断产物。</summary>
+    public int SchemaVersion { get; init; } = 3;
     /// <summary>获取整轮分布式测试共享的运行编号，对应 <c>distributed.runId</c>。</summary>
     public required string RunId { get; init; }
     /// <summary>获取执行当前分片的负载机名称。</summary>
@@ -38,6 +39,16 @@ public sealed record NodeReport
     /// 获取当前节点依次完成的 HTTP 指令阶段及其增量指标；纯设备角色为空。
     /// </summary>
     public IReadOnlyList<CommandPhaseResult> CommandPhases { get; init; } = [];
+    /// <summary>获取当前节点 HTTP 指令失败明细；成功请求不会逐条保存，避免一万台测试报告无界膨胀。</summary>
+    public IReadOnlyList<HttpRequestErrorDetail> HttpRequestErrors { get; init; } = [];
+    /// <summary>获取本节点下行原始交付、协议识别、应答、重复帧与未关联帧汇总；未启用诊断时为空。</summary>
+    public DownstreamDiagnosticSummary? DownstreamDiagnostics { get; init; }
+    /// <summary>获取逐 HTTP 请求关联结果；单独写入 JSON Lines，不内嵌节点摘要以控制文件大小。</summary>
+    [JsonIgnore]
+    public IReadOnlyList<CommandTraceDetail> CommandTraces { get; init; } = [];
+    /// <summary>获取按指纹限量保存的未知或不支持下行样本；单独写入 JSON Lines，不内嵌节点摘要。</summary>
+    [JsonIgnore]
+    public IReadOnlyList<DownstreamDiagnosticSample> DownstreamDiagnosticSamples { get; init; } = [];
     /// <summary>获取自动验收规则和最终通过标志；执行异常或阶段跳过还需结合 <see cref="RunStatus"/> 判断。</summary>
     public required AcceptanceResult Acceptance { get; init; }
     /// <summary>获取资源预检期间发现但未阻止测试启动的警告。</summary>

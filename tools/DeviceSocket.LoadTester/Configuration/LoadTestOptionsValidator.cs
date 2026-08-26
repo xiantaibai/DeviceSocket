@@ -167,6 +167,23 @@ public static class LoadTestOptionsValidator
             errors.Add("reporting.checkpointIntervalSeconds: 不能小于 reporting.sampleIntervalSeconds。");
         if (string.IsNullOrWhiteSpace(options.Reporting.OutputDirectory))
             errors.Add("reporting.outputDirectory: 输出目录不能为空。");
+        if (options.Reporting.DownstreamDiagnostics is null)
+        {
+            errors.Add("reporting.downstreamDiagnostics: 不能为空。");
+        }
+        else
+        {
+            if (options.Reporting.DownstreamDiagnostics.MaxSamplesPerFingerprint is < 0 or > 100)
+                errors.Add("reporting.downstreamDiagnostics.maxSamplesPerFingerprint: 必须在 0-100 之间。");
+            if (options.Reporting.DownstreamDiagnostics.MaxTotalSamples is < 0 or > 10_000)
+                errors.Add("reporting.downstreamDiagnostics.maxTotalSamples: 必须在 0-10000 之间。");
+            if (options.Reporting.DownstreamDiagnostics.RawHexMaxBytes is < 0 or > 4096)
+                errors.Add("reporting.downstreamDiagnostics.rawHexMaxBytes: 必须在 0-4096 之间。");
+            ValidatePositiveSeconds(
+                options.Reporting.DownstreamDiagnostics.CorrelationTimeoutSeconds,
+                "reporting.downstreamDiagnostics.correlationTimeoutSeconds",
+                errors);
+        }
         if (options.ServerObservation.Enabled)
         {
             if (!Uri.TryCreate(options.ServerObservation.StatusUrl, UriKind.Absolute, out var statusUri) ||
@@ -198,8 +215,26 @@ public static class LoadTestOptionsValidator
             "acceptance.minimumApiTargetCoverageRate",
             errors);
         ValidateRate(options.Acceptance.MinimumGatherReadingResponseRate, "acceptance.minimumGatherReadingResponseRate", errors);
+        ValidateRate(
+            options.Acceptance.MinimumAsyncApiAcceptanceRate,
+            "acceptance.minimumAsyncApiAcceptanceRate",
+            errors);
+        ValidateRate(
+            options.Acceptance.MinimumSyncResultSuccessRate,
+            "acceptance.minimumSyncResultSuccessRate",
+            errors);
+        ValidateRate(
+            options.Acceptance.MinimumCommandDeliveryRate,
+            "acceptance.minimumCommandDeliveryRate",
+            errors);
+        ValidateRate(
+            options.Acceptance.MinimumCommandRecognitionRate,
+            "acceptance.minimumCommandRecognitionRate",
+            errors);
         if (options.Acceptance.MaximumApiP95Milliseconds is <= 0)
             errors.Add("acceptance.maximumApiP95Milliseconds: 设置后必须大于 0。");
+        if (options.Acceptance.MaximumUnobservedCommands is < 0)
+            errors.Add("acceptance.maximumUnobservedCommands: 不能小于 0。");
         if (options.Acceptance.MaximumRecoverySeconds is <= 0)
             errors.Add("acceptance.maximumRecoverySeconds: 设置后必须大于 0。");
         if (options.Acceptance.MaximumReconnects is < 0)
@@ -326,6 +361,8 @@ public static class LoadTestOptionsValidator
         ValidateRate(command.RequiredOnlineRate, "commandWorkload.requiredOnlineRate", errors);
         if (command.RequiredOnlineRate <= 0)
             errors.Add("commandWorkload.requiredOnlineRate: 必须大于 0。");
+        if (command.MinimumOnlineCount is < 0 || command.MinimumOnlineCount > options.Devices.Count)
+            errors.Add("commandWorkload.minimumOnlineCount: 必须在 0 到 devices.count 之间，空值表示按阶段目标在线率计算。");
         if (command.OnlineStableSeconds < 0)
             errors.Add("commandWorkload.onlineStableSeconds: 不能小于 0。");
         ValidatePositiveSeconds(command.OnlineWaitTimeoutSeconds, "commandWorkload.onlineWaitTimeoutSeconds", errors);
@@ -348,19 +385,50 @@ public static class LoadTestOptionsValidator
                 errors.Add($"{path}.maxConcurrency: 必须大于 0。");
             if (phase.PauseAfterSeconds < 0)
                 errors.Add($"{path}.pauseAfterSeconds: 不能小于 0。");
-            var effectiveTargetCount = phase.TargetDeviceCount == 0
-                ? options.Devices.Count
-                : phase.TargetDeviceCount;
-            if (phase.MinimumOnlineCount is < 0 || phase.MinimumOnlineCount > effectiveTargetCount)
+            if (phase.MinimumOnlineCount is < 0 || phase.MinimumOnlineCount > options.Devices.Count)
             {
                 errors.Add(
-                    $"{path}.minimumOnlineCount: 必须在 0 到当前阶段 targetDeviceCount 之间，" +
-                    "空值表示继承全局在线率。");
+                    $"{path}.minimumOnlineCount: 必须在 0 到 devices.count 之间，" +
+                    "空值表示继承全局最低在线数或按阶段目标在线率计算。");
             }
             if (phase.OnlineStableSeconds is < 0)
                 errors.Add($"{path}.onlineStableSeconds: 不能小于 0，空值表示继承全局稳定时长。");
             if (phase.OnlineWaitTimeoutSeconds is <= 0)
                 errors.Add($"{path}.onlineWaitTimeoutSeconds: 设置后必须大于 0，空值表示继承全局等待上限。");
+            if (!Enum.IsDefined(phase.OnlineGateFailureAction))
+                errors.Add($"{path}.onlineGateFailureAction: 配置值不受支持。");
+            ValidateRate(phase.MinimumApiSuccessRate, $"{path}.minimumApiSuccessRate", errors);
+            if (phase.MaximumP95Milliseconds is <= 0)
+                errors.Add($"{path}.maximumP95Milliseconds: 设置后必须大于 0。");
+            if (!Enum.IsDefined(phase.DrainFailureAction))
+                errors.Add($"{path}.drainFailureAction: 配置值不受支持。");
+            if (phase.DrainEnabled)
+            {
+                ValidateRate(phase.MinimumRawDeliveryRate, $"{path}.minimumRawDeliveryRate", errors);
+                ValidateRate(phase.MinimumDeliveryRate, $"{path}.minimumDeliveryRate", errors);
+                ValidateRate(phase.MinimumResponseRate, $"{path}.minimumResponseRate", errors);
+                ValidatePositiveSeconds(phase.DrainTimeoutSeconds, $"{path}.drainTimeoutSeconds", errors);
+                if (phase.QuietSeconds < 0)
+                    errors.Add($"{path}.quietSeconds: 不能小于 0。");
+            }
+            if (!Enum.IsDefined(phase.CircuitBreakerAction))
+                errors.Add($"{path}.circuitBreakerAction: 配置值不受支持。");
+            if (phase.CircuitBreakerEnabled)
+            {
+                if (phase.MaximumDurationSeconds is <= 0)
+                    errors.Add($"{path}.maximumDurationSeconds: 设置后必须大于 0。");
+                if (phase.MaximumConsecutiveFailures < 0)
+                    errors.Add($"{path}.maximumConsecutiveFailures: 不能小于 0，零表示不启用该条件。");
+                ValidateRate(phase.MaximumTimeoutRate, $"{path}.maximumTimeoutRate", errors);
+                if (phase.CircuitBreakerMinimumRequests <= 0)
+                    errors.Add($"{path}.circuitBreakerMinimumRequests: 必须大于 0。");
+                if (!phase.MaximumDurationSeconds.HasValue &&
+                    phase.MaximumConsecutiveFailures == 0 &&
+                    !phase.MaximumTimeoutRate.HasValue)
+                {
+                    errors.Add($"{path}: 启用 circuitBreakerEnabled 时至少配置一个熔断条件。");
+                }
+            }
         }
     }
 

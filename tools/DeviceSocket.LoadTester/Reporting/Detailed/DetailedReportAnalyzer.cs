@@ -162,8 +162,20 @@ internal static class DetailedReportAnalyzer
         var clientTimeline = MergeClientTimeline(inputs.Nodes);
         var target = options.TargetDeviceCount ?? InferTargetDeviceCount(reports, clientTimeline);
         var clientMetrics = MetricSnapshotAggregator.Merge(reports.Select(item => item.Metrics));
-        var serverWindow = SelectServerWindow(inputs.ServerSamples, startedAt, endedAt);
+        // 多分片可能因负载机卡顿而错开阶段；只有最后一个分片进入 cooldown 后，整轮才真正全部开始计划缩容。
+        // 使用最晚时间可保留“部分节点已冷却、其余节点仍在恢复”期间对服务端造成的真实影响。
+        var cooldownStartedAt = reports
+            .SelectMany(item => item.Phases)
+            .Where(item => item.Kind == ScenarioPhaseKind.Cooldown)
+            .Select(item => (DateTimeOffset?)item.StartedAtUtc)
+            .Max();
+        var activeServerEndedAt = cooldownStartedAt?.AddTicks(-1) ?? endedAt;
+        var serverWindow = SelectServerWindow(inputs.ServerSamples, startedAt, activeServerEndedAt);
+        var cooldownServerWindow = cooldownStartedAt.HasValue
+            ? SelectServerWindow(inputs.ServerSamples, cooldownStartedAt.Value, endedAt)
+            : [];
         var serverSummary = BuildServerSummary(serverWindow, inputs.ServerMetricsPath, target);
+        var cooldownServerSummary = BuildServerSummary(cooldownServerWindow, inputs.ServerMetricsPath, target);
         var commandPhases = MergeCommandPhases(reports);
         var resources = BuildResourceSummary(inputs.Nodes);
         var expectedServerRestart = HasExpectedServerRestart(reports);
@@ -172,6 +184,12 @@ internal static class DetailedReportAnalyzer
             warnings.Add("未找到 TcpCenter 服务指标文件，业务在线、Pipeline 和服务进程稳定性无法验收。");
         else if (serverWindow.Count == 0)
             warnings.Add("TcpCenter 指标时间与 LoadTester 测试时间不重叠，请检查 --server-time-zone 参数和两台机器时钟。");
+        if (cooldownStartedAt.HasValue)
+        {
+            warnings.Add(
+                $"服务端验收与自动诊断窗口已在全部分片进入 TCP cooldown 时 {cooldownStartedAt.Value:O} 截止；" +
+                "计划缩容后的连接关闭和累计计数增量单独保留在冷却窗口，不参与有效压测结论。");
+        }
 
         var checks = BuildAcceptanceChecks(
             reports,
@@ -211,6 +229,8 @@ internal static class DetailedReportAnalyzer
             ClientTimeline = clientTimeline,
             ServerTimeline = serverWindow.Select(item => item.Timeline).ToArray(),
             Server = serverSummary,
+            CooldownServer = cooldownServerSummary,
+            CooldownServerTimeline = cooldownServerWindow.Select(item => item.Timeline).ToArray(),
             CommandPhases = commandPhases,
             AcceptanceChecks = checks,
             Findings = findings,
@@ -833,20 +853,51 @@ internal static class DetailedReportAnalyzer
     private static IReadOnlyList<DetailedCommandPhaseSummary> MergeCommandPhases(IReadOnlyList<NodeReport> reports) =>
         reports.SelectMany(item => item.CommandPhases)
             .GroupBy(item => (item.Name, item.ShowResult))
-            .Select(group => new DetailedCommandPhaseSummary
+            .Select(group =>
             {
-                Name = group.Key.Name,
-                ShowResult = group.Key.ShowResult,
-                PlannedRequests = group.Sum(item => (long)item.PlannedRequests),
-                StartedRequests = group.Sum(item => item.ApiRequestsStarted),
-                SucceededRequests = group.Sum(item => item.ApiRequestsSucceeded),
-                FailedRequests = group.Sum(item => item.ApiRequestsFailed),
-                TimeoutRequests = group.Sum(item => item.ApiRequestTimeouts),
-                SkippedOfflineRequests = group.Sum(item => item.ApiRequestsSkippedOffline),
-                CommandsReceived = group.Sum(item => item.GatherReadingCommandsReceived),
-                CommandsResponded = group.Sum(item => item.GatherReadingCommandsResponded),
-                StartedAtUtc = group.Min(item => item.StartedAtUtc),
-                EndedAtUtc = group.Max(item => item.EndedAtUtc)
+                var estimated = group.Sum(item => item.ApiEstimatedEnqueued);
+                var legacyReceived = group.Sum(item => item.GatherReadingCommandsReceived);
+                var rawDelivered = group.Sum(item => item.RawDownstreamCommandsObserved);
+                var recognized = group.Sum(item => item.ProtocolRecognizedCommands);
+                // 读取 SchemaVersion 1/2 报告时没有新字段，必须明确回退到原有读表收到口径。
+                if (rawDelivered == 0 && recognized == 0 && legacyReceived > 0)
+                {
+                    rawDelivered = legacyReceived;
+                    recognized = legacyReceived;
+                }
+                var responded = group.Sum(item => item.GatherReadingCommandsResponded);
+                return new DetailedCommandPhaseSummary
+                {
+                    Name = group.Key.Name,
+                    ShowResult = group.Key.ShowResult,
+                    PlannedRequests = group.Sum(item => (long)item.PlannedRequests),
+                    StartedRequests = group.Sum(item => item.ApiRequestsStarted),
+                    SucceededRequests = group.Sum(item => item.ApiRequestsSucceeded),
+                    FailedRequests = group.Sum(item => item.ApiRequestsFailed),
+                    TimeoutRequests = group.Sum(item => item.ApiRequestTimeouts),
+                    PrevalidationRejected = group.Sum(item => item.ApiPrevalidationRejected),
+                    EstimatedEnqueued = estimated,
+                    SkippedOfflineRequests = group.Sum(item => item.ApiRequestsSkippedOffline),
+                    CommandsReceived = legacyReceived,
+                    RawDownstreamCommands = rawDelivered,
+                    RecognizedCommands = recognized,
+                    UnsupportedCommands = group.Sum(item => item.UnsupportedCommands),
+                    DuplicateDownstreamFrames = group.Sum(item => item.DuplicateDownstreamFrames),
+                    CommandsResponded = responded,
+                    CommandsUnobserved = group.Sum(item => item.GatherReadingCommandsUnobserved),
+                    RawDeliveryRate = Rate(Math.Min(rawDelivered, estimated), estimated),
+                    RecognitionRate = Rate(recognized, rawDelivered),
+                    DeliveryRate = Rate(Math.Min(recognized, estimated), estimated),
+                    ResponseRate = Rate(responded, recognized),
+                    DrainSatisfied = group.All(item => !item.DrainSatisfied.HasValue)
+                        ? null
+                        : group.All(item => item.DrainSatisfied == true),
+                    MaximumDrainWaitMilliseconds = group.Max(item => item.DrainWaitMilliseconds),
+                    P95Milliseconds = MergeableHistogram.Merge(group.Select(item => item.ApiRequestLatency)).Percentile(0.95),
+                    CircuitBreakerTripped = group.Any(item => item.CircuitBreakerTripped),
+                    StartedAtUtc = group.Min(item => item.StartedAtUtc),
+                    EndedAtUtc = group.Max(item => item.EndedAtUtc)
+                };
             })
             .OrderBy(item => item.StartedAtUtc)
             .ToArray();
@@ -1052,16 +1103,31 @@ internal static class DetailedReportAnalyzer
             });
         }
 
-        if (metrics.ApiRequestsSucceeded > 0 && metrics.GatherReadingCommandsReceived < metrics.ApiRequestsSucceeded * 0.8)
+        var estimatedCommands = commandPhases.Sum(item => item.EstimatedEnqueued);
+        var rawCommands = commandPhases.Sum(item => item.RawDownstreamCommands);
+        var recognizedCommands = commandPhases.Sum(item => item.RecognizedCommands);
+        if (estimatedCommands > 0 && rawCommands < estimatedCommands * 0.8)
         {
             findings.Add(new DiagnosticFinding
             {
                 Severity = DiagnosticSeverity.P1,
-                Title = "HTTP 成功与设备实际收到命令存在明显落差",
-                Evidence = $"API 业务成功 {metrics.ApiRequestsSucceeded:N0}，模拟设备收到命令 {metrics.GatherReadingCommandsReceived:N0}，粗略覆盖率 {Rate(metrics.GatherReadingCommandsReceived, metrics.ApiRequestsSucceeded):P2}。",
+                Title = "API 估算入队与设备原始下行存在明显落差",
+                Evidence = $"API 估算入队 {estimatedCommands:N0}，关联到原始下行 {rawCommands:N0}，交付率 {Rate(rawCommands, estimatedCommands):P2}。",
                 Impact = "异步 API 成功可能只表示成功入队，不能代表命令已经到达设备。",
-                Recommendation = "增加 API 入队、TcpCenter 出队、Socket 发送、设备应答和结果发布的统一 cmdId 端到端指标。",
+                Recommendation = "结合 phase-targets.csv 定位未观测设备，并核对 TcpCenter 出队、Socket 发送和会话查找指标。",
                 Confidence = DiagnosticConfidence.HighProbability
+            });
+        }
+        if (rawCommands > 0 && recognizedCommands < rawCommands * 0.95)
+        {
+            findings.Add(new DiagnosticFinding
+            {
+                Severity = DiagnosticSeverity.P1,
+                Title = "正式服务下行格式未被模拟器完整识别",
+                Evidence = $"原始下行唯一命令 {rawCommands:N0}，协议已识别 {recognizedCommands:N0}，识别率 {Rate(recognizedCommands, rawCommands):P2}。",
+                Impact = "不能把未识别命令直接归因于服务端未下发，设备应答率与同步结果结论也会受到影响。",
+                Recommendation = "按 downstream-classification.csv 聚合分类，并从 downstream-unknown-samples.jsonl 提取样本完善协议适配器。",
+                Confidence = DiagnosticConfidence.Fact
             });
         }
 

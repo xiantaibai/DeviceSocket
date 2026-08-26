@@ -8,7 +8,7 @@ namespace DeviceSocket.LoadTester.Protocols.QGdw3761;
 /// <summary>
 /// 使用标准376.1报文模拟终端，并兼容 Gather.TcpCenter 老服务的非标准确认语义。
 /// </summary>
-internal sealed class GatherTcpCenterQGdw3761LoadTestProtocol : ILoadTestProtocol
+internal sealed class GatherTcpCenterQGdw3761LoadTestProtocol : ILoadTestProtocol, IDownstreamFrameClassifier
 {
     private readonly QGdw3761LoadTestProtocol _standardProtocol = new();
     private readonly GatherReadingResponseOptions _readingResponse;
@@ -128,6 +128,188 @@ internal sealed class GatherTcpCenterQGdw3761LoadTestProtocol : ILoadTestProtoco
         }
 
         return _standardProtocol.CreateDownstreamResponse(frame, device, sequence);
+    }
+
+    /// <summary>
+    /// 按 Gather 老服务的地址、方向、AFN 和功能单元分类下行报文；未知格式只记录，不伪装成标准 F129 读表命令。
+    /// </summary>
+    /// <param name="frame">已完成拆包的服务端下行帧。</param>
+    /// <param name="device">收到报文的虚拟集中器。</param>
+    /// <returns>可用于请求关联和未知样本聚合的结构化分类。</returns>
+    public DownstreamFrameClassification ClassifyDownstream(
+        IProtocolFrame frame,
+        VirtualDeviceDescriptor device)
+    {
+        if (frame is not QGdw3761Frame response)
+        {
+            return CreateClassification(
+                DownstreamClassificationKind.GenericProtocolFrame,
+                frame.Raw,
+                false,
+                false,
+                null,
+                null,
+                null,
+                [],
+                [],
+                null,
+                "下行帧不是 Q/GDW 376.1 类型。");
+        }
+
+        var addressMatched = string.Equals(
+            response.DeviceId,
+            device.DeviceId,
+            StringComparison.OrdinalIgnoreCase);
+        if (!response.IsValid)
+        {
+            return CreateClassification(
+                DownstreamClassificationKind.InvalidFrame,
+                response.Raw,
+                false,
+                false,
+                addressMatched,
+                response.Control,
+                response.Afn,
+                response.Points,
+                response.Functions,
+                response.Sequence,
+                $"376.1 帧校验失败：{response.Error?.Code}。");
+        }
+        if (!addressMatched)
+        {
+            return CreateClassification(
+                DownstreamClassificationKind.AddressMismatch,
+                response.Raw,
+                false,
+                false,
+                false,
+                response.Control,
+                response.Afn,
+                response.Points,
+                response.Functions,
+                response.Sequence,
+                $"报文地址 {response.DeviceId ?? "<empty>"} 与会话设备 {device.DeviceId} 不一致。");
+        }
+        if (response.IsUpstream || !response.IsPrimaryMessage)
+        {
+            return CreateClassification(
+                DownstreamClassificationKind.NonPrimaryDownstream,
+                response.Raw,
+                false,
+                false,
+                true,
+                response.Control,
+                response.Afn,
+                response.Points,
+                response.Functions,
+                response.Sequence,
+                "报文方向或 PRM 不属于主站主动下行命令。");
+        }
+        if (response.Afn == 0x0C && response.Functions.Count == 1 && response.Functions[0] == 129)
+        {
+            return CreateClassification(
+                DownstreamClassificationKind.GatherReadingF129,
+                response.Raw,
+                true,
+                false,
+                true,
+                response.Control,
+                response.Afn,
+                response.Points,
+                response.Functions,
+                response.Sequence,
+                "标准 Gather AFN=0CH/F129 普通读表命令。");
+        }
+        if (response.Afn == 0x0C && response.Functions.Contains(129))
+        {
+            return CreateClassification(
+                DownstreamClassificationKind.GatherReadingMultiFunction,
+                response.Raw,
+                false,
+                true,
+                true,
+                response.Control,
+                response.Afn,
+                response.Points,
+                response.Functions,
+                response.Sequence,
+                "AFN=0CH 中包含 F129 和其他功能单元，当前业务应答编码器只支持单 F129。");
+        }
+        if (response.Afn == 0x0C)
+        {
+            return CreateClassification(
+                DownstreamClassificationKind.GatherAfn0CUnsupportedFunction,
+                response.Raw,
+                false,
+                true,
+                true,
+                response.Control,
+                response.Afn,
+                response.Points,
+                response.Functions,
+                response.Sequence,
+                "AFN=0CH 功能单元不是当前支持的单 F129，可能属于冻结、透明转发或型号专属抄读。");
+        }
+
+        return CreateClassification(
+            DownstreamClassificationKind.OtherQGdw3761Command,
+            response.Raw,
+            false,
+            true,
+            true,
+            response.Control,
+            response.Afn,
+            response.Points,
+            response.Functions,
+            response.Sequence,
+            "有效 376.1 主站命令，但 AFN 不是当前支持的 0CH 读表格式。");
+    }
+
+    /// <summary>
+    /// 创建包含稳定报文指纹的分类结果；指纹保留完整原始帧散列，避免只按 AFN/FN 把不同命令误判为重试。
+    /// </summary>
+    /// <param name="kind">分类类型。</param>
+    /// <param name="raw">完整原始帧。</param>
+    /// <param name="recognized">是否为已支持业务命令。</param>
+    /// <param name="unsupported">是否为当前不支持的业务命令。</param>
+    /// <param name="addressMatched">地址匹配状态。</param>
+    /// <param name="control">控制域。</param>
+    /// <param name="afn">AFN。</param>
+    /// <param name="points">PN 集合。</param>
+    /// <param name="functions">FN 集合。</param>
+    /// <param name="sequence">PSEQ。</param>
+    /// <param name="reason">中文分类原因。</param>
+    /// <returns>不可变分类结果。</returns>
+    private static DownstreamFrameClassification CreateClassification(
+        DownstreamClassificationKind kind,
+        byte[] raw,
+        bool recognized,
+        bool unsupported,
+        bool? addressMatched,
+        byte? control,
+        byte? afn,
+        IReadOnlyList<int> points,
+        IReadOnlyList<int> functions,
+        byte? sequence,
+        string reason)
+    {
+        var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(raw));
+        return new DownstreamFrameClassification
+        {
+            Kind = kind,
+            IsRecognizedCommand = recognized,
+            IsUnsupportedCommand = unsupported,
+            AddressMatched = addressMatched,
+            Control = control,
+            Afn = afn,
+            Points = points.ToArray(),
+            Functions = functions.ToArray(),
+            Sequence = sequence,
+            RawLength = raw.Length,
+            Fingerprint = $"{kind}|{hash}",
+            Raw = raw,
+            Reason = reason
+        };
     }
 
     /// <summary>

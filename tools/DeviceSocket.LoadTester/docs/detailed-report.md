@@ -56,6 +56,8 @@ dotnet run --project tools\DeviceSocket.LoadTester\DeviceSocket.LoadTester.cspro
 
 多分片时，分析器按时间使用各节点最后一个已知值聚合在线数和累计计数，避免简单按采样行号相加造成时间错位。`node-timeseries.jsonl` 缺失时仍可使用最终摘要，但趋势和峰值精度会下降，并在报告中给出数据质量警告。
 
+合并版诊断报告应直接把一轮测试根目录作为输入，不需要先对每个 `shard-xxx` 分别生成诊断报告。存在阶段漂移时，服务端有效诊断窗口会持续到最后一个分片进入 `cooldown`；这样某个负载节点卡顿期间，其余节点先缩容所造成的混合断连、重连和 Pipeline 压力仍会保留在诊断结论中。
+
 服务指标建议显式通过 `--server-metrics` 指定。未指定时，工具会在输入目录中寻找同时包含 `HandlerName`、`SocketConnections` 和 `BusinessOnlineDevices` 的 JSONL；不会把 `node-timeseries.jsonl` 识别成服务指标。
 
 ## 4. 参数说明
@@ -193,6 +195,10 @@ Pipeline 失败、拒绝、`AckedButRejected`、`StaleBusiness`、`HeartbeatCoal
 
 工具会比较连接成功率、登录成功率、API 成功率、协议在线峰值、业务在线峰值、业务追平时间、队列年龄和 ACK 耗时。为了让变化有意义，改造前后应保持场景 JSON、设备 CSV、负载机数量、网络、目标服务器规格和阈值一致；建议各执行三轮，以中位数作为正式对比并保留最差一轮附件。
 
+新版节点报告会把每个 HTTP 阶段的预校验拒绝、估算入队、原始下行、协议识别、不支持格式、设备应答、重复帧、未观测缺口、三段比例、独立 P95、排空结果和熔断状态合并到详细报告。原始下行交付率回答“服务端是否真正把命令送到设备连接”，协议识别率回答“模拟器是否兼容正式服务的实际下行格式”，应答率只针对已识别命令计算，三者不能再混为一个交付率。若 TCP 场景包含显式 `cooldown` 阶段，服务端验收与自动问题诊断在 cooldown 开始时截止；计划缩容之后的连接关闭、ACK 中止和命令暂停另存为冷却窗口摘要，不再误判为有效压测失败。
+
+需要定位单台设备时，回到源分片目录查看 `phase-targets.csv` 或 `command-traces.jsonl`；需要补协议兼容时，先看 `downstream-classification.csv` 的分类数量，再从 `downstream-unknown-samples.jsonl` 读取按指纹限量保存的原始样本。详细报告只聚合这些事实，不复制全部逐请求明细。
+
 ## 9. 输出文件
 
 ```text
@@ -211,7 +217,7 @@ analysis/
    └─ command-funnel.svg
 ```
 
-HTML 自包含样式和内嵌图表，可直接用浏览器打开或打印为 PDF。Markdown 引用 `charts` 下的 SVG，移动 Markdown 时需要同时保留该目录。`analysis.json` 使用 camelCase 属性和字符串枚举；当前 `schemaVersion=3`，在版本 2 的背景信息基础上新增计划重启语义、中断事件和细分 ACK/命令线路指标，外部脚本应先检查版本再读取字段。
+HTML 自包含样式和内嵌图表，可直接用浏览器打开或打印为 PDF。Markdown 引用 `charts` 下的 SVG，移动 Markdown 时需要同时保留该目录。`analysis.json` 使用 camelCase 属性和字符串枚举；当前 `schemaVersion=5`，新增 HTTP 原始下行交付、协议识别、不支持格式与重复帧口径，外部脚本应先检查版本再读取字段。
 
 ## 10. 退出码与常见问题
 

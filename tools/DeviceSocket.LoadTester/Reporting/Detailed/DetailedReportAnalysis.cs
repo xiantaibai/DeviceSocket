@@ -7,8 +7,8 @@ namespace DeviceSocket.LoadTester.Reporting.Detailed;
 /// </summary>
 internal sealed record DetailedReportAnalysis
 {
-    /// <summary>获取分析模型结构版本；版本 3 新增中断事件、计划重启语义和细分 ACK/命令线路指标。</summary>
-    public int SchemaVersion { get; init; } = 3;
+    /// <summary>获取分析模型结构版本；版本 5 将 HTTP 原始下行交付、协议识别和设备应答拆分展示。</summary>
+    public int SchemaVersion { get; init; } = 5;
 
     /// <summary>获取当前负载测试运行编号。</summary>
     public required string RunId { get; init; }
@@ -63,6 +63,12 @@ internal sealed record DetailedReportAnalysis
 
     /// <summary>获取 TcpCenter 峰值、区间增量和里程碑摘要；缺少服务端文件时为空。</summary>
     public TcpCenterAnalysisSummary? Server { get; init; }
+
+    /// <summary>获取 TCP cooldown 阶段对应的服务端摘要；验收与自动问题诊断不会使用该窗口，避免计划缩容造成误报。</summary>
+    public TcpCenterAnalysisSummary? CooldownServer { get; init; }
+
+    /// <summary>获取 TCP cooldown 阶段对应的服务端趋势点；没有显式 cooldown 或无重叠指标时为空。</summary>
+    public IReadOnlyList<TcpCenterTimelinePoint> CooldownServerTimeline { get; init; } = [];
 
     /// <summary>获取按名称合并后的 HTTP 指令阶段。</summary>
     public required IReadOnlyList<DetailedCommandPhaseSummary> CommandPhases { get; init; }
@@ -406,14 +412,59 @@ internal sealed record DetailedCommandPhaseSummary
     /// <summary>获取阶段超时请求数。</summary>
     public required long TimeoutRequests { get; init; }
 
+    /// <summary>获取明确未进入命令队列的数据预校验拒绝数。</summary>
+    public required long PrevalidationRejected { get; init; }
+
+    /// <summary>获取 API 估算已进入服务端命令链路的请求数。</summary>
+    public required long EstimatedEnqueued { get; init; }
+
     /// <summary>获取阶段离线跳过请求数。</summary>
     public required long SkippedOfflineRequests { get; init; }
 
     /// <summary>获取阶段模拟设备收到的读表命令数。</summary>
     public required long CommandsReceived { get; init; }
 
+    /// <summary>获取至少关联到一帧原始下行的唯一命令数，重复或重试帧不重复计数。</summary>
+    public required long RawDownstreamCommands { get; init; }
+
+    /// <summary>获取被当前模拟器识别为支持格式的唯一命令数。</summary>
+    public required long RecognizedCommands { get; init; }
+
+    /// <summary>获取收到但当前模拟器不支持应答格式的唯一命令数。</summary>
+    public required long UnsupportedCommands { get; init; }
+
+    /// <summary>获取按报文指纹识别出的重复或服务端重试下行帧数。</summary>
+    public required long DuplicateDownstreamFrames { get; init; }
+
     /// <summary>获取阶段模拟设备成功应答的读表命令数。</summary>
     public required long CommandsResponded { get; init; }
+
+    /// <summary>获取估算入队但排空窗口内未被设备观测到的命令数。</summary>
+    public required long CommandsUnobserved { get; init; }
+
+    /// <summary>获取原始下行唯一命令数除以估算入队数的交付率。</summary>
+    public required double RawDeliveryRate { get; init; }
+
+    /// <summary>获取协议已识别唯一命令数除以原始下行唯一命令数的识别率。</summary>
+    public required double RecognitionRate { get; init; }
+
+    /// <summary>获取协议已识别唯一命令数除以估算入队数的兼容交付率。</summary>
+    public required double DeliveryRate { get; init; }
+
+    /// <summary>获取协议已识别命令成功应答的比例。</summary>
+    public required double ResponseRate { get; init; }
+
+    /// <summary>获取跨分片排空是否全部通过；未启用排空时为空。</summary>
+    public bool? DrainSatisfied { get; init; }
+
+    /// <summary>获取各分片最长排空等待耗时，单位毫秒。</summary>
+    public required long MaximumDrainWaitMilliseconds { get; init; }
+
+    /// <summary>获取合并阶段 HTTP 延迟 P95，单位毫秒。</summary>
+    public required long P95Milliseconds { get; init; }
+
+    /// <summary>获取任一分片是否触发阶段保护。</summary>
+    public required bool CircuitBreakerTripped { get; init; }
 
     /// <summary>获取阶段开始时间。</summary>
     public required DateTimeOffset StartedAtUtc { get; init; }

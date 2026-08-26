@@ -1,0 +1,160 @@
+{
+  // 四台负载机共同模拟五万台真实设备；全部稳定在线后由操作人员重启 Gather.TcpCenter，工具不主动关闭客户端 Socket。
+  "role": "devicesOnly",
+  "target": {
+    "host": "192.168.111.222",
+    "port": 6666,
+    "protocol": "qGdw3761",
+    "compatibilityProfile": "gatherTcpCenter"
+  },
+  "devices": {
+    // 四个分片都部署同一份完整 CSV，工具按数据行全局序号取模，每台固定负责 12500 台。
+    "count": 50000,
+    "generationMode": "csv",
+    // Gather 兼容模式允许 CSV 中数据库真实存在的特殊终端地址 00000。
+    "deviceMappingFile": "gather-device-50000.csv"
+  },
+  "connection": {
+    "startMode": "ramp",
+    // 正常上线阶段的全局速率，所有分片会自动分摊。
+    "connectionsPerSecond": 300,
+    // 该字段是单个负载进程的本地闸门；四台机器合计最多 4000 条连接同时处于建连或登录路径。
+    "maxConcurrentConnecting": 1000,
+    "connectTimeoutSeconds": 5,
+    "loginTimeoutSeconds": 5,
+    "writeTimeoutSeconds": 5,
+    "noDelay": true
+  },
+  "heartbeat": {
+    "enabled": true,
+    "intervalSeconds": 60,
+    "jitterSeconds": 10,
+    "responseTimeoutSeconds": 5
+  },
+  "workload": {
+    "reportsEnabled": false,
+    "reportIntervalSeconds": 300,
+    "jitterSeconds": 30
+  },
+  "reconnect": {
+    // 250ms 起步并加入抖动，在保持风暴压力的同时避免五万设备永久锁步重试。
+    "mode": "exponentialJitter",
+    "initialDelayMilliseconds": 250,
+    "maximumDelaySeconds": 10,
+    "multiplier": 2,
+    "jitterRatio": 0.5,
+    "maximumAttempts": 0
+  },
+  "scenario": {
+    "name": "gather-tcpcenter-reconnect-storm-50000",
+    "durationSeconds": 1,
+    "phases": [
+      {
+        // 1% 对应全局 500 台，每个分片约 125 台，先验证四机网络、登录和分片配置。
+        "name": "canary-500",
+        "kind": "warmup",
+        "durationSeconds": 30,
+        "targetDevicePercentage": 1,
+        "connectionsPerSecond": 25
+      },
+      {
+        "name": "ramp-5000",
+        "kind": "ramp",
+        "durationSeconds": 120,
+        "targetDevicePercentage": 10,
+        "connectionsPerSecond": 100
+      },
+      {
+        "name": "ramp-25000",
+        "kind": "ramp",
+        "durationSeconds": 240,
+        "targetDevicePercentage": 50,
+        "connectionsPerSecond": 200
+      },
+      {
+        "name": "ramp-50000",
+        "kind": "ramp",
+        "durationSeconds": 420,
+        "targetDevicePercentage": 100,
+        "connectionsPerSecond": 300
+      },
+      {
+        // 预留五分钟稳态窗口，确认五万台协议在线和服务端业务在线均已追平，再进入人工重启阶段。
+        "name": "steady-before-restart",
+        "kind": "steady",
+        "durationSeconds": 300,
+        "targetDevicePercentage": 100,
+        "connectionsPerSecond": 300
+      },
+      {
+        // 进入本阶段后按控制台准备倒计时和操作窗口重启 Gather.TcpCenter；本阶段故意不配置 disconnectPercentage。
+        // 这样测到的是服务端进程冷启动、状态恢复和真实远端断线，而不是客户端自断线。
+        "name": "restart-tcpcenter-now",
+        "kind": "fault",
+        "durationSeconds": 180,
+        "targetDevicePercentage": 100,
+        // 本阶段首次掉线是操作人员主动重启导致的计划事件，后续再次全量掉线仍按非预期事件统计。
+        "expectedServerRestart": true,
+        "manualAction": {
+          "enabled": true,
+          "message": "请在操作窗口内重启被测 Gather.TcpCenter 服务；不要关闭 LoadTester。",
+          // 四机运行时只在协调节点提示，预留 20 秒切换到服务器控制台并核对 PerfView 已开始采集。
+          "preparationSeconds": 20,
+          // 预留 60 秒执行停止、启动并确认进程拉起；所有分片都会等待完全相同的窗口。
+          "operationSeconds": 60,
+          // 多分片时只让 shard-000 输出操作提示，避免多台负载机重复提醒。
+          "coordinatorOnlyPrompt": true
+        },
+        // 重启后所有分片合计最多按 1000/s 建连，避免分片数放大全局风暴速率。
+        "connectionsPerSecond": 1000
+      },
+      {
+        "name": "recovery-50000",
+        "kind": "recovery",
+        "durationSeconds": 600,
+        "targetDevicePercentage": 100,
+        "connectionsPerSecond": 1000
+      },
+      {
+        "name": "cooldown",
+        "kind": "cooldown",
+        "durationSeconds": 30,
+        "targetDevicePercentage": 0,
+        "connectionsPerSecond": 300
+      }
+    ]
+  },
+  "reporting": {
+    "outputDirectory": "load-test-results",
+    "sampleIntervalSeconds": 1,
+    "checkpointIntervalSeconds": 10,
+    "writeConsoleSummary": true
+  },
+  "serverObservation": {
+    "enabled": false
+  },
+  "acceptance": {
+    // 初始连接、登录质量只统计计划重启前的正常阶段，避免预期风暴流量稀释成功率。
+    "usePreRestartPhaseRates": true,
+    "minimumConnectionSuccessRate": 0.95,
+    "minimumLoginSuccessRate": 0.95,
+    "minimumFinalOnlineRate": 0.98,
+    "minimumFinalOnlineCount": null,
+    "maximumProtocolErrorRate": 0.01,
+    // 从首次在线连接掉线到重新达到完整阶段目标的时间上限。
+    "maximumRecoverySeconds": 180,
+    // 至少 98%（49000 台）设备必须实际进入自动重连，未执行服务重启时该门槛会明确失败。
+    "minimumReconnects": 49000,
+    // 正常一次全量重启通常每台设备只需一次重连；允许短暂失败，但禁止持续级联重连。
+    "maximumReconnectsPerDevice": 2,
+    // 计划重启后的第二次掉线即视为稳定性问题。
+    "maximumSecondaryOutages": 0,
+    // 最终重新达到五万在线目标后至少连续稳定 120 秒，避免刚追平就结束造成假通过。
+    "minimumStableOnlineSeconds": 120
+  },
+  "distributed": {
+    "runId": "gather-reconnect-storm-50000",
+    "shardIndex": 0,
+    "shardCount": 4
+  }
+}

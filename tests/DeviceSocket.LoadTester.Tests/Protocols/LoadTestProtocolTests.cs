@@ -240,6 +240,46 @@ public sealed class LoadTestProtocolTests
     }
 
     /// <summary>
+    /// 验证 Gather 下行分类会把标准单 F129、混合功能单元和其他 AFN 分开，供报告区分服务端下发与模拟器兼容问题。
+    /// </summary>
+    [Fact]
+    public void GatherDownstreamClassifier_SeparatesRecognizedAndUnsupportedFrames()
+    {
+        var options = TestOptionsFactory.Create();
+        options.Target.CompatibilityProfile = ServerCompatibilityProfile.GatherTcpCenter;
+        var device = DeviceAddressAllocator.Allocate(options)[0];
+        var protocol = LoadTestProtocolFactory.Create(options);
+        var classifier = Assert.IsAssignableFrom<IDownstreamFrameClassifier>(protocol);
+        var recognizedFrame = CreateGatherReadingRequest(protocol, device, 3, 2, 1);
+
+        var recognized = classifier.ClassifyDownstream(recognizedFrame, device);
+
+        Assert.Equal(DownstreamClassificationKind.GatherReadingF129, recognized.Kind);
+        Assert.True(recognized.IsRecognizedCommand);
+        Assert.False(recognized.IsUnsupportedCommand);
+
+        var multiRaw = recognizedFrame.Raw.ToArray();
+        multiRaw[16] = 0x03;
+        multiRaw[^2] = QGdw3761Codec.CalculateChecksum(multiRaw.AsSpan(6, multiRaw.Length - 8));
+        var multiFrame = Assert.IsType<QGdw3761Frame>(protocol.Read(multiRaw).Frame);
+        var multi = classifier.ClassifyDownstream(multiFrame, device);
+
+        Assert.Equal(DownstreamClassificationKind.GatherReadingMultiFunction, multi.Kind);
+        Assert.False(multi.IsRecognizedCommand);
+        Assert.True(multi.IsUnsupportedCommand);
+        Assert.Equal([129, 130], multi.Functions);
+
+        var otherAfnRaw = recognizedFrame.Raw.ToArray();
+        otherAfnRaw[12] = 0x04;
+        otherAfnRaw[^2] = QGdw3761Codec.CalculateChecksum(otherAfnRaw.AsSpan(6, otherAfnRaw.Length - 8));
+        var otherAfnFrame = Assert.IsType<QGdw3761Frame>(protocol.Read(otherAfnRaw).Frame);
+        var otherAfn = classifier.ClassifyDownstream(otherAfnFrame, device);
+
+        Assert.Equal(DownstreamClassificationKind.OtherQGdw3761Command, otherAfn.Kind);
+        Assert.True(otherAfn.IsUnsupportedCommand);
+    }
+
+    /// <summary>
     /// 根据指定地址、MSA、序号和测量点创建无数据区的 Gather AFN=0CH/F129 下行命令。
     /// </summary>
     /// <param name="protocol">用于创建基础地址帧和解析结果的协议适配器。</param>

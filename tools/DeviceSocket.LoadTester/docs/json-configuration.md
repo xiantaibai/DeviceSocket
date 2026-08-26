@@ -91,7 +91,7 @@ dotnet run --project tools\DeviceSocket.LoadTester\DeviceSocket.LoadTester.cspro
 | `target.host` | string | `127.0.0.1` | TCP 服务主机名或 IP，不能为空 | 本地调试填回环地址；内网/外网负载机填写其实际可达地址 |
 | `target.port` | int | `0` | 有效端口为 1～65535；省略或填 0 时，376.1 自动使用 5001，645 自动使用 5002 | 连接 Gather 老服务时必须按其 `App.config` 填实际监听端口 |
 | `target.protocol` | enum | `qGdw3761` | `qGdw3761`：Q/GDW 376.1；`dlt6452007`：DL/T 645-2007 | 集中器场景用 376.1，电表直连场景用 645 |
-| `target.compatibilityProfile` | enum | `deviceSocket` | `deviceSocket` 使用当前 Gateway 的严格确认规则；`gatherTcpCenter` 接受 Gather 老服务的固定 SEQ、无回显数据区确认 | 老项目必须设置 `gatherTcpCenter`；该值目前只能与 `qGdw3761` 组合 |
+| `target.compatibilityProfile` | enum | `deviceSocket` | `deviceSocket` 使用当前 Gateway 的严格确认规则；`gatherTcpCenter` 接受 Gather 老服务的固定 SEQ、无回显数据区确认，并允许 CSV 真实设备映射中的特殊终端地址 `00000` | 老项目必须设置 `gatherTcpCenter`；该值目前只能与 `qGdw3761` 组合 |
 
 ## 设备身份：`devices`
 
@@ -99,7 +99,7 @@ dotnet run --project tools\DeviceSocket.LoadTester\DeviceSocket.LoadTester.cspro
 | --- | --- | --- | --- | --- |
 | `devices.count` | int | `100` | 所有分片合计的虚拟连接数，必须大于 0 | 多机时仍填写总设备数，不填单机设备数 |
 | `devices.generationMode` | enum | `sequential` | `sequential` 连续生成；`random` 在闭区间无重复抽取；`csv` 读取真实映射 | 数据库设备连续用 sequential；随机抽样用 random；正式老服务优先用 csv |
-| `devices.deviceMappingFile` | string/null | `null` | CSV 模式必填；格式为 `meterId,deviceId`，数据行数必须等于 `devices.count`，两列均不得重复 | 使用数据库已存在的真实设备和电表映射 |
+| `devices.deviceMappingFile` | string/null | `null` | CSV 模式必填；格式为 `meterId,deviceId`，数据行数必须等于 `devices.count`，两列均不得重复；终端地址通常为 1～65535，仅 `qGdw3761 + gatherTcpCenter + csv` 允许真实特殊地址 `00000` | 使用数据库已存在的真实设备和电表映射 |
 | `devices.addressStart` | long | `1` | sequential 的首地址，random 的闭区间下界；必须大于 0。376.1 单区划最大 65535，645 最大 12 位十进制地址 | 376.1 设备号后五位的起始值，或 645 表地址起始值 |
 | `devices.addressEnd` | long/null | `null` | random 模式必填的闭区间上界，必须不小于 `addressStart` 且不超过 65535；其他模式忽略 | 从一段已预置设备地址中稳定随机抽样 |
 | `devices.administrativeDivision` | string | `3301` | 376.1 设备号前四位，必须是四位十进制数字 | 必须填写数据库真实存在的行政区划码，例如 `2608` |
@@ -114,7 +114,7 @@ meterId,deviceId
 100002,260810002
 ```
 
-`deviceId` 是四位行政区划码加五位终端地址。CSV 会在任何连接发起前完整校验；多机运行时每台负载机必须部署内容和文件名一致的 CSV。
+`deviceId` 是四位行政区划码加五位终端地址。标准376.1场景的终端地址范围为 1～65535；当且仅当 `target.compatibilityProfile=gatherTcpCenter` 且 `devices.generationMode=csv` 时，允许老服务数据库真实存在的特殊地址 `00000`。顺序和随机生成模式仍从 1 开始，不会自动生成零地址。CSV 会在任何连接发起前完整校验；多机运行时每台负载机必须部署内容和文件名一致的 CSV。
 
 ## 建连行为：`connection`
 
@@ -170,14 +170,15 @@ meterId,deviceId
 | `commandWorkload.endpointPath` | string | `/api/ammeter/reading` | POST 接口相对路径，不能为空 | 老服务路由有差异时覆盖 |
 | `commandWorkload.authorizationHeaderName` | string | `gather-authorize-key` | 鉴权请求头名称；与环境变量名任一为空时不发送鉴权头 | 正式环境通常保持默认名称 |
 | `commandWorkload.authorizationKeyEnvironmentVariable` | string | `GATHER_AUTHORIZE_KEY` | 保存鉴权值的环境变量名；配置了头名和变量名但环境变量缺失时终止并出中止报告 | 密钥不写入 JSON、控制台或报告 |
-| `commandWorkload.deviceMappingFile` | string/null | `null` | HTTP 使用的 `meterId,deviceId` CSV；为空且设备为 CSV 模式时复用 `devices.deviceMappingFile` | TCP 和 HTTP 使用不同映射时才单独设置 |
+| `commandWorkload.deviceMappingFile` | string/null | `null` | HTTP 使用的 `meterId,deviceId` CSV；为空且设备为 CSV 模式时复用 `devices.deviceMappingFile`；`00000` 的兼容范围与设备 CSV 完全一致 | TCP 和 HTTP 使用不同映射时才单独设置 |
 | `commandWorkload.meterIdStart` | int/null | `null` | 不使用 CSV 时，从该 meter_id 按全局设备序号递增，必须大于 0 | 数据库 meter_id 连续且与生成设备一一对应时使用 |
 | `commandWorkload.operatorUserId` | int | `0` | 请求体 `oper_uid`，作为操作人审计标识 | 按正式 API 的审计要求填写 |
 | `commandWorkload.operationSource` | int | `6` | 请求体 `oper_source`，默认对应老项目 Test 来源 | 除非老服务枚举定义不同，否则保持 6 |
-| `commandWorkload.readingModel` | int | `0` | 请求体 `reading_model`，默认普通 Q/GDW 376.1 抄读 | 测试其他抄读模式时按老 API 枚举填写 |
+| `commandWorkload.readingModel` | int | `0` | 请求体 `readingModel`，默认普通 Q/GDW 376.1 抄读 | 测试其他抄读模式时按老 API 枚举填写 |
 | `commandWorkload.readingCode` | int | `0` | 请求体 `readingCode`，原样透传给老 API | 需要指定读数项时按业务约定填写 |
 | `commandWorkload.requestTimeoutSeconds` | int | `70` | 单次 HTTP 端到端超时秒数，必须大于 0 | `showResult=true` 时应大于老 API 约 60 秒的设备结果等待上限 |
 | `commandWorkload.requiredOnlineRate` | double | `0.98` | 0～1 且大于 0；阶段未配置明确在线数时，按 `targetDeviceCount × requiredOnlineRate` 计算在线门槛；`onlineRegistry` 可由任意当前在线设备满足阶段配额 | 普通全量阶段要求 98% 在线再发命令 |
+| `commandWorkload.minimumOnlineCount` | int/null | `null` | 全部分片合计最低在线数，范围 0～`devices.count`；null 才按阶段目标和 `requiredOnlineRate` 计算，0 表示全局关闭在线门槛；阶段字段优先于该值 | 配成 10000 可保证功能冒烟和小流量阶段也必须等一万台业务在线后启动 |
 | `commandWorkload.onlineStableSeconds` | int | `30` | 在线门槛连续保持秒数，不能小于 0；0 表示达到即放行 | 避免刚上线又掉线时提前开始 API 压测 |
 | `commandWorkload.onlineWaitTimeoutSeconds` | int | `600` | 等待稳定在线的最长秒数，必须大于 0 | 一万台上线较慢时可放大；超时动作由阶段决定 |
 | `commandWorkload.startDelaySeconds` | int | `0` | HTTP 工作负载启动前额外等待秒数，不能小于 0 | `apiOnly` 部署时等待另一台设备负载机先上线 |
@@ -198,10 +199,27 @@ meterId,deviceId
 | `commandWorkload.phases[].maxConcurrency` | int | `10` | 所有分片合计最大在途 HTTP 请求数，必须大于 0 | `showResult=true` 时限制同步等待请求占用 |
 | `commandWorkload.phases[].showResult` | bool | `false` | false 表示 API 快速受理；true 表示 API 同步等待设备业务结果 | false 测下发吞吐，true 测端到端应答和阻塞风险 |
 | `commandWorkload.phases[].pauseAfterSeconds` | int | `0` | 阶段结束后的等待秒数，不能小于 0；0 表示立即进入下一阶段 | 留出命令队列和服务端资源回落时间 |
-| `commandWorkload.phases[].minimumOnlineCount` | int/null | `null` | 阶段要求的全局在线数；null 按 `requiredOnlineRate` 计算，0 表示不等待，不能大于该阶段有效 `targetDeviceCount`。`onlineRegistry` 下任意在线设备均可满足门槛 | 小规模阶段设精确门槛，全量阶段可设 9800 |
+| `commandWorkload.phases[].minimumOnlineCount` | int/null | `null` | 阶段要求的全局在线数，范围 0～`devices.count`；null 继承 `commandWorkload.minimumOnlineCount`，两者都为空才按阶段目标和在线率计算；0 表示不等待。允许大于本阶段目标数 | 小规模探测也必须等全部一万台稳定在线时设 10000 |
 | `commandWorkload.phases[].onlineStableSeconds` | int/null | `null` | null 继承全局稳定时长，0 表示达到在线数立即放行 | 为功能冒烟设置较短稳定时间，为全量阶段设置较长时间 |
 | `commandWorkload.phases[].onlineWaitTimeoutSeconds` | int/null | `null` | null 继承全局等待上限；设置后必须大于 0 | 不同规模使用不同上线等待时间 |
 | `commandWorkload.phases[].onlineGateFailureAction` | enum | `skipPhase` | `skipPhase` 跳过并继续出报告；`runPhase` 在线不足仍执行；`abortRun` 终止本轮并出部分报告 | 正式回归推荐 skipPhase；诊断离线请求才用 runPhase；严格前置条件用 abortRun |
+| `commandWorkload.phases[].minimumApiSuccessRate` | double/null | `null` | 0～1；null 不做阶段级验收。`showResult=false` 表示 API 异步接受率，`showResult=true` 表示同步业务结果成功率 | 避免整轮成功率掩盖某一级 RPS 或最终同步阶段失败 |
+| `commandWorkload.phases[].maximumP95Milliseconds` | long/null | `null` | 当前阶段独立 HTTP 延迟 P95 上限，单位毫秒；null 不验收，设置后必须大于 0 | 分别限制异步 API 和同步结果阶段延迟 |
+| `commandWorkload.phases[].drainEnabled` | bool | `false` | true 时请求发送结束后等待原始下行、应答达到门槛并连续静默；false 保持旧场景立即进入暂停或下一阶段的行为 | 分级 RPS、全量命令和同设备多命令阶段建议开启 |
+| `commandWorkload.phases[].minimumRawDeliveryRate` | double | `0.95` | 0～1；按 `min(至少关联到一帧原始下行的唯一命令数, API估算入队数) / API估算入队数` 计算。未知协议格式也算服务端已下发；只在开启排空和下行诊断时使用，关闭诊断时退回旧的读表收到计数 | 单独确认服务端是否消费并下发，避免把模拟器协议兼容缺口误判为服务端丢命令 |
+| `commandWorkload.phases[].minimumDeliveryRate` | double | `0.95` | 0～1；保留旧字段名以兼容场景，当前含义是 `协议已识别唯一命令数 / API估算入队数`，仅排空开启时生效 | 验收模拟器对正式服务实际下行格式的兼容覆盖率 |
+| `commandWorkload.phases[].minimumResponseRate` | double | `0.99` | 0～1；按已成功应答唯一命令数/协议已识别唯一命令数计算，仅排空开启时生效；全部下行为未知格式时排空会在原始下行静默后结束，再由识别率明确失败 | 判断模拟终端对已识别命令是否完整应答 |
+| `commandWorkload.phases[].drainTimeoutSeconds` | int | `600` | 最长排空等待秒数，开启排空时必须大于 0 | 低性能服务端或一万条全量命令可设 600～900 秒 |
+| `commandWorkload.phases[].quietSeconds` | int | `10` | 达到交付和应答门槛后，两项计数仍需连续不变化的秒数；不能小于 0，0 表示达到门槛立即通过 | 防止指标刚碰到门槛但后台队列仍持续出队 |
+| `commandWorkload.phases[].drainFailureAction` | enum | `continue` | `continue` 带积压继续；`skipNextPhase` 跳过紧邻的一个阶段；`abortRun` 终止并生成部分报告 | 正式回归推荐 abortRun；探索性阶梯可用 skipNextPhase 保留后续收尾阶段 |
+| `commandWorkload.phases[].circuitBreakerEnabled` | bool | `false` | 是否启用阶段保护；true 时至少配置最大时长、连续失败或超时率之一 | 防止服务端已明显异常后仍继续制造数千请求 |
+| `commandWorkload.phases[].maximumDurationSeconds` | int/null | `null` | 请求生产最大秒数；null 不按时长停止，设置后必须大于 0。停止生产后已进入有界队列的少量请求仍会完成 | 防止同步接口长期阻塞导致阶段无限延长 |
+| `commandWorkload.phases[].maximumConsecutiveFailures` | int | `0` | 连续失败保护阈值；0 表示关闭该条件，不能小于 0 | 数据批次错误、API 持续 400 或服务不可用时快速停止 |
+| `commandWorkload.phases[].maximumTimeoutRate` | double/null | `null` | 0～1；null 不按超时率保护，达到最小样本数后实际超时率大于该值即停止生产 | 识别服务端卡死或同步结果大量超时 |
+| `commandWorkload.phases[].circuitBreakerMinimumRequests` | int | `20` | 超时率参与保护前的最小发起请求样本数，启用保护时必须大于 0 | 避免第一条偶发超时导致误熔断 |
+| `commandWorkload.phases[].circuitBreakerAction` | enum | `stopPhase` | `stopPhase` 只停止当前阶段生产并继续后续流程；`abortRun` 终止整轮并生成部分报告 | 正式回归的前置探测推荐 abortRun，探索容量时可 stopPhase |
+
+“API 估算入队数”按已发起请求减去业务码 405/407 等明确入队前预校验拒绝计算。老服务未返回命令唯一标识，网络异常、超时及异步积压无法做到逐条服务端确认，因此该值是上界估算；报告会同时给出设备侧实际观测数和“未观测”缺口，不会把估算值描述成服务端事实。开启逐阶段排空并使用 `abortRun` 可最大限度避免前一阶段积压串入后一阶段。
 
 ## 自动重连：`reconnect`
 
@@ -270,6 +288,15 @@ meterId,deviceId
 | `reporting.sampleIntervalSeconds` | int | `1` | 时间序列采样周期秒数，必须大于 0 | 1 秒适合问题定位；超长测试可调大以减少磁盘写入 |
 | `reporting.checkpointIntervalSeconds` | int | `10` | 原子覆盖 `run-checkpoint.json` 的周期，必须大于 0 且不小于采样周期 | 进程被强制结束时保留最后累计指标 |
 | `reporting.writeConsoleSummary` | bool | `true` | 是否每次采样输出控制台摘要，不影响文件报告 | 后台部署或减少控制台开销时关闭 |
+| `reporting.downstreamDiagnostics` | object | `{...}` | 下行关联与协议诊断配置对象，不能为 null；修改其内容会进入多节点配置签名 | HTTP 指令压测建议保持启用，纯连接场景不会产生追踪记录 |
+| `reporting.downstreamDiagnostics.enabled` | bool | `true` | 是否登记 HTTP 期望命令并关联设备原始下行；false 时不生成逐请求关联和未知样本，阶段排空退回旧聚合指标 | 正式 HTTP 回归保持 true；极限连接数但不执行 HTTP 时取值无影响 |
+| `reporting.downstreamDiagnostics.captureUnknownFrames` | bool | `true` | 是否保存未知、非法、地址不匹配或当前不支持报文的限量样本；false 仍保留分类计数和逐请求结果 | 报告需要控制敏感原始报文落盘时关闭 |
+| `reporting.downstreamDiagnostics.maxSamplesPerFingerprint` | int | `5` | 每个完整报文指纹最多保存的样本数，范围 0～100；0 表示不保存样本但仍分类计数 | 同类未知报文很多时避免 JSONL 无界增长，排障可临时增大 |
+| `reporting.downstreamDiagnostics.maxTotalSamples` | int | `500` | 当前节点全部未知样本总上限，范围 0～10000；0 表示不保存样本但仍分类计数；与单指纹上限同时满足才会落盘 | 3～5 万台设备地址不同会形成大量唯一指纹，使用全局上限约束内存与报告大小 |
+| `reporting.downstreamDiagnostics.rawHexMaxBytes` | int | `512` | 单个未知样本最多保存的原始报文字节数，范围 0～4096；0 表示不写 Hex，只保留 AFN/FN、长度和指纹 | 协议排障通常 512 足够；对原始数据敏感时设 0 |
+| `reporting.downstreamDiagnostics.correlationTimeoutSeconds` | int | `900` | HTTP 请求登记后允许按同设备 FIFO 关联下行及识别重复指纹的时间窗口秒数，必须大于 0；没有零值语义 | 应不小于最长阶段排空时间，低性能服务器可设 1200～1800 |
+
+节点目录除 `node-summary.json`、`report.md`、`errors.csv` 外，还会生成 `http-errors.csv`、`http-errors.jsonl`、`command-traces.jsonl`、`phase-targets.csv`、`downstream-classification.csv` 和 `downstream-unknown-samples.jsonl`。HTTP 错误文件只保存失败请求；命令追踪文件按每个实际发起请求记录 API、原始下行、协议分类和应答闭环；未知样本按报文指纹限量保存。`node-summary.json` 只内嵌诊断汇总，不内嵌一万条追踪明细，以控制摘要大小。
 
 ## 服务端观测：`serverObservation`
 
@@ -306,6 +333,11 @@ meterId,deviceId
 | `acceptance.minimumApiTargetCoverageRate` | double/null | `null` | 取值 0～1；实际发起 HTTP 请求数除以“已发起 + 因设备离线跳过”的计划请求数，空值不验收 | 防止只执行少量在线目标时 `minimumApiSuccessRate` 仍显示很高 |
 | `acceptance.minimumGatherReadingResponseRate` | double/null | `null` | 模拟终端已应答读表命令数/收到读表命令数的下限 | 端到端设备消息应答验收 |
 | `acceptance.maximumApiP95Milliseconds` | long/null | `null` | HTTP 端到端延迟 P95 上限毫秒数，设置后必须大于 0 | 检测同步等待、队列阻塞和服务端卡顿 |
+| `acceptance.minimumAsyncApiAcceptanceRate` | double/null | `null` | 0～1；仅汇总 `showResult=false` 阶段的业务成功数/发起数，null 不验收 | 防止同步结果失败稀释或污染异步 API 接受率 |
+| `acceptance.minimumSyncResultSuccessRate` | double/null | `null` | 0～1；仅汇总 `showResult=true` 阶段的业务成功数/发起数，null 不验收 | 单独验收结果订阅和同步等待闭环 |
+| `acceptance.minimumCommandDeliveryRate` | double/null | `null` | 0～1；全部已执行 HTTP 阶段原始下行唯一命令数/估算入队数下限，未知格式也计为已交付，null 不验收；没有估算入队样本时不生成该验收项 | 识别“API 已进入链路但服务端命令消费或下发未追平” |
+| `acceptance.minimumCommandRecognitionRate` | double/null | `null` | 0～1；协议已识别唯一命令数/原始下行唯一命令数下限，null 不验收；没有原始下行样本时不生成该验收项 | 单独识别 LoadTester 尚未兼容正式服务下行格式的问题 |
+| `acceptance.maximumUnobservedCommands` | long/null | `null` | 估算入队但阶段排空窗口内没有关联到任何原始下行的命令数上限；不能小于 0，0 表示不允许缺口；没有估算入队样本时不生成该验收项 | 给百分比原始交付率增加绝对数量保护，避免大规模测试容忍过多丢失 |
 
 如果同时配置最小和最大数量，最小值不能大于最大值。故障注入场景要根据预期行为调整门槛，例如 `drop` 模式不应再要求 100% 读表应答率。
 
@@ -330,6 +362,8 @@ meterId,deviceId
 | `gather-tcpcenter-reconnect-storm-10000.json` | 一万台稳定在线后真实重启 Gather.TcpCenter，验证全量重连恢复 |
 | `gather-tcpcenter-http-reading-10000.json` | 面向 8 核 16 GiB 测试服务器的一万台在线、HTTP 抄读、终端应答和多命令阻塞测试 |
 | `gather-tcpcenter-soak-10000.json` | 一万台六小时长稳；复制并替换完整 CSV 后可扩展到 3～5 万多分片 |
+| `gather-tcpcenter-reconnect-storm-50000.json` | 四分片五万台真实设备分阶段上线，人工重启老 TCP 服务并验收 98% 设备进入重连和恢复稳定性 |
+| `gather-tcpcenter-http-reading-50000.json` | 四分片五万台设备在线、全局最高 50 RPS、全量异步抄读一次和同设备多命令阻塞测试 |
 
 ## 新增或修改字段时的维护清单
 

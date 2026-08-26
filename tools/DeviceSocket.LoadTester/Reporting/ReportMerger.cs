@@ -48,7 +48,8 @@ internal static class ReportMerger
             (int)metrics.ExpectedOnline,
             gatewayObservation,
             first.Options.Role,
-            phases: reports.SelectMany(item => item.Phases).ToArray());
+            phases: reports.SelectMany(item => item.Phases).ToArray(),
+            commandPhases: reports.SelectMany(item => item.CommandPhases).ToArray());
         var nodeOutcomes = reports
             .OrderBy(item => item.ShardIndex)
             .Select(item => new NodeRunOutcome
@@ -105,8 +106,10 @@ internal static class ReportMerger
     private static void ValidateReports(IReadOnlyList<NodeReport> reports)
     {
         var first = reports[0];
-        if (reports.Any(item => item.SchemaVersion != 1))
+        if (reports.Any(item => item.SchemaVersion is not 1 and not 2 and not 3))
             throw new InvalidDataException("节点报告的 SchemaVersion 不受当前合并器支持。");
+        if (reports.Any(item => item.SchemaVersion != first.SchemaVersion))
+            throw new InvalidDataException("不能混合合并不同 SchemaVersion 的节点报告。");
         if (reports.Any(item => !string.Equals(item.RunId, first.RunId, StringComparison.Ordinal)))
             throw new InvalidDataException("不能合并 RunId 不同的节点报告。");
         if (reports.Any(item => item.ShardCount != first.ShardCount))
@@ -187,6 +190,7 @@ internal static class ReportMerger
                     options.CommandWorkload.ReadingCode,
                     options.CommandWorkload.RequestTimeoutSeconds,
                     options.CommandWorkload.RequiredOnlineRate,
+                    options.CommandWorkload.MinimumOnlineCount,
                     options.CommandWorkload.OnlineStableSeconds,
                     options.CommandWorkload.OnlineWaitTimeoutSeconds,
                     options.CommandWorkload.StartDelaySeconds,
@@ -198,6 +202,7 @@ internal static class ReportMerger
                 options.Acceptance,
                 ServerObservationEnabled = options.ServerObservation.Enabled,
                 options.Reporting.SampleIntervalSeconds,
+                options.Reporting.DownstreamDiagnostics,
                 options.Distributed.StartAtUtc
             },
             LoadTestConfigurationLoader.CreateSerializerOptions());

@@ -27,4 +27,9 @@ public sealed class ReportingOptions
     /// 获取或设置 <c>reporting.writeConsoleSummary</c>；默认 true，每次采样向控制台输出简要指标，false 仅关闭控制台摘要，不影响报告文件。
     /// </summary>
     public bool WriteConsoleSummary { get; set; } = true;
+
+    /// <summary>
+    /// 获取或设置 <c>reporting.downstreamDiagnostics</c>；定义 HTTP 请求与设备下行帧关联、未知协议采样和诊断文件大小上限。
+    /// </summary>
+    public DownstreamDiagnosticsOptions DownstreamDiagnostics { get; set; } = new();
 }

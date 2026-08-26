@@ -58,7 +58,7 @@ public sealed class DetailedReportGeneratorTests
             Assert.Equal(30, analysis.Server.MaximumCommandLineQueueDepth);
             Assert.Equal(2, analysis.Server.AckSendAborted);
             Assert.Equal(3, analysis.Server.ConnectionClosed);
-            Assert.Equal(3, analysis.SchemaVersion);
+            Assert.Equal(5, analysis.SchemaVersion);
             Assert.Equal("TCPCenter-TEST-01", analysis.Background.ServerName);
             Assert.Equal("hyz_feat_对接电表", analysis.Background.CodeBranch);
             Assert.Equal("command-pipeline-workers", analysis.Background.ServiceParameters[0].Name);
@@ -160,6 +160,61 @@ public sealed class DetailedReportGeneratorTests
     }
 
     /// <summary>
+    /// 验证多分片阶段漂移时以最后一个分片进入冷却的时间截断服务端窗口，保留其他分片仍在恢复期间的队列压力。
+    /// </summary>
+    [Fact]
+    public async Task StaggeredShardCooldown_UsesLatestCooldownStartForServerDiagnostics()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"device-detailed-staggered-{Guid.NewGuid():N}");
+        try
+        {
+            var startedAt = DateTimeOffset.Parse("2026-08-21T02:30:00Z");
+            var firstCooldownAt = startedAt.AddMinutes(1);
+            var lastCooldownAt = startedAt.AddMinutes(2);
+            var endedAt = startedAt.AddMinutes(3);
+            for (var shardIndex = 0; shardIndex < 2; shardIndex++)
+            {
+                var shardPath = Path.Combine(root, $"shard-{shardIndex:D3}");
+                var cooldownAt = shardIndex == 0 ? firstCooldownAt : lastCooldownAt;
+                await NodeReportWriter.WriteAsync(
+                    CreateDistributedReport(startedAt, endedAt, cooldownAt, shardIndex),
+                    shardPath,
+                    CancellationToken.None);
+            }
+
+            var serverPath = Path.Combine(root, "server.jsonl");
+            await File.WriteAllTextAsync(
+                serverPath,
+                BuildStaggeredCooldownServerMetrics(),
+                new UTF8Encoding(false));
+
+            var analysis = await DetailedReportGenerator.GenerateAsync(
+                new DetailedReportGenerationOptions
+                {
+                    InputDirectory = root,
+                    ServerMetricsPath = serverPath,
+                    OutputDirectory = Path.Combine(root, "analysis"),
+                    Audience = DetailedReportAudience.Diagnostic,
+                    ServerTimeZoneId = "UTC",
+                    TargetDeviceCount = 100
+                },
+                CancellationToken.None);
+
+            Assert.NotNull(analysis.Server);
+            Assert.Equal(999, analysis.Server.MaximumQueueDepth);
+            Assert.Equal(60_000, analysis.Server.MaximumQueueAgeMilliseconds);
+            Assert.Contains(
+                analysis.DataWarnings,
+                item => item.Contains("全部分片进入 TCP cooldown", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>
     /// 创建通过原始验收且目标为一百台的最小节点报告。
     /// </summary>
     /// <param name="startedAt">测试开始时间。</param>
@@ -184,6 +239,65 @@ public sealed class DetailedReportGeneratorTests
             Metrics = metrics,
             Resources = new ResourceSnapshot(endedAt, 12, 100_000_000, 30_000_000, 1, 0, 0, 8, 0),
             Phases = [],
+            RunStatus = LoadTestRunStatus.Passed,
+            Acceptance = new AcceptanceResult(true, []),
+            PreflightWarnings = []
+        };
+    }
+
+    /// <summary>
+    /// 创建具有独立冷却开始时间的两分片节点报告，用于验证合并诊断窗口不会被先结束的节点提前截断。
+    /// </summary>
+    /// <param name="startedAt">整轮测试开始时间。</param>
+    /// <param name="endedAt">当前分片结束时间。</param>
+    /// <param name="cooldownAt">当前分片进入冷却阶段的时间。</param>
+    /// <param name="shardIndex">当前零基分片编号。</param>
+    /// <returns>包含稳态和冷却阶段的节点报告。</returns>
+    private static NodeReport CreateDistributedReport(
+        DateTimeOffset startedAt,
+        DateTimeOffset endedAt,
+        DateTimeOffset cooldownAt,
+        int shardIndex)
+    {
+        var options = TestOptionsFactory.Create();
+        options.Devices.Count = 100;
+        options.Distributed.RunId = "staggered-cooldown-test";
+        options.Distributed.ShardCount = 2;
+        options.Distributed.ShardIndex = shardIndex;
+        var metrics = CreateMetrics(endedAt, 50);
+        return new NodeReport
+        {
+            RunId = options.Distributed.RunId,
+            NodeName = $"node-{shardIndex}",
+            ShardIndex = shardIndex,
+            ShardCount = 2,
+            LocalDeviceCount = 50,
+            StartedAtUtc = startedAt,
+            EndedAtUtc = endedAt,
+            Options = options,
+            Metrics = metrics,
+            Resources = new ResourceSnapshot(endedAt, 10, 50_000_000, 20_000_000, 1, 0, 0, 4, 0),
+            Phases =
+            [
+                new PhaseResult(
+                    "steady",
+                    ScenarioPhaseKind.Steady,
+                    startedAt,
+                    cooldownAt,
+                    50,
+                    metrics,
+                    MinimumProtocolOnline: 50,
+                    MaximumProtocolOnline: 50),
+                new PhaseResult(
+                    "cooldown",
+                    ScenarioPhaseKind.Cooldown,
+                    cooldownAt,
+                    endedAt,
+                    0,
+                    metrics,
+                    MinimumProtocolOnline: 0,
+                    MaximumProtocolOnline: 50)
+            ],
             RunStatus = LoadTestRunStatus.Passed,
             Acceptance = new AcceptanceResult(true, []),
             PreflightWarnings = []
@@ -242,6 +356,16 @@ public sealed class DetailedReportGeneratorTests
         {"Timestamp":"2026-08-21T02:29:00Z","ProcessId":10,"SocketConnections":0,"BoundDeviceConnections":0,"BusinessOnlineDevices":0,"BoundWithoutBusinessLine":0,"PendingLogin":0,"PendingHeartbeat":0,"PendingCommandLine":0,"PendingLifecycleState":0,"PendingConfirmSend":0,"AckMaxElapsedMs":0,"AckSendCompletedMaxElapsedMs":0,"LoginBusinessReadyMaxElapsedMs":0,"CommandLineStartPauseCount":0,"CommandLineStartMaxPauseElapsedMs":0,"AckedButRejected":{"Total":0},"StaleBusiness":{"Total":0},"HeartbeatCoalesced":{"Total":0},"AckFailed":{"Total":0},"AckSendAborted":{"Total":0},"ConnectionClosed":{"Total":0},"ConnectionCloseWithError":{"Total":0},"ConnectionCloseReceive":{"Total":0},"ConnectionCloseOther":{"Total":0},"CommandLineRejected":{"Total":0},"LifecycleStateRejected":{"Total":0},"Pipeline":{"WorkerCount":16,"QueueDepth":0,"Failed":0,"Rejected":0,"MaxQueueDepth":0,"MaxQueueAgeMs":0},"CommandLinePipeline":{"QueueDepth":0,"MaxQueueDepth":0,"MaxQueueAgeMs":0},"LifecyclePipeline":{"QueueDepth":0,"MaxQueueDepth":0,"MaxQueueAgeMs":0}}
         {"Timestamp":"2026-08-21T02:30:10Z","ProcessId":10,"SocketConnections":100,"BoundDeviceConnections":100,"BusinessOnlineDevices":50,"BoundWithoutBusinessLine":50,"PendingLogin":50,"PendingHeartbeat":0,"PendingCommandLine":40,"PendingLifecycleState":3,"PendingConfirmSend":5,"AckMaxElapsedMs":100,"AckSendCompletedMaxElapsedMs":300,"LoginBusinessReadyMaxElapsedMs":15000,"CommandLineStartPauseCount":0,"CommandLineStartMaxPauseElapsedMs":0,"AckedButRejected":{"Total":0},"StaleBusiness":{"Total":0},"HeartbeatCoalesced":{"Total":0},"AckFailed":{"Total":0},"AckSendAborted":{"Total":2},"ConnectionClosed":{"Total":3},"ConnectionCloseWithError":{"Total":1},"ConnectionCloseReceive":{"Total":1},"ConnectionCloseOther":{"Total":2},"CommandLineRejected":{"Total":0},"LifecycleStateRejected":{"Total":0},"Pipeline":{"WorkerCount":16,"QueueDepth":50,"Failed":0,"Rejected":0,"MaxQueueDepth":50,"MaxQueueAgeMs":1000},"CommandLinePipeline":{"QueueDepth":30,"MaxQueueDepth":30,"MaxQueueAgeMs":500},"LifecyclePipeline":{"QueueDepth":2,"MaxQueueDepth":2,"MaxQueueAgeMs":200}}
         {"Timestamp":"2026-08-21T02:30:30Z","ProcessId":10,"SocketConnections":100,"BoundDeviceConnections":100,"BusinessOnlineDevices":100,"BoundWithoutBusinessLine":0,"PendingLogin":0,"PendingHeartbeat":0,"PendingCommandLine":0,"PendingLifecycleState":0,"PendingConfirmSend":0,"AckMaxElapsedMs":200,"AckSendCompletedMaxElapsedMs":250,"LoginBusinessReadyMaxElapsedMs":12000,"CommandLineStartPauseCount":0,"CommandLineStartMaxPauseElapsedMs":0,"AckedButRejected":{"Total":0},"StaleBusiness":{"Total":0},"HeartbeatCoalesced":{"Total":0},"AckFailed":{"Total":0},"AckSendAborted":{"Total":2},"ConnectionClosed":{"Total":3},"ConnectionCloseWithError":{"Total":1},"ConnectionCloseReceive":{"Total":1},"ConnectionCloseOther":{"Total":2},"CommandLineRejected":{"Total":0},"LifecycleStateRejected":{"Total":0},"Pipeline":{"WorkerCount":16,"QueueDepth":0,"Failed":0,"Rejected":0,"MaxQueueDepth":50,"MaxQueueAgeMs":2000},"CommandLinePipeline":{"QueueDepth":0,"MaxQueueDepth":30,"MaxQueueAgeMs":500},"LifecyclePipeline":{"QueueDepth":0,"MaxQueueDepth":2,"MaxQueueAgeMs":200}}
+        """;
+
+    /// <summary>
+    /// 构造在第一个分片冷却后、最后一个分片冷却前出现 Pipeline 积压的服务端指标。
+    /// </summary>
+    /// <returns>用于验证多分片有效诊断窗口的服务端 JSONL。</returns>
+    private static string BuildStaggeredCooldownServerMetrics() => """
+        {"Timestamp":"2026-08-21T02:30:30Z","ProcessId":10,"SocketConnections":100,"BoundDeviceConnections":100,"BusinessOnlineDevices":100,"BoundWithoutBusinessLine":0,"PendingLogin":0,"PendingHeartbeat":0,"PendingCommandLine":0,"PendingLifecycleState":0,"PendingConfirmSend":0,"AckMaxElapsedMs":10,"AckSendCompletedMaxElapsedMs":10,"LoginBusinessReadyMaxElapsedMs":10,"CommandLineStartPauseCount":0,"CommandLineStartMaxPauseElapsedMs":0,"AckedButRejected":{"Total":0},"StaleBusiness":{"Total":0},"HeartbeatCoalesced":{"Total":0},"AckFailed":{"Total":0},"AckSendAborted":{"Total":0},"ConnectionClosed":{"Total":0},"ConnectionCloseWithError":{"Total":0},"ConnectionCloseReceive":{"Total":0},"ConnectionCloseOther":{"Total":0},"CommandLineRejected":{"Total":0},"LifecycleStateRejected":{"Total":0},"Pipeline":{"WorkerCount":16,"QueueDepth":0,"Failed":0,"Rejected":0,"MaxQueueDepth":0,"MaxQueueAgeMs":0},"CommandLinePipeline":{"QueueDepth":0,"MaxQueueDepth":0,"MaxQueueAgeMs":0},"LifecyclePipeline":{"QueueDepth":0,"MaxQueueDepth":0,"MaxQueueAgeMs":0}}
+        {"Timestamp":"2026-08-21T02:31:30Z","ProcessId":10,"SocketConnections":50,"BoundDeviceConnections":50,"BusinessOnlineDevices":50,"BoundWithoutBusinessLine":0,"PendingLogin":0,"PendingHeartbeat":0,"PendingCommandLine":0,"PendingLifecycleState":0,"PendingConfirmSend":0,"AckMaxElapsedMs":10,"AckSendCompletedMaxElapsedMs":10,"LoginBusinessReadyMaxElapsedMs":10,"CommandLineStartPauseCount":0,"CommandLineStartMaxPauseElapsedMs":0,"AckedButRejected":{"Total":0},"StaleBusiness":{"Total":0},"HeartbeatCoalesced":{"Total":0},"AckFailed":{"Total":0},"AckSendAborted":{"Total":0},"ConnectionClosed":{"Total":50},"ConnectionCloseWithError":{"Total":0},"ConnectionCloseReceive":{"Total":0},"ConnectionCloseOther":{"Total":50},"CommandLineRejected":{"Total":0},"LifecycleStateRejected":{"Total":0},"Pipeline":{"WorkerCount":16,"QueueDepth":999,"Failed":0,"Rejected":0,"MaxQueueDepth":999,"MaxQueueAgeMs":60000},"CommandLinePipeline":{"QueueDepth":0,"MaxQueueDepth":0,"MaxQueueAgeMs":0},"LifecyclePipeline":{"QueueDepth":0,"MaxQueueDepth":0,"MaxQueueAgeMs":0}}
+        {"Timestamp":"2026-08-21T02:32:30Z","ProcessId":10,"SocketConnections":0,"BoundDeviceConnections":0,"BusinessOnlineDevices":0,"BoundWithoutBusinessLine":0,"PendingLogin":0,"PendingHeartbeat":0,"PendingCommandLine":0,"PendingLifecycleState":0,"PendingConfirmSend":0,"AckMaxElapsedMs":0,"AckSendCompletedMaxElapsedMs":0,"LoginBusinessReadyMaxElapsedMs":0,"CommandLineStartPauseCount":0,"CommandLineStartMaxPauseElapsedMs":0,"AckedButRejected":{"Total":0},"StaleBusiness":{"Total":0},"HeartbeatCoalesced":{"Total":0},"AckFailed":{"Total":0},"AckSendAborted":{"Total":0},"ConnectionClosed":{"Total":100},"ConnectionCloseWithError":{"Total":0},"ConnectionCloseReceive":{"Total":0},"ConnectionCloseOther":{"Total":100},"CommandLineRejected":{"Total":0},"LifecycleStateRejected":{"Total":0},"Pipeline":{"WorkerCount":16,"QueueDepth":0,"Failed":0,"Rejected":0,"MaxQueueDepth":0,"MaxQueueAgeMs":0},"CommandLinePipeline":{"QueueDepth":0,"MaxQueueDepth":0,"MaxQueueAgeMs":0},"LifecyclePipeline":{"QueueDepth":0,"MaxQueueDepth":0,"MaxQueueAgeMs":0}}
         """;
 
     /// <summary>

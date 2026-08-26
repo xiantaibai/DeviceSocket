@@ -2,7 +2,7 @@
   "report": {
     "title": "Gather.TcpCenter 优化后 10000 台 HTTP 指令压测",
     "environment": "公司内网测试环境",
-    "tester": "测试人员姓名"
+    "tester": "js001"
   },
   "scenario": {
     "name": "gather-tcpcenter-http-reading-10000",
@@ -17,9 +17,9 @@
   },
   "service": {
     "name": "Gather.TcpCenter",
-    "version": "2026.08.21-optimized",
-    "codeBranch": "请填写实际 Git 分支",
-    "codeCommit": "请填写实际 Git Commit",
+    "version": "2026.08.24",
+    "codeBranch": "hyz_feat_对接电表&止血优化",
+    "codeCommit": "0e029832af85167ca35f49f337f10d13d94ca224",
     "parameters": [
       {
         "name": "Pipeline Worker",
@@ -35,7 +35,7 @@
       },
       {
         "name": "Redis Pool Size",
-        "value": "请填写正式测试值"
+        "value": "10000"
       }
     ]
   }

@@ -38,7 +38,7 @@ public sealed class CommandWorkloadOptions
     public string AuthorizationKeyEnvironmentVariable { get; set; } = "GATHER_AUTHORIZE_KEY";
 
     /// <summary>
-    /// 获取或设置 <c>commandWorkload.deviceMappingFile</c>；默认空，CSV 每行格式为 <c>meterId,deviceId</c>；设备使用 CSV 模式时空值表示复用 <c>devices.deviceMappingFile</c>，否则与 <see cref="MeterIdStart"/> 二选一。
+    /// 获取或设置 <c>commandWorkload.deviceMappingFile</c>；默认空，CSV 每行格式为 <c>meterId,deviceId</c>；设备使用 CSV 模式时空值表示复用 <c>devices.deviceMappingFile</c>，否则与 <see cref="MeterIdStart"/> 二选一；仅 <c>qGdw3761 + gatherTcpCenter</c> 兼容配置允许真实特殊终端地址 <c>00000</c>。
     /// </summary>
     public string? DeviceMappingFile { get; set; }
 
@@ -77,6 +77,13 @@ public sealed class CommandWorkloadOptions
     /// <c>targetDeviceSource=onlineRegistry</c> 时在线率按阶段计划目标数计算，可由本节点任意在线设备满足。
     /// </summary>
     public double RequiredOnlineRate { get; set; } = 0.98;
+
+    /// <summary>
+    /// 获取或设置 <c>commandWorkload.minimumOnlineCount</c>；单位为全部分片合计在线设备数，默认空表示各阶段按
+    /// <see cref="RequiredOnlineRate"/> 与阶段目标数计算，零表示全局不要求在线。
+    /// 设置为 10000 可保证小流量探测阶段也必须等一万台设备稳定在线后才启动。
+    /// </summary>
+    public int? MinimumOnlineCount { get; set; }
 
     /// <summary>
     /// 获取或设置 <c>commandWorkload.onlineStableSeconds</c>；单位秒，默认 30，在线率必须连续满足该时长才开始下发，零表示命中后立即开始。
