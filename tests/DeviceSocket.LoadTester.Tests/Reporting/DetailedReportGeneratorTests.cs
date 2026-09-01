@@ -215,6 +215,137 @@ public sealed class DetailedReportGeneratorTests
     }
 
     /// <summary>
+    /// 验证逐请求应答率优先于阶段累计差值，避免上一阶段迟到应答导致合并应答率超过百分之百。
+    /// </summary>
+    [Fact]
+    public async Task DetailedTraceResponseRate_DoesNotExceedOneHundredPercent()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"device-detailed-response-{Guid.NewGuid():N}");
+        try
+        {
+            var shard = Path.Combine(root, "shard-000");
+            var startedAt = DateTimeOffset.Parse("2026-08-21T02:30:00Z");
+            var endedAt = startedAt.AddMinutes(1);
+            var report = CreateReport(startedAt, endedAt) with
+            {
+                CommandPhases =
+                [
+                    new CommandPhaseResult
+                    {
+                        Name = "async-command",
+                        StartedAtUtc = startedAt,
+                        EndedAtUtc = endedAt,
+                        LocalDeviceCount = 10,
+                        PlannedRequests = 10,
+                        ShowResult = false,
+                        ApiRequestsStarted = 10,
+                        ApiRequestsSucceeded = 10,
+                        ApiRequestsFailed = 0,
+                        ApiRequestTimeouts = 0,
+                        ApiEstimatedEnqueued = 10,
+                        GatherReadingCommandsReceived = 10,
+                        GatherReadingCommandsResponded = 12,
+                        RawDownstreamCommandsObserved = 10,
+                        ProtocolRecognizedCommands = 10,
+                        GatherReadingResponseRate = 0.9
+                    }
+                ]
+            };
+            await NodeReportWriter.WriteAsync(report, shard, CancellationToken.None);
+
+            var analysis = await DetailedReportGenerator.GenerateAsync(
+                new DetailedReportGenerationOptions
+                {
+                    InputDirectory = shard,
+                    OutputDirectory = Path.Combine(root, "analysis"),
+                    Audience = DetailedReportAudience.Diagnostic,
+                    ServerTimeZoneId = "UTC",
+                    TargetDeviceCount = 100
+                },
+                CancellationToken.None);
+
+            var phase = Assert.Single(analysis.CommandPhases);
+            Assert.Equal(9, phase.CommandsResponded);
+            Assert.Equal(0.9, phase.ResponseRate, precision: 6);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// 验证无计划重启场景中单台设备的亚秒级重连只标记为低优先级瞬时波动。
+    /// </summary>
+    [Fact]
+    public async Task SingleDeviceSubsecondReconnect_IsReportedAsP2Transient()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"device-detailed-transient-{Guid.NewGuid():N}");
+        try
+        {
+            var shard = Path.Combine(root, "shard-000");
+            var startedAt = DateTimeOffset.Parse("2026-08-21T02:30:00Z");
+            var endedAt = startedAt.AddMinutes(1);
+            var outageStartedAt = startedAt.AddSeconds(30);
+            var metrics = CreateMetrics(endedAt, 100) with
+            {
+                OutageCount = 1,
+                ReconnectsScheduled = 1,
+                WorstRecoveryMilliseconds = 248,
+                Outages =
+                [
+                    new OutageEventSnapshot
+                    {
+                        Sequence = 1,
+                        PhaseName = "steady",
+                        PhaseKind = ScenarioPhaseKind.Steady,
+                        ExpectedServerRestart = false,
+                        StartedAtUtc = outageStartedAt,
+                        RecoveredAtUtc = outageStartedAt.AddMilliseconds(248),
+                        DurationMilliseconds = 248,
+                        ExpectedOnline = 100,
+                        MinimumProtocolOnline = 99,
+                        MaximumOfflineDevices = 1,
+                        ConnectionAttempts = 1,
+                        ConnectionFailures = 0,
+                        LoginFailures = 0,
+                        HeartbeatTimeouts = 0,
+                        ReconnectsScheduled = 1,
+                        AddressAlreadyInUse = 0
+                    }
+                ]
+            };
+            var report = CreateReport(startedAt, endedAt) with { Metrics = metrics };
+            await NodeReportWriter.WriteAsync(report, shard, CancellationToken.None);
+
+            var analysis = await DetailedReportGenerator.GenerateAsync(
+                new DetailedReportGenerationOptions
+                {
+                    InputDirectory = shard,
+                    OutputDirectory = Path.Combine(root, "analysis"),
+                    Audience = DetailedReportAudience.Diagnostic,
+                    ServerTimeZoneId = "UTC",
+                    TargetDeviceCount = 100
+                },
+                CancellationToken.None);
+
+            var finding = Assert.Single(
+                analysis.Findings,
+                item => item.Title == "个别设备发生瞬时重连");
+            Assert.Equal(DiagnosticSeverity.P2, finding.Severity);
+            Assert.DoesNotContain(
+                analysis.Findings,
+                item => item.Title.Contains("计划重启后", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>
     /// 创建通过原始验收且目标为一百台的最小节点报告。
     /// </summary>
     /// <param name="startedAt">测试开始时间。</param>

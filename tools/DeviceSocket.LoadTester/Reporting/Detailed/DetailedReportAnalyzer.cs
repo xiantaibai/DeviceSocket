@@ -857,15 +857,30 @@ internal static class DetailedReportAnalyzer
             {
                 var estimated = group.Sum(item => item.ApiEstimatedEnqueued);
                 var legacyReceived = group.Sum(item => item.GatherReadingCommandsReceived);
+                var legacyResponded = group.Sum(item => item.GatherReadingCommandsResponded);
                 var rawDelivered = group.Sum(item => item.RawDownstreamCommandsObserved);
                 var recognized = group.Sum(item => item.ProtocolRecognizedCommands);
+                var hasDetailedTrace = group.Any(item =>
+                    item.RawDownstreamCommandsObserved > 0 ||
+                    item.ProtocolRecognizedCommands > 0 ||
+                    item.UnsupportedCommands > 0);
                 // 读取 SchemaVersion 1/2 报告时没有新字段，必须明确回退到原有读表收到口径。
                 if (rawDelivered == 0 && recognized == 0 && legacyReceived > 0)
                 {
                     rawDelivered = legacyReceived;
                     recognized = legacyReceived;
                 }
-                var responded = group.Sum(item => item.GatherReadingCommandsResponded);
+                // 新报告使用逐请求关联应答率还原独立应答数，避免上一阶段迟到应答落入本阶段累计差值后出现超过 100% 的假象。
+                // 旧报告没有逐请求追踪字段，只能继续使用原有累计应答口径。
+                var responded = hasDetailedTrace
+                    ? group.Sum(item => Math.Min(
+                        item.ProtocolRecognizedCommands,
+                        Math.Max(
+                            0,
+                            (long)Math.Round(
+                                item.ProtocolRecognizedCommands * item.GatherReadingResponseRate,
+                                MidpointRounding.AwayFromZero))))
+                    : legacyResponded;
                 return new DetailedCommandPhaseSummary
                 {
                     Name = group.Key.Name,
@@ -1062,13 +1077,36 @@ internal static class DetailedReportAnalyzer
             : expectedServerRestart ? Math.Max(0, metrics.OutageCount - 1) : metrics.OutageCount;
         if (secondaryOutages > 0)
         {
+            var unexpectedOutages = metrics.Outages
+                .Where(item => !item.ExpectedServerRestart)
+                .ToArray();
+            var maximumOfflineDevices = unexpectedOutages.Length == 0
+                ? target
+                : unexpectedOutages.Max(item => item.MaximumOfflineDevices);
+            var longestOutageMilliseconds = unexpectedOutages.Length == 0
+                ? metrics.WorstRecoveryMilliseconds
+                : unexpectedOutages.Max(item => item.DurationMilliseconds);
+            // 未包含计划重启的容量场景中，单台设备数秒内自动恢复属于零星链路抖动，不应误报成服务端级 P0 掉线。
+            var isolatedTransient = !expectedServerRestart &&
+                maximumOfflineDevices <= Math.Max(1, (long)Math.Ceiling(target * 0.001)) &&
+                longestOutageMilliseconds <= 5_000;
             findings.Add(new DiagnosticFinding
             {
-                Severity = DiagnosticSeverity.P0,
-                Title = "计划重启后仍发生二次掉线",
-                Evidence = $"整轮记录 {metrics.OutageCount:N0} 次在线中断，其中至少 {secondaryOutages:N0} 次不属于计划重启首次中断。",
-                Impact = "设备虽然曾恢复满在线，但连接没有持续稳定，最后一次短恢复耗时不能代表最严重事件。",
-                Recommendation = "按中断事件对齐服务端 ACK、连接关闭原因和负载机端口错误，优先定位第一次恢复后的再次掉线触发点。",
+                Severity = isolatedTransient ? DiagnosticSeverity.P2 : DiagnosticSeverity.P0,
+                Title = expectedServerRestart
+                    ? "计划重启后仍发生二次掉线"
+                    : isolatedTransient
+                        ? "个别设备发生瞬时重连"
+                        : "压测期间发生非计划在线中断",
+                Evidence = expectedServerRestart
+                    ? $"整轮记录 {metrics.OutageCount:N0} 次在线中断，其中至少 {secondaryOutages:N0} 次不属于计划重启首次中断。"
+                    : $"整轮记录 {secondaryOutages:N0} 次非计划在线波动，单次最多离线 {maximumOfflineDevices:N0} 台，最长 {longestOutageMilliseconds / 1000d:F3} 秒。",
+                Impact = isolatedTransient
+                    ? "波动未破坏整体五万在线容量，但说明个别连接仍可能触发心跳或网络层快速重连。"
+                    : "设备连接没有持续保持目标在线，稳定性验收需要结合受影响设备数和恢复时间判定。",
+                Recommendation = isolatedTransient
+                    ? "记录对应分片和设备编号，连续多轮观察是否重复发生；若频率不上升，可作为低优先级链路抖动跟踪。"
+                    : "按中断事件对齐服务端 ACK、连接关闭原因和负载机连接错误，定位首次非计划掉线触发点。",
                 Confidence = DiagnosticConfidence.Fact
             });
         }
