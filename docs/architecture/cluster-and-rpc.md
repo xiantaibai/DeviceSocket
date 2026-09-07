@@ -2,10 +2,11 @@
 
 ## 容量边界
 
-- Orleans Cluster 按接近 100 万设备同时在线设计。
-- 单个 `DeviceSocket.Host` 只承担 6～8 万条 TCP 连接，百万在线设备需要多个 Gateway 节点共同承载。
+- 首期生产验收目标为系统总在线 8～10 万台设备，通讯服务中心职责、独立看板和对外接口范围以 [项目背景](project-background.md) 为准。
+- Orleans 现有固定分片结构保留后续向百万设备扩展的方向；百万设备哈希或状态表测试不代表已验证百万通讯连接与指令吞吐。
+- 单个 `DeviceSocket.Host` 既有容量方案按 6～8 万连接设计、默认配额 85,000；实际节点容量和故障后余量需通过混合负载验证，多 Gateway 共同满足系统目标。
 - Gateway 数量和 Silo 数量独立扩展；Gateway 保存真实 Socket，Silo 不保存连接对象。
-- 本阶段完成 Orleans 闭环、SQL Server 持久化，以及 Gateway 的 Q/GDW 376.1 `AFN=00H/F3` 协议应答关联；Kafka 和业务查询库不在本阶段范围内。
+- 已实现 Orleans 闭环、SQL Server 持久化，以及 Gateway 的 Q/GDW 376.1 `AFN=00H/F3` 协议应答关联。上报/结果转发、查询模型、模式化接入 API、跨设备批次和看板属于 [新版改造计划](production-readiness-plan.md) 的待实施内容。
 
 ```text
 业务入口 / 未来 Kafka
@@ -121,7 +122,7 @@ Q/GDW 376.1 可靠下发还增加协议级幂等：Gateway 为新 MsgId 分配 P
 
 ## CommandGrain 历史清理
 
-命令执行生命周期与业务历史查询分开保存。Kafka 和业务查询库负责长期历史；Orleans 的 `OrleansDeviceCommandState` 只保留调度闭环需要的短期状态：
+命令执行生命周期与历史查询按不同访问需求设计。当前尚未接入独立命令历史/结果查询模型和业务投递适配器；新版计划要求为通讯看板与业务结果查询补齐这些能力，不把 Kafka 本身当作可检索的历史库。Orleans 的 `OrleansDeviceCommandState` 使用以下短期状态保留机制：
 
 1. `Confirmed`、`CompletedWithoutConfirmation`、`Expired`、`Failed`、`Cancelled` 首次进入时记录 `TerminalAt`。
 2. 终态满 `PayloadRetentionDays=7` 天后，由对应 CommandGrain 清空 Payload，保留 PayloadHash、状态、失败说明、尝试次数和时间。
@@ -168,8 +169,10 @@ Orleans Membership 和 Reminder 使用官方 ADO.NET 表，不属于应用 Grain
 ## 当前未接入部分
 
 - 当前 Gateway 应答闭环覆盖 Q/GDW 376.1 `AFN=00H/F3` 逐数据单元确认；需要返回业务数据的查询类命令，应为对应 AFN/Fn 继续增加专用响应 Handler，不能复用 F3 伪造业务数据响应。
-- Gateway 仍会把设备活动逐条调用到 Orleans；本阶段只合并 SQL 写入。百万在线设备的最终吞吐还需要后续在 Gateway 合并或批量发布活动事件。
-- Kafka、业务命令历史查询库、跨设备批量拆分和 Control API 不属于本次 Orleans 改造。
+- Gateway 仍会把设备活动逐条调用到 Orleans；已有实现只合并 SQL 写入。八万/十万混合负载前需要补分区消费、活动合并、路由对账和生产集群发现。
+- 现有 NotBefore 是立即/延后/定时的底层基础，并非完整的三模式公共接口。当前批量入口只覆盖同设备；跨设备 BatchId/子项身份/恢复游标、逐项结果和批次取消待实现。
+- 业务上报/结果转发、独立命令历史与查询 API、通讯监控看板和完整 OTel 均已纳入新版计划的首期目标，当前尚未交付。
+- SQL 队首查询跳过已过期 Queued 项，仍需独立过期扫描确保无人查询时自动终态；CommandGrain 的确认时间校验、Gateway RPC deadline、去重辅助队列和回包自主重投也需修补。
 
 ## 验收方式
 
