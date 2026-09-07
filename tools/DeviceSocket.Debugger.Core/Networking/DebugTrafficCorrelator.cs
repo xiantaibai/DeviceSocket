@@ -99,6 +99,9 @@ public sealed class DebugTrafficCorrelator
     /// <returns>匹配请求的集合索引；未找到时返回 -1。</returns>
     private int FindMatchedRequest(DebugTrafficMetadata received)
     {
+        if (IsGatherLegacyLinkConfirmation(received))
+            return FindLatestPendingRequest(received);
+
         for (var index = _pendingRequests.Count - 1; index >= 0; index--)
         {
             var sent = _pendingRequests[index].Metadata;
@@ -117,6 +120,41 @@ public sealed class DebugTrafficCorrelator
 
             if (string.Equals(sent.InstructionKey, received.InstructionKey, StringComparison.OrdinalIgnoreCase))
                 return index;
+        }
+
+        return -1;
+    }
+
+    /// <summary>
+    /// 判断接收帧是否为 Gather 老 TCP 服务返回的 AFN=00H/F1 通用链路确认。
+    /// </summary>
+    /// <param name="received">接收帧的结构化协议字段。</param>
+    /// <returns>属于老服务通用链路确认时返回 true。</returns>
+    private static bool IsGatherLegacyLinkConfirmation(DebugTrafficMetadata received) =>
+        received.Protocol == DeviceProtocol.QGdw3761 &&
+        received.ApplicationFunctionCode == 0x00 &&
+        received.Functions.Count == 1 &&
+        received.Functions[0] == 1;
+
+    /// <summary>
+    /// 为不回显请求序号的老服务 AFN=00H/F1 确认查找同设备最近一条请求。
+    /// </summary>
+    /// <param name="received">已经确认是 AFN=00H/F1 的接收帧元数据。</param>
+    /// <returns>同设备最近请求的集合索引；未找到时返回 -1。</returns>
+    private int FindLatestPendingRequest(DebugTrafficMetadata received)
+    {
+        for (var index = _pendingRequests.Count - 1; index >= 0; index--)
+        {
+            var sent = _pendingRequests[index].Metadata;
+            if (sent.Protocol != received.Protocol ||
+                !string.Equals(sent.DeviceId, received.DeviceId, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            // Gather 老服务会把 AFN=02H/F1、F2、F3 都回复成 AFN=00H/F1，且 RSEQ 可能固定为 0。
+            // 此时不能按固定 RSEQ 命中更早的请求，只能由同设备最近一次发送的类别决定确认帧类别。
+            return index;
         }
 
         return -1;
