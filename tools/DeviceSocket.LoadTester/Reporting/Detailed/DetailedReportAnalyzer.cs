@@ -181,9 +181,13 @@ internal static class DetailedReportAnalyzer
         var expectedServerRestart = HasExpectedServerRestart(reports);
         var warnings = inputs.Warnings.ToList();
         if (inputs.ServerMetricsPath is null)
-            warnings.Add("未找到 TcpCenter 服务指标文件，业务在线、Pipeline 和服务进程稳定性无法验收。");
+        {
+            warnings.Add(reports[0].Options.Target.CompatibilityProfile == ServerCompatibilityProfile.GatherV4
+                ? "未导入 GatherV4 服务端指标；当前自动解析器只支持旧 Gather.TcpCenter 自定义 JSONL，V4 OTLP 指标需由测试 Collector 按同一 RunId 独立归档。"
+                : "未找到通讯服务指标文件，业务在线、Pipeline 和服务进程稳定性无法验收。");
+        }
         else if (serverWindow.Count == 0)
-            warnings.Add("TcpCenter 指标时间与 LoadTester 测试时间不重叠，请检查 --server-time-zone 参数和两台机器时钟。");
+            warnings.Add("服务端指标时间与 LoadTester 测试时间不重叠，请检查 --server-time-zone 参数和两台机器时钟。");
         if (cooldownStartedAt.HasValue)
         {
             warnings.Add(
@@ -291,9 +295,12 @@ internal static class DetailedReportAnalyzer
         var scenarioDescription = FirstNonBlank(options.Scenario.Description) ??
             $"{targetDeviceCount:N0} 台 {report.Options.Target.Protocol} 虚拟设备，运行角色 {report.Options.Role}，" +
             $"TCP 阶段 {report.Options.Scenario.Phases.Count:N0} 个，HTTP 阶段 {commandPhaseCount:N0} 个。";
-        var defaultServiceName = report.Options.Target.CompatibilityProfile == ServerCompatibilityProfile.GatherTcpCenter
-            ? "Gather.TcpCenter"
-            : "DeviceSocket Gateway";
+        var defaultServiceName = report.Options.Target.CompatibilityProfile switch
+        {
+            ServerCompatibilityProfile.GatherTcpCenter => "Gather.TcpCenter",
+            ServerCompatibilityProfile.GatherV4 => "GatherV4 Communication",
+            _ => "DeviceSocket Gateway"
+        };
         return new DetailedReportBackground
         {
             Source = string.IsNullOrWhiteSpace(backgroundPath) ? "自动推断" : Path.GetFullPath(backgroundPath),
@@ -933,7 +940,9 @@ internal static class DetailedReportAnalyzer
             MaximumWorkingSetBytes = resources.Max(item => item.WorkingSetBytes),
             MaximumManagedHeapBytes = resources.Max(item => item.ManagedHeapBytes),
             MaximumThreadPoolThreads = resources.Max(item => item.ThreadPoolThreads),
-            MaximumPendingWorkItems = resources.Max(item => item.PendingWorkItems)
+            MaximumPendingWorkItems = resources.Max(item => item.PendingWorkItems),
+            MaximumProcessThreadCount = resources.Max(item => item.ProcessThreadCount),
+            MaximumProcessHandleCount = resources.Max(item => item.ProcessHandleCount)
         };
     }
 
@@ -966,21 +975,21 @@ internal static class DetailedReportAnalyzer
         {
             checks.AddRange(
             [
-                CreateUnavailableCheck("TcpCenter 物理连接容量"),
-                CreateUnavailableCheck("TcpCenter 业务在线容量"),
+                CreateUnavailableCheck("通讯服务物理连接容量"),
+                CreateUnavailableCheck("通讯服务业务在线容量"),
                 CreateUnavailableCheck("业务在线追平时间"),
                 CreateUnavailableCheck("业务管线最大排队年龄"),
                 CreateUnavailableCheck("ACK 最大耗时"),
                 CreateUnavailableCheck("ACK 发送完成最大耗时"),
                 CreateUnavailableCheck("Pipeline 失败与拒绝"),
-                CreateUnavailableCheck("TcpCenter 进程稳定性")
+                CreateUnavailableCheck("通讯服务进程稳定性")
             ]);
             return checks;
         }
 
         var expectedServerRestart = HasExpectedServerRestart(reports);
-        checks.Add(CreateCheck("TcpCenter 物理连接容量", server.MaximumSocketConnections >= target, $"{server.MaximumSocketConnections:N0}", $">= {target:N0}", "来源：SocketConnections 峰值。"));
-        checks.Add(CreateCheck("TcpCenter 业务在线容量", server.MaximumBusinessOnlineDevices >= target, $"{server.MaximumBusinessOnlineDevices:N0}", $">= {target:N0}", "来源：BusinessOnlineDevices 峰值。"));
+        checks.Add(CreateCheck("通讯服务物理连接容量", server.MaximumSocketConnections >= target, $"{server.MaximumSocketConnections:N0}", $">= {target:N0}", "来源：SocketConnections 峰值。"));
+        checks.Add(CreateCheck("通讯服务业务在线容量", server.MaximumBusinessOnlineDevices >= target, $"{server.MaximumBusinessOnlineDevices:N0}", $">= {target:N0}", "来源：BusinessOnlineDevices 峰值。"));
         checks.Add(server.BusinessCatchupSeconds.HasValue
             ? CreateCheck("业务在线追平时间", server.BusinessCatchupSeconds <= options.MaximumBusinessCatchupSeconds, $"{server.BusinessCatchupSeconds:F1} 秒", $"<= {options.MaximumBusinessCatchupSeconds} 秒", "从 SocketConnections 首次达到目标到 BusinessOnlineDevices 首次达到目标。")
             : new DetailedAcceptanceCheck { Name = "业务在线追平时间", Status = DetailedAcceptanceStatus.Failed, Actual = "未追平", Expected = $"<= {options.MaximumBusinessCatchupSeconds} 秒", Evidence = "物理连接或业务在线未达到目标。" });
@@ -989,7 +998,7 @@ internal static class DetailedReportAnalyzer
         checks.Add(CreateCheck("ACK 发送完成最大耗时", server.MaximumAckSendCompletedElapsedMilliseconds <= options.MaximumAckMilliseconds, $"{server.MaximumAckSendCompletedElapsedMilliseconds:N0} ms", $"<= {options.MaximumAckMilliseconds:N0} ms", "来源：AckSendCompletedMaxElapsedMs；用于识别 ACK 已排队但 Socket Send 完成回调迟到。"));
         checks.Add(CreateCheck("Pipeline 失败与拒绝", server.PipelineFailed == 0 && server.PipelineRejected == 0 && server.AckedButRejected == 0, $"处理失败 {server.PipelineFailed:N0} / 容量拒绝 {server.PipelineRejected:N0} / ACK后拒绝 {server.AckedButRejected:N0}", "全部为 0", "使用测试窗口内累计计数增量。"));
         checks.Add(CreateCheck(
-            "TcpCenter 进程稳定性",
+            "通讯服务进程稳定性",
             expectedServerRestart ? server.ProcessRestartCount <= 1 : server.ProcessRestartCount == 0,
             $"重启 {server.ProcessRestartCount:N0} 次",
             expectedServerRestart ? "<= 1 次（计划内）" : "0 次",
@@ -1032,7 +1041,7 @@ internal static class DetailedReportAnalyzer
         Name = name,
         Status = DetailedAcceptanceStatus.Unavailable,
         Actual = "不可评估",
-        Expected = "需要 TcpCenter 指标",
+        Expected = "需要服务端指标",
         Evidence = "未提供与测试时间重叠的服务端指标。"
     };
 
@@ -1066,7 +1075,7 @@ internal static class DetailedReportAnalyzer
                 Evidence = $"SOCKET_AddressAlreadyInUse 累计 {addressInUse:N0} 次，占全部连接尝试的 {Rate(addressInUse, metrics.ConnectionAttempts):P2}。",
                 Impact = occurredAfterPlannedRestart
                     ? "这是计划重启后集中重连的客户端侧放大因素，不是触发首次掉线的原因；它会延长恢复并制造后续重试。"
-                    : "连接阶段的失败主要受负载机源端口/TIME_WAIT 约束，不能直接归因于 TcpCenter 拒绝连接。",
+                    : "连接阶段的失败主要受负载机源端口/TIME_WAIT 约束，不能直接归因于通讯服务拒绝连接。",
                 Recommendation = "对本地资源错误增加全局退避，并使用多个负载机或多个源 IP 复测重连风暴。",
                 Confidence = DiagnosticConfidence.Fact
             });
@@ -1152,7 +1161,7 @@ internal static class DetailedReportAnalyzer
                 Title = "API 估算入队与设备原始下行存在明显落差",
                 Evidence = $"API 估算入队 {estimatedCommands:N0}，关联到原始下行 {rawCommands:N0}，交付率 {Rate(rawCommands, estimatedCommands):P2}。",
                 Impact = "异步 API 成功可能只表示成功入队，不能代表命令已经到达设备。",
-                Recommendation = "结合 phase-targets.csv 定位未观测设备，并核对 TcpCenter 出队、Socket 发送和会话查找指标。",
+                Recommendation = "结合 phase-targets.csv 定位未观测设备，并核对通讯服务出队、Socket 发送和会话查找指标。",
                 Confidence = DiagnosticConfidence.HighProbability
             });
         }
@@ -1201,7 +1210,7 @@ internal static class DetailedReportAnalyzer
                 findings.Add(new DiagnosticFinding
                 {
                     Severity = DiagnosticSeverity.P1,
-                    Title = "TcpCenter 接收业务管线出现长时间积压",
+                    Title = "通讯服务接收业务管线出现长时间积压",
                     Evidence = $"最大队列深度 {server.MaximumQueueDepth:N0}，最大队列年龄 {server.MaximumQueueAgeMilliseconds / 1000d:F1} 秒，Worker 数 {server.WorkerCount:N0}。",
                     Impact = "登录、心跳和命令应答慢业务会延迟执行，旧连接工作项可能在会话替换后才被处理。",
                     Recommendation = "先减少登录期间重复心跳和同步 I/O，再对 16/24/32 Worker 做阶梯测试。",
@@ -1266,7 +1275,7 @@ internal static class DetailedReportAnalyzer
                 findings.Add(new DiagnosticFinding
                 {
                     Severity = DiagnosticSeverity.P0,
-                    Title = "TcpCenter 业务管线发生失败或拒绝",
+                    Title = "通讯服务业务管线发生失败或拒绝",
                     Evidence = $"PipelineFailed={server.PipelineFailed:N0}，PipelineRejected={server.PipelineRejected:N0}，AckedButRejected={server.AckedButRejected:N0}。",
                     Impact = "已接收的登录、心跳或业务工作可能没有完成慢业务处理。",
                     Recommendation = "检查有界容量、异常日志和过载降级逻辑，禁止仅提高队列容量掩盖消费不足。",
@@ -1279,7 +1288,7 @@ internal static class DetailedReportAnalyzer
                 findings.Add(new DiagnosticFinding
                 {
                     Severity = DiagnosticSeverity.P0,
-                    Title = expectedServerRestart ? "TcpCenter 发生计划外额外重启" : "测试期间 TcpCenter 进程发生重启",
+                    Title = expectedServerRestart ? "通讯服务发生计划外额外重启" : "测试期间通讯服务进程发生重启",
                     Evidence = $"服务指标 ProcessId 发生 {server.ProcessRestartCount:N0} 次变化。",
                     Impact = expectedServerRestart ? "进程变化次数超过场景允许的一次人工重启。" : "本轮不能认定服务持续稳定运行。",
                     Recommendation = "结合 Windows 事件、服务日志和 dump 确认退出原因。",

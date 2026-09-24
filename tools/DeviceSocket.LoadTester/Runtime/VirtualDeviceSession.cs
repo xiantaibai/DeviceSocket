@@ -369,7 +369,7 @@ internal sealed class VirtualDeviceSession(
     }
 
     /// <summary>
-    /// 执行协议适配器生成的下行响应计划，并把 Gather 读表命令、丢弃、延迟和重复应答单独计量。
+    /// 执行协议适配器生成的下行响应计划，并把旧 Gather 读表或 GatherV4 命令、丢弃、延迟和重复应答单独计量。
     /// </summary>
     /// <param name="stream">当前设备连接的网络流。</param>
     /// <param name="response">服务端下发且已完成协议解析的帧。</param>
@@ -391,6 +391,7 @@ internal sealed class VirtualDeviceSession(
         if (plan is null)
             return;
         var isGatherReading = plan.Kind == DownstreamResponseKind.GatherReading;
+        var isTrackedCommand = plan.Kind is DownstreamResponseKind.GatherReading or DownstreamResponseKind.GatherV4Command;
         if (isGatherReading)
             metrics.GatherReadingCommandReceived();
         if (plan.Payload is null || plan.SendCount <= 0)
@@ -412,14 +413,14 @@ internal sealed class VirtualDeviceSession(
                 continue;
             metrics.DownstreamResponseSent(bytesWritten);
             if (isGatherReading)
-            {
                 metrics.GatherReadingResponseSent(plan.IsBusinessFailure, duplicate: index > 0);
-                if (!responded)
-                {
+
+            if (isTrackedCommand && !responded)
+            {
+                if (isGatherReading)
                     metrics.GatherReadingCommandResponded(stopwatch.Elapsed);
-                    commandTraceRegistry?.RecordResponse(traceMatch?.RequestId, DateTimeOffset.UtcNow);
-                    responded = true;
-                }
+                commandTraceRegistry?.RecordResponse(traceMatch?.RequestId, DateTimeOffset.UtcNow);
+                responded = true;
             }
         }
 

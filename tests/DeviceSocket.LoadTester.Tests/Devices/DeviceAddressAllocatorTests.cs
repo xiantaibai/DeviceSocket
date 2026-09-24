@@ -312,6 +312,8 @@ public sealed class DeviceAddressAllocatorTests
         options.Devices.Count = 80_000;
         options.Devices.AdministrativeDivision = "3301";
         options.Devices.SpanAdministrativeDivisions = true;
+        // 本测试明确验证超过默认保护阈值的大地址空间，需显式声明高负载意图。
+        options.Safety.AllowHighLoad = true;
 
         var devices = DeviceAddressAllocator.Allocate(options);
 

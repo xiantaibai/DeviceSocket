@@ -93,7 +93,8 @@ public sealed class AcceptanceOptions
     public double? MinimumApiTargetCoverageRate { get; set; }
 
     /// <summary>
-    /// 获取或设置 <c>acceptance.minimumGatherReadingResponseRate</c>；取值 0～1，默认空表示不验收，按模拟终端已应答读表命令数除以收到的读表命令数计算。
+    /// 获取或设置 <c>acceptance.minimumGatherReadingResponseRate</c>；取值 0～1，默认空表示不验收，
+    /// 仅适用于 GatherTcpCenter，按模拟终端已应答读表命令数除以收到的读表命令数计算；GatherV4 必须保持为空并使用通用命令追踪门槛。
     /// </summary>
     public double? MinimumGatherReadingResponseRate { get; set; }
 

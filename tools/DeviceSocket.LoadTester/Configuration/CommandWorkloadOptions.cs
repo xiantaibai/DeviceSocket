@@ -1,7 +1,7 @@
 namespace DeviceSocket.LoadTester.Configuration;
 
 /// <summary>
-/// 配置 <c>commandWorkload</c> 下调用 Gather 老业务服务读表 API 的独立 HTTP 负载。
+/// 配置 <c>commandWorkload</c> 下调用 Gather.TcpCenter 或 GatherV4 业务服务读表 API 的独立 HTTP 负载。
 /// </summary>
 public sealed class CommandWorkloadOptions
 {
@@ -66,6 +66,12 @@ public sealed class CommandWorkloadOptions
     /// 获取或设置 <c>commandWorkload.readingCode</c>；默认 0，透传给老读表接口的 readingCode。
     /// </summary>
     public int ReadingCode { get; set; }
+
+    /// <summary>
+    /// 获取或设置 <c>commandWorkload.gatherV4</c>；仅当 <c>target.compatibilityProfile=gatherV4</c> 时生效，
+    /// 定义 IssueCmd 请求中的采集服务编码、表类型、采集项和数据时间。
+    /// </summary>
+    public GatherV4CommandOptions GatherV4 { get; set; } = new();
 
     /// <summary>
     /// 获取或设置 <c>commandWorkload.requestTimeoutSeconds</c>；单位秒，默认 70，应大于老 API 同步等待设备结果的 60 秒上限。

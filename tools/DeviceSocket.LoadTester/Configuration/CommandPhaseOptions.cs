@@ -32,7 +32,8 @@ public sealed class CommandPhaseOptions
     public int MaxConcurrency { get; set; } = 10;
 
     /// <summary>
-    /// 获取或设置 <c>commandWorkload.phases[].showResult</c>；默认 false，true 会让老 API 同步等待设备业务结果并显著增加服务端订阅和请求线程压力。
+    /// 获取或设置 <c>commandWorkload.phases[].showResult</c>；默认 false；旧 GatherTcpCenter 中 true 表示同步等待设备结果，
+    /// GatherV4 的 IssueCmd 固定为同步接口，因此该兼容配置下必须设置为 true。同步等待会显著增加服务端订阅和 HTTP 在途请求压力。
     /// </summary>
     public bool ShowResult { get; set; }
 

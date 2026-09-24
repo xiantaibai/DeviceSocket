@@ -393,6 +393,7 @@ internal static class DetailedReportHtmlWriter
                 $"{analysis.CommandPhases.Sum(item => item.DuplicateDownstreamFrames):N0}");
         }
         AppendTableRow(builder, "负载机 CPU / 工作集峰值", $"{analysis.LoadGeneratorResources.MaximumCpuPercent:F2}% / {Bytes(analysis.LoadGeneratorResources.MaximumWorkingSetBytes)}");
+        AppendTableRow(builder, "负载机进程线程 / 句柄峰值", $"{analysis.LoadGeneratorResources.MaximumProcessThreadCount:N0} / {analysis.LoadGeneratorResources.MaximumProcessHandleCount:N0}");
         if (analysis.Server is { } server)
         {
             AppendTableRow(builder, "物理 / 绑定 / 业务在线峰值", $"{server.MaximumSocketConnections:N0} / {server.MaximumBoundDeviceConnections:N0} / {server.MaximumBusinessOnlineDevices:N0}");

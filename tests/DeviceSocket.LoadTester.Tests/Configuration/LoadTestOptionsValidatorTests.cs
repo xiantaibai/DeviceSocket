@@ -176,7 +176,10 @@ public sealed class LoadTestOptionsValidatorTests
             "gather-tcpcenter-http-reading-50000.json",
             "gather-tcpcenter-reconnect-storm-10000.json",
             "gather-tcpcenter-reconnect-storm-50000.json",
-            "gather-tcpcenter-soak-10000.json"
+            "gather-tcpcenter-soak-10000.json",
+            "gatherv4-connections-10000.json",
+            "gatherv4-http-reading-10000.json",
+            "gatherv4-reconnect-storm-10000.json"
         };
 
         Assert.Equal(
@@ -575,5 +578,140 @@ public sealed class LoadTestOptionsValidatorTests
 
         Assert.Contains(missingWindowErrors, item => item.Contains("manualAction", StringComparison.Ordinal));
         Assert.Empty(validErrors);
+    }
+
+    /// <summary>
+    /// 验证 GatherV4 不允许误用旧服务入口、异步成功口径和旧版读表累计验收指标。
+    /// </summary>
+    [Fact]
+    public void GatherV4CommandWorkload_RejectsLegacySemantics()
+    {
+        var options = TestOptionsFactory.Create();
+        options.Role = LoadTestRole.Combined;
+        options.Target.CompatibilityProfile = ServerCompatibilityProfile.GatherV4;
+        options.CommandWorkload = new CommandWorkloadOptions
+        {
+            Enabled = true,
+            BaseUrl = "http://127.0.0.1:5000",
+            EndpointPath = "/api/ammeter/reading",
+            RequestTimeoutSeconds = 60,
+            MeterIdStart = 1_000,
+            GatherV4 = new GatherV4CommandOptions
+            {
+                GatherCode = "v4-test",
+                ItemCodes = ["10_1"]
+            },
+            Phases =
+            [
+                new CommandPhaseOptions
+                {
+                    Name = "wrong-async",
+                    TargetDeviceCount = 1,
+                    RequestsPerDevice = 1,
+                    RequestsPerSecond = 1,
+                    MaxConcurrency = 1,
+                    ShowResult = false
+                }
+            ]
+        };
+        options.Acceptance.MinimumGatherReadingResponseRate = 0.99;
+
+        var errors = LoadTestOptionsValidator.Validate(options);
+
+        Assert.Contains(errors, item => item.Contains("/Handmould/IssueCmd", StringComparison.Ordinal));
+        Assert.Contains(errors, item => item.Contains("大于 60 秒", StringComparison.Ordinal));
+        Assert.Contains(errors, item => item.Contains("所有阶段必须设置为 true", StringComparison.Ordinal));
+        Assert.Contains(errors, item => item.Contains("旧 GatherTcpCenter 专用", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// 验证超过容量阈值或启用断连故障时，场景必须显式声明相应安全授权。
+    /// </summary>
+    [Fact]
+    public void HighLoadAndFaultInjection_RequireExplicitSafetyFlags()
+    {
+        var options = TestOptionsFactory.Create();
+        options.Devices.Count = 10_001;
+        options.Devices.SpanAdministrativeDivisions = true;
+        options.Scenario.Phases =
+        [
+            new ScenarioPhaseOptions
+            {
+                Name = "disconnect",
+                DurationSeconds = 1,
+                Faults = new FaultInjectionOptions { DisconnectPercentage = 10 }
+            }
+        ];
+
+        var errors = LoadTestOptionsValidator.Validate(options);
+
+        Assert.Contains(errors, item => item.Contains("safety.allowHighLoad", StringComparison.Ordinal));
+        Assert.Contains(errors, item => item.Contains("safety.allowFaultInjection", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// 验证 combined 场景启用目标白名单后，TCP 服务和 HTTP 指令 API 的主机都必须显式获准。
+    /// </summary>
+    [Fact]
+    public void AllowedTargets_RequiresBothTcpAndCommandApiHosts()
+    {
+        var options = TestOptionsFactory.Create();
+        options.Role = LoadTestRole.Combined;
+        options.Target.CompatibilityProfile = ServerCompatibilityProfile.GatherTcpCenter;
+        options.Target.Host = "192.168.1.10";
+        options.CommandWorkload = new CommandWorkloadOptions
+        {
+            Enabled = true,
+            BaseUrl = "http://192.168.1.20:8080",
+            MeterIdStart = 1_000,
+            Phases =
+            [
+                new CommandPhaseOptions
+                {
+                    Name = "whitelist",
+                    TargetDeviceCount = 1,
+                    RequestsPerDevice = 1,
+                    RequestsPerSecond = 1,
+                    MaxConcurrency = 1
+                }
+            ]
+        };
+        options.Safety.AllowedTargets = ["192.168.1.10"];
+
+        var missingApiHostErrors = LoadTestOptionsValidator.Validate(options);
+        options.Safety.AllowedTargets.Add("192.168.1.20");
+        var allowedErrors = LoadTestOptionsValidator.Validate(options);
+
+        Assert.Contains(
+            missingApiHostErrors,
+            item => item.Contains("commandWorkload.baseUrl", StringComparison.Ordinal));
+        Assert.Empty(allowedErrors);
+    }
+
+    /// <summary>
+    /// 验证 TCP 阶段在线屏障拒绝零在线率、负稳定时间和零等待上限，避免运行后形成永久或无意义等待。
+    /// </summary>
+    [Fact]
+    public void ScenarioOnlineBarrier_InvalidBoundsAreRejected()
+    {
+        var options = TestOptionsFactory.Create();
+        options.Scenario.Phases =
+        [
+            new ScenarioPhaseOptions
+            {
+                Name = "invalid-barrier",
+                DurationSeconds = 1,
+                WaitForOnline = true,
+                MinimumOnlineRate = 0,
+                OnlineStableSeconds = -1,
+                OnlineWaitTimeoutSeconds = 0
+            }
+        ];
+
+        var errors = LoadTestOptionsValidator.Validate(options);
+
+        Assert.Contains(errors, item => item.Contains("minimumOnlineRate", StringComparison.Ordinal));
+        Assert.Contains(errors, item => item.Contains("onlineStableSeconds", StringComparison.Ordinal));
+        Assert.Contains(errors, item => item.Contains("onlineWaitTimeoutSeconds", StringComparison.Ordinal));
     }
 }

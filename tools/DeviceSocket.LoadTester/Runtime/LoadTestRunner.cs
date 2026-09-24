@@ -77,6 +77,7 @@ internal sealed class LoadTestRunner(
                     $"[阶段开始] {phase.Name} ({phase.Kind})，持续 {phase.DurationSeconds} 秒，" +
                     $"本地目标设备 {desired:N0}/{devices.Count:N0}");
                 await ResizeAsync(desired);
+                await WaitForOnlineBarrierAsync(phase, desired, cancellationToken);
                 var manualAction = await RunManualActionAsync(phase, cancellationToken);
                 using var phaseCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 var disconnectTask = RunDisconnectWaveAsync(phase.Faults, phaseCancellation.Token);
@@ -246,6 +247,65 @@ internal sealed class LoadTestRunner(
     {
         var globalTarget = (int)Math.Ceiling(options.Devices.Count * percentage / 100d);
         return devices.Count(device => device.GlobalOrdinal < globalTarget);
+    }
+
+    /// <summary>
+    /// 在阶段扩容后等待当前分片协议在线数达到比例门槛并连续稳定，防止仅按固定时长盲目进入下一阶段。
+    /// </summary>
+    /// <param name="phase">当前阶段的在线屏障配置。</param>
+    /// <param name="desired">当前分片目标设备数。</param>
+    /// <param name="cancellationToken">取消整轮测试的令牌。</param>
+    /// <returns>未启用屏障或在线门槛稳定满足时完成的任务。</returns>
+    /// <exception cref="TimeoutException">等待超过配置上限仍未连续满足在线门槛。</exception>
+    private async Task WaitForOnlineBarrierAsync(
+        ScenarioPhaseOptions phase,
+        int desired,
+        CancellationToken cancellationToken)
+    {
+        if (!phase.WaitForOnline || desired == 0)
+            return;
+
+        var required = Math.Max(1, (int)Math.Ceiling(desired * phase.MinimumOnlineRate));
+        var stableDuration = TimeSpan.FromSeconds(phase.OnlineStableSeconds);
+        DateTimeOffset? stableSince = null;
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(phase.OnlineWaitTimeoutSeconds));
+        Console.WriteLine(
+            $"[在线屏障] {phase.Name} 等待本地协议在线达到 {required:N0}/{desired:N0}，" +
+            $"连续稳定 {phase.OnlineStableSeconds:N0} 秒，最长等待 {phase.OnlineWaitTimeoutSeconds:N0} 秒。");
+
+        try
+        {
+            while (true)
+            {
+                timeout.Token.ThrowIfCancellationRequested();
+                var online = onlineRegistry.Count;
+                var now = DateTimeOffset.UtcNow;
+                if (online >= required)
+                {
+                    stableSince ??= now;
+                    if (now - stableSince.Value >= stableDuration)
+                    {
+                        Console.WriteLine($"[在线屏障通过] {phase.Name}，当前在线 {online:N0}/{desired:N0}。");
+                        return;
+                    }
+                }
+                else
+                {
+                    // 稳定窗口内任何掉线都会重新计时，避免刚触碰门槛就把波动状态当成稳定在线。
+                    stableSince = null;
+                }
+
+                await Task.Delay(TimeSpan.FromSeconds(1), timeout.Token);
+            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"阶段 {phase.Name} 在线屏障超过 {phase.OnlineWaitTimeoutSeconds} 秒；" +
+                $"当前在线 {onlineRegistry.Count:N0}，要求 {required:N0}/{desired:N0} 连续稳定 " +
+                $"{phase.OnlineStableSeconds:N0} 秒。");
+        }
     }
 
     /// <summary>

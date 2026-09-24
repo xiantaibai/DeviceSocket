@@ -1,0 +1,248 @@
+{
+  // GatherV4 一万台设备在线并通过 Handmould/IssueCmd 做同步端到端命令闭环。
+  "role": "combined",
+  "target": {
+    "host": "127.0.0.1",
+    "port": 8890,
+    "protocol": "qGdw3761",
+    "compatibilityProfile": "gatherV4"
+  },
+  "devices": {
+    "count": 10000,
+    "generationMode": "csv",
+    // CSV 中的 meterId 和九位 deviceId 必须在 GatherV4 测试数据库中真实存在且关系正确。
+    "deviceMappingFile": "gather-device-10000.csv"
+  },
+  "connection": {
+    "startMode": "ramp",
+    "connectionsPerSecond": 300,
+    "maxConcurrentConnecting": 500,
+    "connectTimeoutSeconds": 5,
+    "loginTimeoutSeconds": 10,
+    "writeTimeoutSeconds": 5,
+    "noDelay": true
+  },
+  "heartbeat": {
+    "enabled": true,
+    "intervalSeconds": 60,
+    "jitterSeconds": 10,
+    "responseTimeoutSeconds": 10
+  },
+  "workload": {
+    "reportsEnabled": false,
+    "reportIntervalSeconds": 300,
+    "jitterSeconds": 30,
+    "gatherV4Response": {
+      "enabled": true,
+      "mode": "normal",
+      "affectedDevicePercentage": 100,
+      "delayMilliseconds": 1000
+    }
+  },
+  "commandWorkload": {
+    "targetDeviceSource": "onlineRegistry",
+    "enabled": true,
+    // 运行前替换为与 TCP 服务共用数据库、Redis 和 GatherCode 的 IssueWebApi 测试地址。
+    "baseUrl": "http://127.0.0.1:5000",
+    "endpointPath": "/Handmould/IssueCmd",
+    "authorizationHeaderName": "",
+    "authorizationKeyEnvironmentVariable": "",
+    "deviceMappingFile": null,
+    "meterIdStart": null,
+    "requestTimeoutSeconds": 90,
+    "minimumOnlineCount": 10000,
+    "requiredOnlineRate": 0.98,
+    "onlineStableSeconds": 60,
+    "onlineWaitTimeoutSeconds": 1200,
+    "startDelaySeconds": 0,
+    "gatherV4": {
+      // 必须与 Communication、DirectiveService 和 IssueWebApi 的当前测试环境配置完全一致。
+      "gatherCode": "V4-Gather-8890",
+      "meterType": 1,
+      // 运行前改为测试库中该表类型真实支持、且能生成376.1下行的采集项。
+      "itemCodes": ["10_1"],
+      "density": 0,
+      "point": 1,
+      // null 表示按每次请求时间动态生成，避免长时间压测一直请求过期时刻。
+      "dataTime": null,
+      "dataTimeFormat": "yyyy-MM-dd HH:mm:ss"
+    },
+    "phases": [
+      {
+        // 先验证 API、Redis、通讯服务、A3/PSEQ 应答和结果返回闭环；失败立即结束业务压测。
+        "name": "functional-sync-20",
+        "targetDeviceCount": 20,
+        "requestsPerDevice": 1,
+        "requestsPerSecond": 2,
+        "maxConcurrency": 10,
+        "showResult": true,
+        "pauseAfterSeconds": 15,
+        "onlineGateFailureAction": "abortRun",
+        "minimumApiSuccessRate": 0.95,
+        "maximumP95Milliseconds": 90000,
+        "drainEnabled": true,
+        "minimumRawDeliveryRate": 0.95,
+        "minimumDeliveryRate": 0.95,
+        "minimumResponseRate": 0.99,
+        "drainTimeoutSeconds": 180,
+        "quietSeconds": 10,
+        "drainFailureAction": "abortRun",
+        "circuitBreakerEnabled": true,
+        "maximumDurationSeconds": 300,
+        "maximumConsecutiveFailures": 10,
+        "maximumTimeoutRate": 0.1,
+        "circuitBreakerMinimumRequests": 10,
+        "circuitBreakerAction": "abortRun"
+      },
+      {
+        // IssueCmd 是同步结果接口，RPS 和并发必须逐级增加，不能套用旧服务的异步受理口径。
+        "name": "steady-sync-1000",
+        "targetDeviceCount": 1000,
+        "requestsPerDevice": 1,
+        "requestsPerSecond": 10,
+        "maxConcurrency": 100,
+        "showResult": true,
+        "pauseAfterSeconds": 30,
+        "onlineGateFailureAction": "abortRun",
+        "minimumApiSuccessRate": 0.95,
+        "maximumP95Milliseconds": 90000,
+        "drainEnabled": true,
+        "minimumRawDeliveryRate": 0.95,
+        "minimumDeliveryRate": 0.95,
+        "minimumResponseRate": 0.99,
+        "drainTimeoutSeconds": 900,
+        "quietSeconds": 20,
+        "drainFailureAction": "abortRun",
+        "circuitBreakerEnabled": true,
+        "maximumDurationSeconds": 900,
+        "maximumConsecutiveFailures": 50,
+        "maximumTimeoutRate": 0.1,
+        "circuitBreakerMinimumRequests": 50,
+        "circuitBreakerAction": "abortRun"
+      },
+      {
+        // 同一批在线设备连续两条命令，用于发现单设备在途窗口未释放造成的队头阻塞。
+        "name": "same-device-sync-1000x2",
+        "targetDeviceCount": 1000,
+        "requestsPerDevice": 2,
+        "requestsPerSecond": 10,
+        "maxConcurrency": 100,
+        "showResult": true,
+        "pauseAfterSeconds": 0,
+        "onlineGateFailureAction": "abortRun",
+        "minimumApiSuccessRate": 0.95,
+        "maximumP95Milliseconds": 90000,
+        "drainEnabled": true,
+        "minimumRawDeliveryRate": 0.95,
+        "minimumDeliveryRate": 0.95,
+        "minimumResponseRate": 0.99,
+        "drainTimeoutSeconds": 1200,
+        "quietSeconds": 20,
+        "drainFailureAction": "abortRun",
+        "circuitBreakerEnabled": true,
+        "maximumDurationSeconds": 1200,
+        "maximumConsecutiveFailures": 50,
+        "maximumTimeoutRate": 0.1,
+        "circuitBreakerMinimumRequests": 50,
+        "circuitBreakerAction": "abortRun"
+      }
+    ]
+  },
+  "reconnect": {
+    "mode": "exponentialJitter",
+    "initialDelayMilliseconds": 250,
+    "maximumDelaySeconds": 10,
+    "multiplier": 2,
+    "jitterRatio": 0.5,
+    "maximumAttempts": 0
+  },
+  "scenario": {
+    "name": "gatherv4-http-reading-10000",
+    "durationSeconds": 1,
+    "phases": [
+      {
+        "name": "functional-100",
+        "kind": "warmup",
+        "durationSeconds": 60,
+        "targetDevicePercentage": 1,
+        "connectionsPerSecond": 25,
+        "waitForOnline": true,
+        "minimumOnlineRate": 1.0,
+        "onlineStableSeconds": 5,
+        "onlineWaitTimeoutSeconds": 120
+      },
+      {
+        "name": "ramp-10000",
+        "kind": "ramp",
+        "durationSeconds": 360,
+        "targetDevicePercentage": 100,
+        "connectionsPerSecond": 300,
+        "waitForOnline": true,
+        "minimumOnlineRate": 0.98,
+        "onlineStableSeconds": 30,
+        "onlineWaitTimeoutSeconds": 1200
+      },
+      {
+        "name": "command-steady-10000",
+        "kind": "steady",
+        "durationSeconds": 2400,
+        "targetDevicePercentage": 100,
+        "connectionsPerSecond": 300,
+        "waitForOnline": true,
+        "minimumOnlineRate": 1.0,
+        "onlineStableSeconds": 60,
+        "onlineWaitTimeoutSeconds": 1200
+      },
+      {
+        "name": "cooldown",
+        "kind": "cooldown",
+        "durationSeconds": 30,
+        "targetDevicePercentage": 0,
+        "connectionsPerSecond": 300
+      }
+    ]
+  },
+  "reporting": {
+    "outputDirectory": "load-test-results",
+    "sampleIntervalSeconds": 1,
+    "checkpointIntervalSeconds": 10,
+    "writeConsoleSummary": true,
+    "downstreamDiagnostics": {
+      "enabled": true,
+      "captureUnknownFrames": true,
+      "maxSamplesPerFingerprint": 5,
+      "maxTotalSamples": 500,
+      "rawHexMaxBytes": 512,
+      "correlationTimeoutSeconds": 1800
+    }
+  },
+  "serverObservation": {
+    "enabled": false
+  },
+  "acceptance": {
+    "minimumConnectionSuccessRate": 0.95,
+    "minimumLoginSuccessRate": 0.95,
+    "minimumFinalOnlineRate": 0.98,
+    "maximumProtocolErrorRate": 0.01,
+    "minimumApiSuccessRate": 0.95,
+    "minimumApiTargetCoverageRate": 0.98,
+    "maximumApiP95Milliseconds": 90000,
+    "minimumSyncResultSuccessRate": 0.95,
+    "minimumCommandDeliveryRate": 0.95,
+    "minimumCommandRecognitionRate": 0.99,
+    "maximumUnobservedCommands": 50
+  },
+  "distributed": {
+    "runId": "gatherv4-http-reading-10000",
+    "shardIndex": 0,
+    "shardCount": 1,
+    "randomSeed": 37610001
+  },
+  "safety": {
+    "environment": "test",
+    "highLoadThreshold": 10000,
+    "allowHighLoad": false,
+    "allowFaultInjection": false,
+    "allowedTargets": ["127.0.0.1"]
+  }
+}

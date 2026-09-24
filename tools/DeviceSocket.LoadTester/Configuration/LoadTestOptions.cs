@@ -67,4 +67,9 @@ public sealed class LoadTestOptions
     /// 获取或设置 <c>distributed</c>；定义跨负载节点运行编号、分片和同步启动时刻。
     /// </summary>
     public DistributedOptions Distributed { get; set; } = new();
+
+    /// <summary>
+    /// 获取或设置 <c>safety</c>；定义高负载、故障注入和目标地址白名单保护，不改变正常压测的协议语义。
+    /// </summary>
+    public SafetyOptions Safety { get; set; } = new();
 }

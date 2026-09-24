@@ -156,5 +156,13 @@
     "runId": "gather-reconnect-storm-50000",
     "shardIndex": 0,
     "shardCount": 4
+  },
+  "safety": {
+    "environment": "test",
+    "highLoadThreshold": 10000,
+    "allowHighLoad": true,
+    // 场景包含主动断连批次，必须显式授权故障注入。
+    "allowFaultInjection": true,
+    "allowedTargets": ["192.168.111.222"]
   }
 }

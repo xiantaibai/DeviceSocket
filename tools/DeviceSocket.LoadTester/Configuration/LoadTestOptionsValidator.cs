@@ -28,13 +28,14 @@ public static class LoadTestOptionsValidator
             errors.Add("target.protocol: 通信协议不受支持。");
         if (!Enum.IsDefined(options.Target.CompatibilityProfile))
             errors.Add("target.compatibilityProfile: 服务端兼容配置不受支持。");
-        if (options.Target.CompatibilityProfile == ServerCompatibilityProfile.GatherTcpCenter &&
+        if (options.Target.CompatibilityProfile is ServerCompatibilityProfile.GatherTcpCenter or ServerCompatibilityProfile.GatherV4 &&
             options.Target.Protocol != LoadProtocol.QGdw3761)
         {
-            errors.Add("target.compatibilityProfile: gatherTcpCenter 当前只支持 Q/GDW 376.1 协议。");
+            errors.Add("target.compatibilityProfile: gatherTcpCenter 和 gatherV4 当前只支持 Q/GDW 376.1 协议。");
         }
         if (options.Devices.Count <= 0)
             errors.Add("devices.count: 设备总数必须大于 0。");
+        ValidateSafety(options, errors);
         if (options.Devices.DuplicateIdentityPercentage is < 0 or > 100)
             errors.Add("devices.duplicateIdentityPercentage: 必须在 0-100 之间。");
         if (!Enum.IsDefined(options.Devices.GenerationMode))
@@ -119,6 +120,8 @@ public static class LoadTestOptionsValidator
                 errors.Add("workload.jitterSeconds: 必须大于等于 0 且小于上报间隔。");
         }
         ValidateGatherReadingResponse(options, errors);
+        ValidateGatherV4Response(options, errors);
+        ValidateGatherV4Report(options, errors);
         ValidateCommandWorkload(options, errors);
 
         if (options.Reconnect.InitialDelayMilliseconds < 0)
@@ -145,6 +148,13 @@ public static class LoadTestOptionsValidator
                 errors.Add($"scenario.phases[{phase.Name}].targetDevicePercentage: 必须在 0-100 之间。");
             if (phase.ConnectionsPerSecond is <= 0)
                 errors.Add($"scenario.phases[{phase.Name}].connectionsPerSecond: 设置后必须大于 0。");
+            ValidateRate(phase.MinimumOnlineRate, $"scenario.phases[{phase.Name}].minimumOnlineRate", errors);
+            if (phase.WaitForOnline && phase.MinimumOnlineRate <= 0)
+                errors.Add($"scenario.phases[{phase.Name}].minimumOnlineRate: 开启在线屏障时必须大于 0。");
+            if (phase.OnlineStableSeconds < 0)
+                errors.Add($"scenario.phases[{phase.Name}].onlineStableSeconds: 不能小于 0。");
+            if (phase.WaitForOnline && phase.OnlineWaitTimeoutSeconds <= 0)
+                errors.Add($"scenario.phases[{phase.Name}].onlineWaitTimeoutSeconds: 开启在线屏障时必须大于 0。");
             if (phase.ManualAction.Enabled)
             {
                 if (string.IsNullOrWhiteSpace(phase.ManualAction.Message))
@@ -233,6 +243,13 @@ public static class LoadTestOptionsValidator
             errors);
         if (options.Acceptance.MaximumApiP95Milliseconds is <= 0)
             errors.Add("acceptance.maximumApiP95Milliseconds: 设置后必须大于 0。");
+        if (options.Target.CompatibilityProfile == ServerCompatibilityProfile.GatherV4 &&
+            options.Acceptance.MinimumGatherReadingResponseRate.HasValue)
+        {
+            errors.Add(
+                "acceptance.minimumGatherReadingResponseRate: 属于旧 GatherTcpCenter 专用累计口径；" +
+                "GatherV4 请使用 minimumCommandDeliveryRate、minimumCommandRecognitionRate 和阶段 minimumResponseRate。");
+        }
         if (options.Acceptance.MaximumUnobservedCommands is < 0)
             errors.Add("acceptance.maximumUnobservedCommands: 不能小于 0。");
         if (options.Acceptance.MaximumRecoverySeconds is <= 0)
@@ -283,6 +300,62 @@ public static class LoadTestOptionsValidator
         return errors;
     }
 
+    /// <summary>校验高负载授权、故障注入授权、环境标签和可选目标白名单。</summary>
+    /// <param name="options">完整负载配置。</param>
+    /// <param name="errors">接收全部配置错误的集合。</param>
+    private static void ValidateSafety(LoadTestOptions options, ICollection<string> errors)
+    {
+        var safety = options.Safety;
+        if (string.IsNullOrWhiteSpace(safety.Environment))
+            errors.Add("safety.environment: 不能为空。");
+        if (safety.HighLoadThreshold <= 0)
+            errors.Add("safety.highLoadThreshold: 必须大于 0。");
+        else if (options.Devices.Count > safety.HighLoadThreshold && !safety.AllowHighLoad)
+            errors.Add($"safety.allowHighLoad: devices.count={options.Devices.Count} 超过保护阈值 {safety.HighLoadThreshold}，必须显式设置为 true。");
+
+        if (safety.AllowedTargets.Any(string.IsNullOrWhiteSpace))
+            errors.Add("safety.allowedTargets: 不能包含空白地址。");
+        if (safety.AllowedTargets.Count > 0 &&
+            !safety.AllowedTargets.Contains(options.Target.Host, StringComparer.OrdinalIgnoreCase))
+        {
+            errors.Add($"safety.allowedTargets: target.host={options.Target.Host} 不在目标白名单中。");
+        }
+        if (safety.AllowedTargets.Count > 0 &&
+            options.CommandWorkload.Enabled &&
+            Uri.TryCreate(options.CommandWorkload.BaseUrl, UriKind.Absolute, out var commandBaseUri) &&
+            !safety.AllowedTargets.Contains(commandBaseUri.Host, StringComparer.OrdinalIgnoreCase))
+        {
+            // combined 场景会同时向 TCP 与 HTTP 两个地址产生压力，因此两者都必须经过同一份显式白名单审核。
+            errors.Add($"safety.allowedTargets: commandWorkload.baseUrl 主机 {commandBaseUri.Host} 不在目标白名单中。");
+        }
+
+        var hasProtocolResponseFault =
+            options.Target.CompatibilityProfile == ServerCompatibilityProfile.GatherTcpCenter &&
+            options.Workload.GatherReadingResponse.Enabled &&
+            options.Workload.GatherReadingResponse.Mode != GatherReadingResponseMode.Normal ||
+            options.Target.CompatibilityProfile == ServerCompatibilityProfile.GatherV4 &&
+            (!options.Workload.GatherV4Response.Enabled ||
+             options.Workload.GatherV4Response.Mode != GatherV4ResponseMode.Normal);
+        var hasFaultInjection = options.Scenario.Phases.Any(HasFaultInjection) || hasProtocolResponseFault;
+        if (hasFaultInjection && !safety.AllowFaultInjection)
+            errors.Add("safety.allowFaultInjection: 场景包含网络或断连故障注入，必须显式设置为 true。");
+    }
+
+    /// <summary>判断阶段是否包含会改变正常网络行为的故障注入。</summary>
+    /// <param name="phase">待检查场景阶段。</param>
+    /// <returns>任意故障参数非零时返回 true。</returns>
+    private static bool HasFaultInjection(ScenarioPhaseOptions phase)
+    {
+        var faults = phase.Faults;
+        return faults.NetworkLatencyMilliseconds > 0 ||
+               faults.OutboundPacketLossRate > 0 ||
+               faults.InboundPacketLossRate > 0 ||
+               faults.CorruptChecksumRate > 0 ||
+               faults.DuplicateFrameRate > 0 ||
+               faults.DisconnectPercentage > 0 ||
+               faults.FragmentSizeBytes > 0;
+    }
+
     /// <summary>
     /// 校验 Gather 读表业务应答的适用协议、影响比例、延迟和模拟示值范围。
     /// </summary>
@@ -311,6 +384,76 @@ public static class LoadTestOptionsValidator
         }
     }
 
+    /// <summary>校验 GatherV4 命令应答模式的枚举、影响比例、延迟和适用兼容配置。</summary>
+    /// <param name="options">完整负载配置。</param>
+    /// <param name="errors">接收全部配置错误的集合。</param>
+    private static void ValidateGatherV4Response(LoadTestOptions options, ICollection<string> errors)
+    {
+        var response = options.Workload.GatherV4Response;
+        if (!Enum.IsDefined(response.Mode))
+            errors.Add("workload.gatherV4Response.mode: 应答模式不受支持。");
+        if (response.AffectedDevicePercentage is < 0 or > 100)
+            errors.Add("workload.gatherV4Response.affectedDevicePercentage: 必须在 0-100 之间。");
+        if (response.DelayMilliseconds < 0)
+            errors.Add("workload.gatherV4Response.delayMilliseconds: 不能小于 0。");
+        if (options.Target.CompatibilityProfile != ServerCompatibilityProfile.GatherV4 &&
+            (!response.Enabled || response.Mode != GatherV4ResponseMode.Normal))
+        {
+            errors.Add("workload.gatherV4Response: 关闭应答或非 normal 模式只适用于 gatherV4 兼容配置。");
+        }
+    }
+
+    /// <summary>校验 GatherV4 真实主动上报模板的十六进制、帧完整性、方向和服务端4096字节上限。</summary>
+    /// <param name="options">完整负载配置。</param>
+    /// <param name="errors">接收全部配置错误的集合。</param>
+    private static void ValidateGatherV4Report(LoadTestOptions options, ICollection<string> errors)
+    {
+        var report = options.Workload.GatherV4Report;
+        if (!string.IsNullOrWhiteSpace(report.FrameHexTemplate) &&
+            options.Target.CompatibilityProfile != ServerCompatibilityProfile.GatherV4)
+        {
+            errors.Add("workload.gatherV4Report.frameHexTemplate: 只适用于 gatherV4 兼容配置。");
+        }
+        if (!options.Workload.ReportsEnabled ||
+            options.Target.CompatibilityProfile != ServerCompatibilityProfile.GatherV4)
+        {
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(report.FrameHexTemplate))
+        {
+            errors.Add("workload.gatherV4Report.frameHexTemplate: GatherV4 启用周期上报时必须提供真实完整帧模板。");
+            return;
+        }
+
+        try
+        {
+            var compact = string.Concat(report.FrameHexTemplate.Where(character =>
+                !char.IsWhiteSpace(character) && character is not ',' and not '-'));
+            var bytes = Convert.FromHexString(compact);
+            if (bytes.Length > 4_096)
+                errors.Add("workload.gatherV4Report.frameHexTemplate: 完整帧不能超过 GatherV4 服务端 4096 字节上限。");
+            var parsed = DeviceSocket.Core.Protocols.QGdw3761.QGdw3761Codec.Read(bytes).Package;
+            if (parsed is not DeviceSocket.Core.Protocols.QGdw3761.QGdw3761Frame frame ||
+                !frame.IsValid ||
+                frame.Raw.Length != bytes.Length)
+            {
+                errors.Add("workload.gatherV4Report.frameHexTemplate: 必须是校验和正确且不包含尾随字节的完整376.1帧。");
+            }
+            else if (!frame.IsUpstream || !frame.IsPrimaryMessage)
+            {
+                errors.Add("workload.gatherV4Report.frameHexTemplate: 必须是终端主动上行帧（DIR=1、PRM=1）。");
+            }
+            else if (frame.Afn == 0x02)
+            {
+                errors.Add("workload.gatherV4Report.frameHexTemplate: AFN=02H 属于登录/心跳链路帧，不能冒充周期业务上报模板。");
+            }
+        }
+        catch (FormatException)
+        {
+            errors.Add("workload.gatherV4Report.frameHexTemplate: 不是有效的偶数字节十六进制字符串。");
+        }
+    }
+
     /// <summary>
     /// 校验 HTTP 指令驱动的角色组合、地址、设备映射、在线门槛和各阶段限流参数。
     /// </summary>
@@ -331,10 +474,10 @@ public static class LoadTestOptionsValidator
         {
             errors.Add("commandWorkload.targetDeviceSource: onlineRegistry 只支持 combined 角色。");
         }
-        if (options.Target.CompatibilityProfile != ServerCompatibilityProfile.GatherTcpCenter ||
+        if (options.Target.CompatibilityProfile is not (ServerCompatibilityProfile.GatherTcpCenter or ServerCompatibilityProfile.GatherV4) ||
             options.Target.Protocol != LoadProtocol.QGdw3761)
         {
-            errors.Add("commandWorkload: 当前只支持 Q/GDW 376.1 的 gatherTcpCenter 老服务。");
+            errors.Add("commandWorkload: 当前只支持 Q/GDW 376.1 的 gatherTcpCenter 或 gatherV4 服务。");
         }
         if (!Uri.TryCreate(command.BaseUrl, UriKind.Absolute, out var baseUri) ||
             baseUri.Scheme is not ("http" or "https"))
@@ -357,6 +500,8 @@ public static class LoadTestOptionsValidator
             errors.Add($"commandWorkload.deviceMappingFile: 文件不存在：{effectiveMappingFile}");
         if (command.MeterIdStart is <= 0)
             errors.Add("commandWorkload.meterIdStart: 设置后必须大于 0。");
+        if (options.Target.CompatibilityProfile == ServerCompatibilityProfile.GatherV4)
+            ValidateGatherV4Command(options, errors);
         ValidatePositiveSeconds(command.RequestTimeoutSeconds, "commandWorkload.requestTimeoutSeconds", errors);
         ValidateRate(command.RequiredOnlineRate, "commandWorkload.requiredOnlineRate", errors);
         if (command.RequiredOnlineRate <= 0)
@@ -428,6 +573,71 @@ public static class LoadTestOptionsValidator
                 {
                     errors.Add($"{path}: 启用 circuitBreakerEnabled 时至少配置一个熔断条件。");
                 }
+            }
+        }
+
+        if (options.Target.CompatibilityProfile == ServerCompatibilityProfile.GatherV4 &&
+            command.Phases.Any(phase => phase.DrainEnabled) &&
+            options.Reporting.DownstreamDiagnostics?.Enabled != true)
+        {
+            errors.Add(
+                "reporting.downstreamDiagnostics.enabled: GatherV4 启用业务排空时必须开启命令追踪，" +
+                "否则无法把 HTTP 请求、TCP 下行和设备应答关联起来。");
+        }
+    }
+
+    /// <summary>校验 GatherV4 IssueCmd 的固定入口、同步语义、采集服务、表类型、采集项和动态时间格式。</summary>
+    /// <param name="options">完整负载配置。</param>
+    /// <param name="errors">接收全部配置错误的集合。</param>
+    private static void ValidateGatherV4Command(
+        LoadTestOptions options,
+        ICollection<string> errors)
+    {
+        var command = options.CommandWorkload;
+        var gatherV4 = command.GatherV4;
+        var normalizedEndpoint = command.EndpointPath.Trim().TrimEnd('/');
+        if (!string.Equals(normalizedEndpoint, "/Handmould/IssueCmd", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(normalizedEndpoint, "/Handmould/IssueCmdSync", StringComparison.OrdinalIgnoreCase))
+        {
+            errors.Add(
+                "commandWorkload.endpointPath: gatherV4 仅支持 /Handmould/IssueCmd 或 /Handmould/IssueCmdSync，" +
+                "不能沿用老服务 /api/ammeter/reading。");
+        }
+        if (command.RequestTimeoutSeconds <= 60)
+        {
+            errors.Add(
+                "commandWorkload.requestTimeoutSeconds: GatherV4 同步接口内部可等待设备结果约 60 秒，" +
+                "客户端超时必须大于 60 秒才能区分服务端结果与客户端提前取消。");
+        }
+        if (command.Phases.Any(phase => !phase.ShowResult))
+        {
+            errors.Add(
+                "commandWorkload.phases[].showResult: GatherV4 IssueCmd 属于同步结果接口，所有阶段必须设置为 true，" +
+                "不能按旧服务异步受理口径统计。");
+        }
+        if (string.IsNullOrWhiteSpace(gatherV4.GatherCode))
+            errors.Add("commandWorkload.gatherV4.gatherCode: GatherV4 指令负载必须填写与服务端一致的采集服务编码。");
+        if (gatherV4.MeterType <= 0)
+            errors.Add("commandWorkload.gatherV4.meterType: 必须大于 0 并与 GatherV4 MeterTypeEnum 一致。");
+        if (gatherV4.ItemCodes.Count == 0 || gatherV4.ItemCodes.Any(string.IsNullOrWhiteSpace))
+            errors.Add("commandWorkload.gatherV4.itemCodes: 至少填写一个非空的 GatherV4 采集项编码。");
+        if (gatherV4.Point < 0)
+            errors.Add("commandWorkload.gatherV4.point: 不能小于 0。");
+        if (string.IsNullOrWhiteSpace(gatherV4.DataTimeFormat))
+        {
+            errors.Add("commandWorkload.gatherV4.dataTimeFormat: 不能为空。");
+        }
+        else if (string.IsNullOrWhiteSpace(gatherV4.DataTime))
+        {
+            try
+            {
+                _ = DateTimeOffset.Now.ToString(
+                    gatherV4.DataTimeFormat,
+                    System.Globalization.CultureInfo.InvariantCulture);
+            }
+            catch (FormatException)
+            {
+                errors.Add("commandWorkload.gatherV4.dataTimeFormat: 不是有效的 .NET 日期时间格式。");
             }
         }
     }

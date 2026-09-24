@@ -16,7 +16,9 @@ internal static class LoadTestProtocolFactory
     /// <returns>对应协议的默认负载测试适配器。</returns>
     internal static ILoadTestProtocol Create(LoadProtocol protocol) => Create(
         new TargetOptions { Protocol = protocol },
-        new GatherReadingResponseOptions());
+        new GatherReadingResponseOptions(),
+        new GatherV4ResponseOptions(),
+        new GatherV4ReportOptions());
 
     /// <summary>
     /// 按完整负载配置创建协议适配器，使 Gather 读表业务响应使用当前场景参数。
@@ -27,7 +29,11 @@ internal static class LoadTestProtocolFactory
     internal static ILoadTestProtocol Create(LoadTestOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
-        return Create(options.Target, options.Workload.GatherReadingResponse);
+        return Create(
+            options.Target,
+            options.Workload.GatherReadingResponse,
+            options.Workload.GatherV4Response,
+            options.Workload.GatherV4Report);
     }
 
     /// <summary>
@@ -38,26 +44,33 @@ internal static class LoadTestProtocolFactory
     /// <exception cref="ArgumentNullException"><paramref name="target"/> 为空时抛出。</exception>
     /// <exception cref="ArgumentOutOfRangeException">协议与兼容配置组合不受支持时抛出。</exception>
     internal static ILoadTestProtocol Create(TargetOptions target) =>
-        Create(target, new GatherReadingResponseOptions());
+        Create(target, new GatherReadingResponseOptions(), new GatherV4ResponseOptions(), new GatherV4ReportOptions());
 
     /// <summary>
-    /// 按目标服务配置和 Gather 读表响应参数创建隔离的协议适配器。
+    /// 按目标服务配置、Gather 老服务读表响应参数和 GatherV4 关联响应参数创建隔离的协议适配器。
     /// </summary>
     /// <param name="target">已经通过配置校验的目标服务端选项。</param>
     /// <param name="readingResponse">Gather AFN=0CH/F129 业务响应配置。</param>
+    /// <param name="gatherV4Response">GatherV4 下行命令确认与关联故障配置。</param>
+    /// <param name="gatherV4Report">GatherV4 周期主动上报模板配置。</param>
     /// <returns>可供虚拟会话使用的协议适配器。</returns>
     /// <exception cref="ArgumentNullException">任一配置为空时抛出。</exception>
     /// <exception cref="ArgumentOutOfRangeException">协议与兼容配置组合不受支持时抛出。</exception>
     private static ILoadTestProtocol Create(
         TargetOptions target,
-        GatherReadingResponseOptions readingResponse)
+        GatherReadingResponseOptions readingResponse,
+        GatherV4ResponseOptions gatherV4Response,
+        GatherV4ReportOptions gatherV4Report)
     {
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(readingResponse);
+        ArgumentNullException.ThrowIfNull(gatherV4Response);
+        ArgumentNullException.ThrowIfNull(gatherV4Report);
         return (target.Protocol, target.CompatibilityProfile) switch
         {
             (LoadProtocol.QGdw3761, ServerCompatibilityProfile.DeviceSocket) => new QGdw3761LoadTestProtocol(),
             (LoadProtocol.QGdw3761, ServerCompatibilityProfile.GatherTcpCenter) => new GatherTcpCenterQGdw3761LoadTestProtocol(readingResponse),
+            (LoadProtocol.QGdw3761, ServerCompatibilityProfile.GatherV4) => new GatherV4QGdw3761LoadTestProtocol(gatherV4Response, gatherV4Report),
             (LoadProtocol.Dlt6452007, ServerCompatibilityProfile.DeviceSocket) => new Dlt645LoadTestProtocol(),
             _ => throw new ArgumentOutOfRangeException(nameof(target), "通信协议与服务端兼容配置的组合不受支持。")
         };

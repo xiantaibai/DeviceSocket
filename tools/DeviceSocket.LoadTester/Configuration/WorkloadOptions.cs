@@ -24,4 +24,14 @@ public sealed class WorkloadOptions
     /// 获取或设置 <c>workload.gatherReadingResponse</c>；定义 Gather 老服务 AFN=0CH/F129 读表指令的终端应答与故障行为。
     /// </summary>
     public GatherReadingResponseOptions GatherReadingResponse { get; set; } = new();
+
+    /// <summary>
+    /// 获取或设置 <c>workload.gatherV4Response</c>；定义 GatherV4 下行命令按 A3/PSEQ 应答时的延迟、丢弃、重复和错误关联故障模型。
+    /// </summary>
+    public GatherV4ResponseOptions GatherV4Response { get; set; } = new();
+
+    /// <summary>
+    /// 获取或设置 <c>workload.gatherV4Report</c>；定义 GatherV4 周期主动上报的真实协议帧模板和 ACK 请求标志。
+    /// </summary>
+    public GatherV4ReportOptions GatherV4Report { get; set; } = new();
 }

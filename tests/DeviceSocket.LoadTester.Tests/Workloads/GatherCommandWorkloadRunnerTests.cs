@@ -17,6 +17,71 @@ namespace DeviceSocket.LoadTester.Tests.Workloads;
 public sealed class GatherCommandWorkloadRunnerTests
 {
     /// <summary>
+    /// 验证 GatherV4 适配器使用设备九位编码拆分 AreaCode/Address，并按 ResultMsg 的 Status 字段记录成功。
+    /// </summary>
+    [Fact]
+    public async Task GatherV4_SendsIssueCmdRequestAndRecordsStatusSuccess()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            var options = TestOptionsFactory.Create();
+            options.Role = LoadTestRole.ApiOnly;
+            options.Target.CompatibilityProfile = ServerCompatibilityProfile.GatherV4;
+            options.Devices.Count = 1;
+            options.CommandWorkload = new CommandWorkloadOptions
+            {
+                Enabled = true,
+                BaseUrl = $"http://127.0.0.1:{port}",
+                EndpointPath = "/Handmould/IssueCmd",
+                AuthorizationHeaderName = string.Empty,
+                MeterIdStart = 7_001,
+                GatherV4 = new GatherV4CommandOptions
+                {
+                    GatherCode = "V4-Gather-8890",
+                    MeterType = 1,
+                    ItemCodes = ["10_1"],
+                    Density = 0,
+                    Point = 1,
+                    DataTime = "2026-09-15 12:00:00"
+                },
+                Phases =
+                [
+                    new CommandPhaseOptions
+                    {
+                        Name = "gatherv4",
+                        TargetDeviceCount = 1,
+                        RequestsPerSecond = 100,
+                        MaxConcurrency = 1,
+                        ShowResult = true
+                    }
+                ]
+            };
+            var devices = DeviceAddressAllocator.Allocate(options);
+            var metrics = new LoadTestMetrics();
+            var serverTask = ServeOneResponseAsync(listener, "{\"Status\":true,\"Msg\":\"抄读成功\"}");
+            using var runner = new GatherCommandWorkloadRunner(options, devices, metrics);
+
+            await runner.RunAsync(waitForOnline: false, CancellationToken.None);
+            var requestBody = await serverTask;
+
+            using var document = JsonDocument.Parse(requestBody);
+            Assert.Equal("3301", document.RootElement.GetProperty("areaCode").GetString());
+            Assert.Equal("00001", document.RootElement.GetProperty("address").GetString());
+            Assert.Equal(7_001, document.RootElement.GetProperty("ammeterId").GetInt32());
+            Assert.Equal("V4-Gather-8890", document.RootElement.GetProperty("gatherCode").GetString());
+            Assert.Equal("10_1", document.RootElement.GetProperty("itemCodes")[0].GetString());
+            Assert.Equal(1, metrics.Snapshot(DateTimeOffset.UtcNow).ApiRequestsSucceeded);
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
+    /// <summary>
     /// 验证 apiOnly 运行器发送正确读表 JSON，并把 BaseDto success=true 计入 API 成功指标。
     /// </summary>
     [Fact]

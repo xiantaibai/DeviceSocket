@@ -188,6 +188,7 @@ internal static class ReportMerger
                     options.CommandWorkload.OperationSource,
                     options.CommandWorkload.ReadingModel,
                     options.CommandWorkload.ReadingCode,
+                    options.CommandWorkload.GatherV4,
                     options.CommandWorkload.RequestTimeoutSeconds,
                     options.CommandWorkload.RequiredOnlineRate,
                     options.CommandWorkload.MinimumOnlineCount,
@@ -200,10 +201,12 @@ internal static class ReportMerger
                 options.Reconnect,
                 options.Scenario,
                 options.Acceptance,
+                options.Safety,
                 ServerObservationEnabled = options.ServerObservation.Enabled,
                 options.Reporting.SampleIntervalSeconds,
                 options.Reporting.DownstreamDiagnostics,
-                options.Distributed.StartAtUtc
+                options.Distributed.StartAtUtc,
+                options.Distributed.RandomSeed
             },
             LoadTestConfigurationLoader.CreateSerializerOptions());
     }

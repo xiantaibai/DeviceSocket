@@ -4,7 +4,7 @@ using DeviceSocket.LoadTester.Protocols;
 namespace DeviceSocket.LoadTester.Reporting;
 
 /// <summary>
-/// 表示一条 HTTP 读表请求从计划、API 返回、设备下行到模拟应答的完整诊断记录。
+/// 表示一条 HTTP 设备指令从计划、API 返回、设备下行到模拟应答的完整诊断记录。
 /// </summary>
 public sealed record CommandTraceDetail
 {

@@ -3,7 +3,7 @@ using DeviceSocket.LoadTester.Metrics;
 namespace DeviceSocket.LoadTester.Reporting;
 
 /// <summary>
-/// 表示单个 HTTP 指令阶段在当前分片产生的请求和 Gather 读表业务响应增量。
+/// 表示单个 HTTP 指令阶段在当前分片产生的请求和设备下行业务响应增量。
 /// </summary>
 public sealed record CommandPhaseResult
 {
@@ -57,13 +57,13 @@ public sealed record CommandPhaseResult
     public int ApiTargetsOnline { get; init; }
     /// <summary>获取因在线目标未补足或发送前设备已离线而主动跳过的 HTTP 请求增量。</summary>
     public long ApiRequestsSkippedOffline { get; init; }
-    /// <summary>获取阶段及排空窗口内收到的 Gather 读表命令增量。</summary>
+    /// <summary>获取阶段及排空窗口内收到的已支持设备命令增量；字段名为兼容既有报告而保留。</summary>
     public required long GatherReadingCommandsReceived { get; init; }
-    /// <summary>获取阶段及排空窗口内完成业务应答的 Gather 读表命令增量。</summary>
+    /// <summary>获取阶段及排空窗口内完成模拟终端应答的命令增量；字段名为兼容既有报告而保留。</summary>
     public required long GatherReadingCommandsResponded { get; init; }
     /// <summary>获取通过逐请求关联观测到至少一帧原始下行的唯一命令数；重复或重试帧不重复计数。</summary>
     public long RawDownstreamCommandsObserved { get; init; }
-    /// <summary>获取原始下行中被当前协议适配器识别为受支持读表格式的唯一命令数。</summary>
+    /// <summary>获取原始下行中被当前协议适配器识别为受支持业务格式的唯一命令数。</summary>
     public long ProtocolRecognizedCommands { get; init; }
     /// <summary>获取已关联原始下行中格式合法但当前模拟器尚不支持应答的唯一命令数。</summary>
     public long UnsupportedCommands { get; init; }

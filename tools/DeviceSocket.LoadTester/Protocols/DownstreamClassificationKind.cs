@@ -26,6 +26,12 @@ public enum DownstreamClassificationKind
     /// <summary>AFN=0CH 的其他功能单元，可能属于冻结数据、透明转发或型号专属抄读。</summary>
     GatherAfn0CUnsupportedFunction,
 
+    /// <summary>GatherV4 发往在线设备且可按 A3/PSEQ 生成终端确认的376.1命令。</summary>
+    GatherV4Command,
+
+    /// <summary>GatherV4 对登录、心跳或主动业务上报返回的 AFN=00H/F1 全部确认，不属于主站业务命令。</summary>
+    GatherV4Acknowledgement,
+
     /// <summary>非 AFN=0CH 的有效 376.1 主站下行命令。</summary>
     OtherQGdw3761Command,
 

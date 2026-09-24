@@ -1,0 +1,132 @@
+{
+  // GatherV4 主通讯链路容量基线：验证 CON=1 登录、AFN=00H/F1 ACK、心跳确认和业务在线追平。
+  "role": "devicesOnly",
+  "target": {
+    // 运行前替换为 GatherV4 Communication 的测试地址；仓库默认配置端口通常为 8890。
+    "host": "127.0.0.1",
+    "port": 8890,
+    "protocol": "qGdw3761",
+    "compatibilityProfile": "gatherV4"
+  },
+  "devices": {
+    "count": 10000,
+    "generationMode": "csv",
+    // 必须替换或核对为 GatherV4 测试库已准备的 meterId,deviceId 完整映射。
+    "deviceMappingFile": "gather-device-10000.csv"
+  },
+  "connection": {
+    "startMode": "ramp",
+    "connectionsPerSecond": 300,
+    "maxConcurrentConnecting": 500,
+    "connectTimeoutSeconds": 5,
+    "loginTimeoutSeconds": 10,
+    "writeTimeoutSeconds": 5,
+    "noDelay": true
+  },
+  "heartbeat": {
+    "enabled": true,
+    "intervalSeconds": 60,
+    "jitterSeconds": 10,
+    "responseTimeoutSeconds": 10
+  },
+  "workload": {
+    // GatherV4 主动上报必须先选择真实采集项模板；基础连接场景保持关闭，禁止静默发送空负载。
+    "reportsEnabled": false,
+    "reportIntervalSeconds": 300,
+    "jitterSeconds": 30
+  },
+  "reconnect": {
+    "mode": "exponentialJitter",
+    "initialDelayMilliseconds": 250,
+    "maximumDelaySeconds": 10,
+    "multiplier": 2,
+    "jitterRatio": 0.5,
+    "maximumAttempts": 0
+  },
+  "scenario": {
+    "name": "gatherv4-connections-10000",
+    "durationSeconds": 1,
+    "phases": [
+      {
+        "name": "functional-100",
+        "kind": "warmup",
+        "durationSeconds": 60,
+        "targetDevicePercentage": 1,
+        "connectionsPerSecond": 25,
+        "waitForOnline": true,
+        "minimumOnlineRate": 1.0,
+        "onlineStableSeconds": 5,
+        "onlineWaitTimeoutSeconds": 120
+      },
+      {
+        "name": "ramp-1000",
+        "kind": "ramp",
+        "durationSeconds": 120,
+        "targetDevicePercentage": 10,
+        "connectionsPerSecond": 100,
+        "waitForOnline": true,
+        "minimumOnlineRate": 0.98,
+        "onlineStableSeconds": 15,
+        "onlineWaitTimeoutSeconds": 300
+      },
+      {
+        "name": "ramp-10000",
+        "kind": "ramp",
+        "durationSeconds": 360,
+        "targetDevicePercentage": 100,
+        "connectionsPerSecond": 300,
+        "waitForOnline": true,
+        "minimumOnlineRate": 0.98,
+        "onlineStableSeconds": 30,
+        "onlineWaitTimeoutSeconds": 1200
+      },
+      {
+        "name": "steady-10000",
+        "kind": "steady",
+        "durationSeconds": 1800,
+        "targetDevicePercentage": 100,
+        "connectionsPerSecond": 300,
+        "waitForOnline": true,
+        "minimumOnlineRate": 0.99,
+        "onlineStableSeconds": 60,
+        "onlineWaitTimeoutSeconds": 1200
+      },
+      {
+        "name": "cooldown",
+        "kind": "cooldown",
+        "durationSeconds": 30,
+        "targetDevicePercentage": 0,
+        "connectionsPerSecond": 300
+      }
+    ]
+  },
+  "reporting": {
+    "outputDirectory": "load-test-results",
+    "sampleIntervalSeconds": 1,
+    "checkpointIntervalSeconds": 10,
+    "writeConsoleSummary": true
+  },
+  "serverObservation": {
+    // GatherV4 使用 OTLP/HTTP 导出 OpenTelemetry；当前状态接口不是同一协议，先由外部 Collector 独立留存服务端指标。
+    "enabled": false
+  },
+  "acceptance": {
+    "minimumConnectionSuccessRate": 0.95,
+    "minimumLoginSuccessRate": 0.95,
+    "minimumFinalOnlineRate": 0.98,
+    "maximumProtocolErrorRate": 0.01
+  },
+  "distributed": {
+    "runId": "gatherv4-connections-10000",
+    "shardIndex": 0,
+    "shardCount": 1,
+    "randomSeed": 37610001
+  },
+  "safety": {
+    "environment": "test",
+    "highLoadThreshold": 10000,
+    "allowHighLoad": false,
+    "allowFaultInjection": false,
+    "allowedTargets": ["127.0.0.1"]
+  }
+}

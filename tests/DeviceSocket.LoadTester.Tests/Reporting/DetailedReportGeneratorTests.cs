@@ -8,7 +8,7 @@ using DeviceSocket.LoadTester.Reporting.Detailed;
 namespace DeviceSocket.LoadTester.Tests.Reporting;
 
 /// <summary>
-/// 验证离线详细报告能够联合客户端和 TcpCenter 指标计算业务在线追平并生成双受众产物。
+/// 验证离线详细报告能够联合客户端和通讯服务指标计算业务在线追平并生成双受众产物。
 /// </summary>
 public sealed class DetailedReportGeneratorTests
 {
@@ -121,7 +121,7 @@ public sealed class DetailedReportGeneratorTests
     }
 
     /// <summary>
-    /// 验证缺少 TcpCenter 指标时服务端验收项明确标记为不可评估，并使综合验收失败。
+    /// 验证缺少通讯服务指标时服务端验收项明确标记为不可评估，并使综合验收失败。
     /// </summary>
     [Fact]
     public async Task MissingServerMetrics_AreUnavailableAndDoNotSilentlyPass()
@@ -150,7 +150,7 @@ public sealed class DetailedReportGeneratorTests
             Assert.Contains(
                 analysis.AcceptanceChecks,
                 item => item.Name == "业务在线追平时间" && item.Status == DetailedAcceptanceStatus.Unavailable);
-            Assert.Contains(analysis.DataWarnings, item => item.Contains("未找到 TcpCenter 服务指标文件", StringComparison.Ordinal));
+            Assert.Contains(analysis.DataWarnings, item => item.Contains("未找到通讯服务指标文件", StringComparison.Ordinal));
         }
         finally
         {

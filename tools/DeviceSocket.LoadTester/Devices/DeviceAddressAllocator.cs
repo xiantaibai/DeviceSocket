@@ -20,7 +20,7 @@ public static class DeviceAddressAllocator
 
         var devices = new List<VirtualDeviceDescriptor>(
             (options.Devices.Count + options.Distributed.ShardCount - 1) / options.Distributed.ShardCount);
-        var runSeed = StableHash(options.Distributed.RunId);
+        var runSeed = options.Distributed.RandomSeed ?? StableHash(options.Distributed.RunId);
         if (options.Devices.GenerationMode == DeviceAddressGenerationMode.Csv)
             return AllocateCsvDevices(options, devices, runSeed);
 
@@ -83,7 +83,7 @@ public static class DeviceAddressAllocator
     /// </summary>
     /// <param name="options">已经通过基础校验的完整负载配置。</param>
     /// <param name="devices">接收当前分片设备的预分配集合。</param>
-    /// <param name="runSeed">由 RunId 派生的稳定随机种子。</param>
+    /// <param name="runSeed">由显式 randomSeed 或 RunId 派生的稳定随机种子。</param>
     /// <returns>当前分片负责的真实设备描述。</returns>
     /// <exception cref="ConfigurationValidationException">CSV 数据行数与 <c>devices.count</c> 不一致。</exception>
     private static IReadOnlyList<VirtualDeviceDescriptor> AllocateCsvDevices(
@@ -156,7 +156,7 @@ public static class DeviceAddressAllocator
     /// <summary>
     /// 从随机种子派生与区间容量互质的步长，使全局设备序号映射为无重复的伪随机排列。
     /// </summary>
-    /// <param name="seed">由 RunId 和设备规模派生的稳定种子。</param>
+    /// <param name="seed">由显式 randomSeed 或 RunId 与设备规模派生的稳定种子。</param>
     /// <param name="range">随机地址闭区间包含的地址数量。</param>
     /// <returns>区间容量为 1 时返回 0；否则返回小于区间容量且与其互质的正步长。</returns>
     private static long FindCoprimeStep(uint seed, long range)

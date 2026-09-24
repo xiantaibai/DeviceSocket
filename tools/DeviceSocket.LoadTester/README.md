@@ -2,15 +2,19 @@
 
 `DeviceSocket.LoadTester` 是独立于 `DeviceSocket.Simulator` 和 `DeviceSocket.Debugger` 的并发与稳定性测试工具。Simulator、Debugger 继续用于单设备协议与指令联调；LoadTester 负责批量 TCP 建连、376.1 登录、心跳、自动重连、Gather 读表指令应答、多负载机分片和测试报告。
 
-当前正式场景聚焦 `Gather.TcpCenter` 老服务，使用数据库真实存在的 `meterId,deviceId` CSV。场景目录只保留可用于正式回归和验收的脚本，协议异常、重复登录、645 容量等开发专项不再与正式场景混放。
+当前正式场景同时支持 `Gather.TcpCenter` 老服务和 `GatherV4` 主通讯链路，HTTP 场景都要求使用数据库真实存在的 `meterId,deviceId` CSV。场景目录只保留可用于正式回归和验收的脚本，协议异常、重复登录、645 容量等开发专项不再与正式场景混放。
+
+GatherV4 已支持能力、止血版边界和首轮执行顺序见 [GatherV4 止血版兼容说明](docs/gatherv4-compatibility.md)。
 
 ## 核心能力
 
 - 使用 Q/GDW 376.1 模拟 TCP 建连、登录确认、心跳确认和退出登录。
 - `gatherTcpCenter` 兼容模式可识别老服务固定 SEQ、无回显数据区确认和 `AFN=0CH/F129` 读表命令。
+- `gatherV4` 兼容模式发送 CON=1 登录/心跳，严格匹配 AFN=00H/F1，并按设备编号、A3、PSEQ 应答下行命令。
 - 根据下行地址、MSA、PN、PSEQ 生成老 CmdCenter 可解析的 A15/A14 读表业务应答。
 - 连接、登录、写入、心跳和 HTTP 请求分别设置超时，单条链路阻塞不会永久占用设备任务。
 - 支持 Ramp、Burst、指数退避重连、故障与恢复阶段。
+- TCP 阶段可配置在线屏障，连接和合法 ACK 未达到并连续稳定时不会盲目进入业务或重启阶段。
 - 支持 `devicesOnly`、`apiOnly`、`combined` 三种运行角色；TCP 收包与 HTTP 工作队列相互独立。
 - 使用在线注册表选择 HTTP 目标，避免向当前已经离线的设备发送抄读请求。
 - 多分片按 CSV 数据行全局序号分配设备，不同负载机不会重复模拟同一设备。
@@ -28,6 +32,9 @@
 | `gather-tcpcenter-soak-10000.json` | 一万台六小时长稳，观察内存、线程、句柄、Socket 和在线数趋势 | 否 | 否 |
 | `gather-tcpcenter-reconnect-storm-50000.json` | 四分片共五万台稳定在线后重启 TCP 服务，验证大规模真实重连风暴 | 否 | 需要重启服务 |
 | `gather-tcpcenter-http-reading-50000.json` | 四分片共五万台在线、全局最高 50 RPS，并对全部设备各异步抄读一次 | 是 | 否 |
+| `gatherv4-connections-10000.json` | GatherV4 一万台 CON=1 登录、F1 ACK、心跳及业务在线基线 | 否 | 否 |
+| `gatherv4-http-reading-10000.json` | GatherV4 一万台在线及 Handmould/IssueCmd 同步指令闭环 | 是 | 否 |
+| `gatherv4-reconnect-storm-10000.json` | GatherV4 一万台稳定在线后人工重启 Communication 服务并验证自动恢复 | 否 | 是 |
 
 `Scenarios/gather-device-10000.csv` 和 `Scenarios/gather-device-50000.csv` 分别是当前一万台、五万台正式设备映射。多分片运行时每台负载机都部署同一份完整 CSV，由工具自动固定分配设备；CSV 格式示例移到 `docs/examples/gather-meter-device-map.example.csv`，示例数据不能直接用于正式压测。
 
@@ -39,6 +46,7 @@
 4. 从负载机执行 `Test-NetConnection <目标IP> -Port <端口>` 或 Linux `nc -vz <目标IP> <端口>`。
 5. Windows 负载机执行 `netsh int ipv4 show dynamicport tcp`，确认单个源 IP 的临时端口能容纳本分片连接及重连产生的 `TIME_WAIT`。
 6. 压测前保存服务端版本、代码分支、机器规格、应用配置和监控基线。
+7. 三万或五万场景显式设置 `safety.allowHighLoad=true`；断连、丢包、拆包等故障场景显式设置 `safety.allowFaultInjection=true`，共享脚本建议配置 `allowedTargets`。
 
 Gather 老服务可能在完成数据库在线登记前就回复协议确认。因此客户端“登录成功”表示已收到老式 ACK，不完全等于业务在线表已经更新。验收登录慢路径时，应把 LoadTester 的 TCP/登录时间序列与服务端指标 JSONL 对齐分析。
 
@@ -99,6 +107,28 @@ dotnet run --project tools\DeviceSocket.LoadTester\DeviceSocket.LoadTester.cspro
 不要直接把全部设备请求都改为 `showResult=true`。同步接口可能为每条请求创建结果订阅并长时间等待设备，容易先耗尽 HTTP 请求线程或 Redis 连接，掩盖 TCP 服务本身的结论。
 
 `targetDeviceSource=onlineRegistry` 表示每个 combined 分片只从本机当前在线设备中选取目标。进入队列和真正发送前会再次检查在线状态，离线目标记入 `ApiRequestsSkippedOffline`，不会继续调用 API。
+
+## GatherV4 压测
+
+先执行纯连接场景确认 GatherV4 的登录 ACK 可以稳定追平，再执行 HTTP 指令场景：
+
+```powershell
+dotnet run --project tools\DeviceSocket.LoadTester\DeviceSocket.LoadTester.csproj -- `
+  run --config tools\DeviceSocket.LoadTester\Scenarios\gatherv4-connections-10000.json `
+  --run-id gatherv4-connections-r1
+
+dotnet run --project tools\DeviceSocket.LoadTester\DeviceSocket.LoadTester.csproj -- `
+  run --config tools\DeviceSocket.LoadTester\Scenarios\gatherv4-http-reading-10000.json `
+  --run-id gatherv4-http-reading-r1
+
+dotnet run --project tools\DeviceSocket.LoadTester\DeviceSocket.LoadTester.csproj -- `
+  run --config tools\DeviceSocket.LoadTester\Scenarios\gatherv4-reconnect-storm-10000.json `
+  --run-id gatherv4-reconnect-r1
+```
+
+运行前必须核对 TCP/HTTP 地址、`gatherV4.gatherCode`、`itemCodes` 以及 CSV 中的真实数据库映射。GatherV4 `/Handmould/IssueCmd` 会等待设备结果，场景全部使用 `showResult=true`；不要把旧服务的“异步快速受理”成功率口径直接用于 GatherV4。当前基础适配会为地址匹配的主站命令生成保留 A3、复用 PSEQ 的 AFN=00H/F3 终端确认，以验证命令下发、关联窗口释放和同设备队头阻塞；需要验证真实电量数据入库前，还应按实际采集项补充对应业务响应模板。
+
+GatherV4 容量压测必须同时开启服务端 `GatherService.OpenTelemetry` 并让测试 Collector 留存 OTLP 指标。LoadTester 当前的 `--server-metrics` 自动解析器仍对应旧 Gather.TcpCenter 自定义 JSONL，不能把任意 Collector 导出文件冒充成同一指标结构；V4 服务端指标先作为同一 RunId 的外部证据归档，待确定 Collector 的稳定导出格式后再接入自动合并。
 
 ## 六小时长稳
 

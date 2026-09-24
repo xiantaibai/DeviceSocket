@@ -24,4 +24,9 @@ public sealed class DistributedOptions
     /// 获取或设置 <c>distributed.startAtUtc</c>；默认空表示立即启动，设置后各节点按同一 UTC 时刻开始，用于减少多机启动时间偏差。
     /// </summary>
     public DateTimeOffset? StartAtUtc { get; set; }
+
+    /// <summary>
+    /// 获取或设置 <c>distributed.randomSeed</c>；默认 null 表示继续从 RunId 派生稳定种子，显式整数使不同 RunId 的改造前后测试仍可复现相同设备随机行为；0 是有效种子。
+    /// </summary>
+    public int? RandomSeed { get; set; }
 }

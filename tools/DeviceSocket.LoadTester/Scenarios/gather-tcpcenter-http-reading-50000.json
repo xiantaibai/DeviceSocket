@@ -367,5 +367,14 @@
     "runId": "gather-http-reading-50000",
     "shardIndex": 0,
     "shardCount": 4
+  },
+  "safety": {
+    "environment": "test",
+    "highLoadThreshold": 10000,
+    "allowHighLoad": true,
+    // 本场景包含协议拆包等故障参数时必须显式授权；不得在正式环境直接复用。
+    "allowFaultInjection": true,
+    // TCP 服务与业务 API 位于不同主机，两个主动施压目标都必须列入白名单。
+    "allowedTargets": ["192.168.111.222", "192.168.111.18"]
   }
 }

@@ -53,6 +53,140 @@ public sealed class LoadTestProtocolTests
     }
 
     /// <summary>
+    /// 验证 GatherV4 登录帧设置 CON=1，且只有地址和 PSEQ 完全匹配的主站 AFN=00H/F1 才能完成业务登录。
+    /// </summary>
+    [Fact]
+    public void GatherV4Login_RequestsAndMatchesExactF1Confirmation()
+    {
+        var options = TestOptionsFactory.Create();
+        options.Target.CompatibilityProfile = ServerCompatibilityProfile.GatherV4;
+        var device = DeviceAddressAllocator.Allocate(options)[0];
+        var protocol = LoadTestProtocolFactory.Create(options.Target);
+        var loginRaw = protocol.CreateLoginFrame(device, 7);
+        var login = Assert.IsType<QGdw3761Frame>(protocol.Read(loginRaw).Frame);
+
+        Assert.True(login.ConfirmationRequested);
+        Assert.Equal(7, login.Sequence);
+
+        var acknowledgementRaw = loginRaw.ToArray();
+        acknowledgementRaw[6] = 0x40;
+        acknowledgementRaw[12] = 0x00;
+        acknowledgementRaw[13] = 0x67;
+        acknowledgementRaw[14] = 0x00;
+        acknowledgementRaw[15] = 0x00;
+        acknowledgementRaw[16] = 0x01;
+        acknowledgementRaw[17] = 0x00;
+        acknowledgementRaw[^2] = QGdw3761Codec.CalculateChecksum(
+            acknowledgementRaw.AsSpan(6, acknowledgementRaw.Length - 8));
+        var acknowledgement = Assert.IsType<QGdw3761Frame>(protocol.Read(acknowledgementRaw).Frame);
+        var acknowledgementClassification = Assert.IsAssignableFrom<IDownstreamFrameClassifier>(protocol)
+            .ClassifyDownstream(acknowledgement, device);
+
+        Assert.True(protocol.IsConfirmation(acknowledgement, device, ProtocolOperation.Login, 7));
+        Assert.False(protocol.IsConfirmation(acknowledgement, device, ProtocolOperation.Login, 6));
+        Assert.False(protocol.IsConfirmation(acknowledgement, device, ProtocolOperation.Heartbeat, 8));
+        Assert.Null(protocol.CreateDownstreamResponse(acknowledgement, device, sequence: 1));
+        Assert.Equal(DownstreamClassificationKind.GatherV4Acknowledgement, acknowledgementClassification.Kind);
+    }
+
+    /// <summary>
+    /// 验证 GatherV4 下行命令应答保留 A3 并复用 PSEQ，使服务端 Code-A3-PSEQ 标识可以释放当前在途窗口。
+    /// </summary>
+    [Fact]
+    public void GatherV4DownstreamResponse_PreservesA3AndPseq()
+    {
+        var options = TestOptionsFactory.Create();
+        options.Target.CompatibilityProfile = ServerCompatibilityProfile.GatherV4;
+        var device = DeviceAddressAllocator.Allocate(options)[0];
+        var protocol = LoadTestProtocolFactory.Create(options.Target);
+        var raw = protocol.CreateLoginFrame(device, 9);
+        raw[6] = 0x4B;
+        raw[11] = 0x4A;
+        raw[12] = 0x0C;
+        raw[13] = 0x79;
+        raw[^2] = QGdw3761Codec.CalculateChecksum(raw.AsSpan(6, raw.Length - 8));
+        var command = Assert.IsType<QGdw3761Frame>(protocol.Read(raw).Frame);
+
+        var plan = Assert.IsType<DownstreamResponsePlan>(
+            protocol.CreateDownstreamResponse(command, device, sequence: 1));
+        var response = Assert.IsType<QGdw3761Frame>(
+            protocol.Read(Assert.IsType<byte[]>(plan.Payload)).Frame);
+        var classification = Assert.IsAssignableFrom<IDownstreamFrameClassifier>(protocol)
+            .ClassifyDownstream(command, device);
+
+        Assert.Equal(DownstreamResponseKind.GatherV4Command, plan.Kind);
+        Assert.Equal(command.MasterStationAddress, response.MasterStationAddress);
+        Assert.Equal(command.Sequence, response.Sequence);
+        Assert.Equal(DownstreamClassificationKind.GatherV4Command, classification.Kind);
+        Assert.True(classification.IsRecognizedCommand);
+    }
+
+    /// <summary>验证 GatherV4 可复现延迟、丢弃、重复、错误 A3 和错误 PSEQ 应答。</summary>
+    /// <param name="mode">待模拟的终端应答模式。</param>
+    /// <param name="expectedSendCount">预期写出次数。</param>
+    [Theory]
+    [InlineData(GatherV4ResponseMode.Delayed, 1)]
+    [InlineData(GatherV4ResponseMode.Drop, 0)]
+    [InlineData(GatherV4ResponseMode.Duplicate, 2)]
+    [InlineData(GatherV4ResponseMode.WrongA3, 1)]
+    [InlineData(GatherV4ResponseMode.WrongPseq, 1)]
+    public void GatherV4ResponseMode_CreatesExpectedAssociationFault(
+        GatherV4ResponseMode mode,
+        int expectedSendCount)
+    {
+        var options = TestOptionsFactory.Create();
+        options.Target.CompatibilityProfile = ServerCompatibilityProfile.GatherV4;
+        options.Workload.GatherV4Response.Mode = mode;
+        options.Workload.GatherV4Response.DelayMilliseconds = 321;
+        options.Safety.AllowFaultInjection = true;
+        var device = DeviceAddressAllocator.Allocate(options)[0];
+        var protocol = LoadTestProtocolFactory.Create(options);
+        var command = CreateGatherReadingRequest(protocol, device, masterStationAddress: 37, sequence: 9, point: 1);
+
+        var plan = Assert.IsType<DownstreamResponsePlan>(
+            protocol.CreateDownstreamResponse(command, device, sequence: 2));
+
+        Assert.Equal(expectedSendCount, plan.SendCount);
+        Assert.Equal(mode == GatherV4ResponseMode.Delayed ? 321 : 0, plan.Delay.TotalMilliseconds);
+        if (expectedSendCount == 0)
+        {
+            Assert.Null(plan.Payload);
+            return;
+        }
+
+        var response = Assert.IsType<QGdw3761Frame>(protocol.Read(Assert.IsType<byte[]>(plan.Payload)).Frame);
+        Assert.Equal(mode == GatherV4ResponseMode.WrongA3, response.MasterStationAddress != command.MasterStationAddress);
+        Assert.Equal(mode == GatherV4ResponseMode.WrongPseq, response.Sequence != command.Sequence);
+    }
+
+    /// <summary>验证 GatherV4 业务上报模板按当前设备重写地址和 PSEQ，并保持业务 AFN 后重新计算校验和。</summary>
+    [Fact]
+    public void GatherV4ReportTemplate_RewritesDeviceAndSequence()
+    {
+        var options = TestOptionsFactory.Create();
+        options.Devices.Count = 2;
+        var devices = DeviceAddressAllocator.Allocate(options);
+        var sourceProtocol = LoadTestProtocolFactory.Create(LoadProtocol.QGdw3761);
+        var template = sourceProtocol.CreateLoginFrame(devices[0], 1);
+        template[12] = 0x0E;
+        template[^2] = QGdw3761Codec.CalculateChecksum(template.AsSpan(6, template.Length - 8));
+        options.Target.CompatibilityProfile = ServerCompatibilityProfile.GatherV4;
+        options.Workload.ReportsEnabled = true;
+        options.Workload.GatherV4Report.FrameHexTemplate = Convert.ToHexString(template);
+
+        Assert.Empty(LoadTestOptionsValidator.Validate(options));
+        var protocol = LoadTestProtocolFactory.Create(options);
+        var reportRaw = Assert.IsType<byte[]>(protocol.CreateReportFrame(devices[1], 11, DateTimeOffset.Now));
+        var report = Assert.IsType<QGdw3761Frame>(protocol.Read(reportRaw).Frame);
+
+        Assert.True(report.IsValid);
+        Assert.Equal(devices[1].DeviceId, report.DeviceId);
+        Assert.Equal(0x0E, report.Afn);
+        Assert.Equal(11, report.Sequence);
+        Assert.True(report.ConfirmationRequested);
+    }
+
+    /// <summary>
     /// 验证 Gather 兼容模式应答老服务下行帧时原样保留 MSA，使 ConrLine 能关联当前指令。
     /// </summary>
     [Fact]
@@ -226,6 +360,7 @@ public sealed class LoadTestProtocolTests
         options.Target.CompatibilityProfile = ServerCompatibilityProfile.GatherTcpCenter;
         options.Workload.GatherReadingResponse.Mode = mode;
         options.Workload.GatherReadingResponse.DelayMilliseconds = 321;
+        options.Safety.AllowFaultInjection = true;
         var device = DeviceAddressAllocator.Allocate(options)[0];
         var protocol = LoadTestProtocolFactory.Create(options);
         var request = CreateGatherReadingRequest(protocol, device, masterStationAddress: 3, sequence: 2, point: 1);

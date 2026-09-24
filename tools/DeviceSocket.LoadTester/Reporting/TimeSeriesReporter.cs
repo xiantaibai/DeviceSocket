@@ -117,7 +117,7 @@ internal sealed class TimeSeriesReporter(
                     $"建连={entry.Metrics.ConnectionAttempts:N0} 失败={entry.Metrics.ConnectionFailed:N0} " +
                     $"重连={entry.Metrics.ReconnectsScheduled:N0} API={entry.Metrics.ApiRequestsSucceeded:N0}/{entry.Metrics.ApiRequestsFailed:N0} " +
                     $"离线跳过={entry.Metrics.ApiRequestsSkippedOffline:N0} " +
-                    $"读表应答={entry.Metrics.GatherReadingCommandsResponded:N0}/{entry.Metrics.GatherReadingCommandsReceived:N0} " +
+                    $"旧读表应答={entry.Metrics.GatherReadingCommandsResponded:N0}/{entry.Metrics.GatherReadingCommandsReceived:N0} " +
                     $"CPU={entry.Resources.CpuPercent:F1}% " +
                     $"内存={entry.Resources.WorkingSetBytes / 1024d / 1024d:F0}MiB");
             }

@@ -219,7 +219,14 @@ public static class QGdw3761Codec
     /// <param name="kind">链路接口检测业务类型。</param>
     /// <param name="sequence">低 4 位帧序号。</param>
     /// <param name="heartbeatTime">心跳中的终端时钟；为空时使用当前时间。</param>
-    public static byte[] CreateLinkRequest(string administrativeDivision, ushort terminalAddress, QGdw3761LinkMessageKind kind, byte sequence = 0, DateTimeOffset? heartbeatTime = null)
+    /// <param name="confirmationRequested">是否设置 CON=1 请求主站确认；默认 false 兼容现有 DeviceSocket 和 Gather.TcpCenter 行为。</param>
+    public static byte[] CreateLinkRequest(
+        string administrativeDivision,
+        ushort terminalAddress,
+        QGdw3761LinkMessageKind kind,
+        byte sequence = 0,
+        DateTimeOffset? heartbeatTime = null,
+        bool confirmationRequested = false)
     {
         var function = kind switch
         {
@@ -236,7 +243,8 @@ public static class QGdw3761Codec
         var application = new List<byte>
         {
             0x02,
-            (byte)(0x60 | (sequence & 0x0F)),
+            // GatherV4 仅在 CON=1 时生成登录和心跳 ACK；其他服务端继续使用默认 CON=0，避免改变既有协议行为。
+            (byte)(0x60 | (confirmationRequested ? 0x10 : 0x00) | (sequence & 0x0F)),
             0x00, 0x00,
             (byte)(1 << (function - 1)), 0x00
         };

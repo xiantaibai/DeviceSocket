@@ -384,6 +384,12 @@ internal sealed record LoadGeneratorResourceSummary
 
     /// <summary>获取最大线程池排队工作项数。</summary>
     public required long MaximumPendingWorkItems { get; init; }
+
+    /// <summary>获取 LoadTester 进程最大操作系统线程数；旧报告缺少该字段时为 0。</summary>
+    public required int MaximumProcessThreadCount { get; init; }
+
+    /// <summary>获取 LoadTester 进程最大句柄数；非 Windows 或旧报告缺少该字段时为 0。</summary>
+    public required int MaximumProcessHandleCount { get; init; }
 }
 
 /// <summary>

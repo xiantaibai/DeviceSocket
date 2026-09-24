@@ -220,6 +220,7 @@ internal static class DetailedReportWriter
         builder.AppendLine($"| 登录 P50/P95/P99 | {metrics.LoginLatency.Percentile(0.5)}/{metrics.LoginLatency.Percentile(0.95)}/{metrics.LoginLatency.Percentile(0.99)} ms |");
         builder.AppendLine($"| HTTP P50/P95/P99 | {metrics.ApiRequestLatency.Percentile(0.5)}/{metrics.ApiRequestLatency.Percentile(0.95)}/{metrics.ApiRequestLatency.Percentile(0.99)} ms |");
         builder.AppendLine($"| 负载机CPU/工作集峰值 | {analysis.LoadGeneratorResources.MaximumCpuPercent:F2}%/{Bytes(analysis.LoadGeneratorResources.MaximumWorkingSetBytes)} |");
+        builder.AppendLine($"| 负载机进程线程/句柄峰值 | {analysis.LoadGeneratorResources.MaximumProcessThreadCount:N0}/{analysis.LoadGeneratorResources.MaximumProcessHandleCount:N0} |");
         if (analysis.Server is { } server)
         {
             builder.AppendLine($"| 服务物理/绑定/业务在线峰值 | {server.MaximumSocketConnections:N0}/{server.MaximumBoundDeviceConnections:N0}/{server.MaximumBusinessOnlineDevices:N0} |");

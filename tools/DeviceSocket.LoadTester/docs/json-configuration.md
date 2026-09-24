@@ -6,7 +6,7 @@
 
 1. 从 [Scenarios](../Scenarios) 目录选择最接近目标的场景并复制一份，不建议从空 JSON 开始编写。
 2. 至少核对 `role`、`target`、`devices`、`scenario` 和 `acceptance`。
-3. 测试 Gather 老服务 HTTP 下发时，再核对 `commandWorkload`、真实设备 CSV 和鉴权环境变量。
+3. 测试 Gather.TcpCenter 或 GatherV4 HTTP 下发时，再核对 `commandWorkload`、真实设备 CSV、兼容配置和可选鉴权环境变量。
 4. 正式压测使用新的 `distributed.runId`，改造前、改造后除 RunId 外应保持同一份场景配置。
 5. 先用 10～100 台验证地址、端口、登录和报告，再扩大到 5,000～10,000 台。
 
@@ -91,7 +91,7 @@ dotnet run --project tools\DeviceSocket.LoadTester\DeviceSocket.LoadTester.cspro
 | `target.host` | string | `127.0.0.1` | TCP 服务主机名或 IP，不能为空 | 本地调试填回环地址；内网/外网负载机填写其实际可达地址 |
 | `target.port` | int | `0` | 有效端口为 1～65535；省略或填 0 时，376.1 自动使用 5001，645 自动使用 5002 | 连接 Gather 老服务时必须按其 `App.config` 填实际监听端口 |
 | `target.protocol` | enum | `qGdw3761` | `qGdw3761`：Q/GDW 376.1；`dlt6452007`：DL/T 645-2007 | 集中器场景用 376.1，电表直连场景用 645 |
-| `target.compatibilityProfile` | enum | `deviceSocket` | `deviceSocket` 使用当前 Gateway 的严格确认规则；`gatherTcpCenter` 接受 Gather 老服务的固定 SEQ、无回显数据区确认，并允许 CSV 真实设备映射中的特殊终端地址 `00000` | 老项目必须设置 `gatherTcpCenter`；该值目前只能与 `qGdw3761` 组合 |
+| `target.compatibilityProfile` | enum | `deviceSocket` | `deviceSocket` 使用当前 Gateway 的严格确认规则；`gatherTcpCenter` 接受老服务固定 SEQ、无回显确认及 CSV 特殊地址 `00000`；`gatherV4` 使用 CON=1 登录/心跳、严格匹配 AFN=00H/F1 和 PSEQ，并按设备编号、A3、PSEQ 应答命令 | GatherV4 必须设置 `gatherV4`；后两种兼容配置目前只能与 `qGdw3761` 组合 |
 
 ## 设备身份：`devices`
 
@@ -145,6 +145,8 @@ meterId,deviceId
 | `workload.reportIntervalSeconds` | int | `300` | 上报周期秒数，开启上报时必须大于 0 | 按真实设备采集周期配置 |
 | `workload.jitterSeconds` | int | `10` | 0～小于上报周期，用于打散设备上报；0 表示同时上报 | 稳态用抖动，上报风暴用 0 |
 | `workload.gatherReadingResponse` | object | 默认对象 | Gather 老服务读表命令的终端应答模型 | 调用 `api/ammeter/reading` 做端到端测试时使用 |
+| `workload.gatherV4Response` | object | 默认对象 | GatherV4 下行命令按 A3/PSEQ 应答及故障模型 | 调用 Handmould/IssueCmd 或直接写 V4 命令队列时使用 |
+| `workload.gatherV4Report` | object | 默认对象 | GatherV4 真实主动上报完整帧模板；工具只改写设备地址、PSEQ、CON 和校验和 | 验证周期上报、ACK 和上报/命令混合流量 |
 
 ### Gather 读表应答：`workload.gatherReadingResponse`
 
@@ -158,16 +160,36 @@ meterId,deviceId
 | `workload.gatherReadingResponse.baseReadingKwh` | decimal | `1000` | 第一台设备的基础电能示值，范围 0～999999.9999 kWh | 生成可识别且有效的测试读数 |
 | `workload.gatherReadingResponse.deviceStepKwh` | decimal | `0.01` | 每增加一个全局设备序号时读数增加的 kWh，不能小于 0 | 避免一万台终端返回完全相同的数据 |
 
+### GatherV4 命令应答：`workload.gatherV4Response`
+
+| JSON 路径 | 类型 | 默认值/零值 | 关键影响 | 典型使用场景 |
+|---|---|---|---|---|
+| `workload.gatherV4Response.enabled` | bool | `true` | false 表示识别下行命令但全部不应答，必须显式开启 `safety.allowFaultInjection` | 验证单设备在途命令超时、恢复和后续队列是否阻塞 |
+| `workload.gatherV4Response.mode` | enum | `normal` | `normal` 正确应答；`delayed` 延迟；`drop` 丢弃；`duplicate` 重复；`wrongA3` 使用错误主站地址；`wrongPseq` 使用错误启动序号 | 验证慢设备、重复回包幂等和 Code-A3-PSEQ 严格关联 |
+| `workload.gatherV4Response.affectedDevicePercentage` | double | `100` | 0～100；只有命中的稳定设备桶使用异常模式，0 表示所有设备正常 | 在一万台正常终端中混入少量异常终端 |
+| `workload.gatherV4Response.delayMilliseconds` | int | `1000` | delayed 模式额外等待毫秒数，不能小于 0；0 表示立即应答 | 构造接近服务端命令超时的慢设备 |
+
+关闭应答或使用非 `normal` 模式仅允许 `target.compatibilityProfile=gatherV4`，并且必须设置 `safety.allowFaultInjection=true`。`wrongA3` 和 `wrongPseq` 生成的是校验和正确但不能命中当前在途 Mark 的报文，用来验证服务端不会错误释放下一条命令。
+
+### GatherV4 主动上报：`workload.gatherV4Report`
+
+| JSON 路径 | 类型 | 默认值/null 语义 | 关键影响 | 典型使用场景 |
+|---|---|---|---|---|
+| `workload.gatherV4Report.frameHexTemplate` | string/null | `null` 表示未配置；`reportsEnabled=true` 时无效 | 必须是校验和正确、无尾随字节、不超过 4096 字节的终端主动上行帧（DIR=1、PRM=1）；允许空格、逗号、短横线分隔 | 从 Debugger 或真实设备日志复制一条已验证采集项上报，避免工具猜测业务数据区 |
+| `workload.gatherV4Report.confirmationRequested` | bool | `true` | 工具改写模板 SEQ 时设置 CON=1；false 清除 CON，其他 SEQ 高位保持模板原值；止血版识别确认但尚未单列主动上报 ACK RTT/超时 | 请求服务端 ACK，或模拟协议明确无需确认的上报 |
+
+模板中的行政区划和终端地址会按当前虚拟设备重写，PSEQ 会按设备会话递增，CS 会重新计算；A3、AFN、PN、FN、业务数据和时间标签原样保留。GatherV4 返回的 AFN=00H/F1 会被分类为 `gatherV4Acknowledgement`，不会再向 ACK 发送确认，避免形成确认循环。
+
 ## HTTP 指令负载：`commandWorkload`
 
-该部分当前只支持 `qGdw3761 + gatherTcpCenter`，调用老服务 `api/ammeter/reading`。TCP 收包循环与 HTTP 请求使用独立任务和连接池。
+该部分支持 `qGdw3761 + gatherTcpCenter` 和 `qGdw3761 + gatherV4`。旧服务调用 `api/ammeter/reading`，GatherV4 调用 `/Handmould/IssueCmd` 或 `/Handmould/IssueCmdSync`；TCP 收包循环与 HTTP 请求使用独立任务和连接池。
 
 | 字段 | 类型 | 默认值 | 意义与约束 | 使用场景 |
 | --- | --- | --- | --- | --- |
 | `commandWorkload.enabled` | bool | `false` | 是否执行 HTTP 指令阶段；`apiOnly`/`combined` 必须为 true | 只测试连接时关闭，测试服务端下发时开启 |
-| `commandWorkload.baseUrl` | string | 空 | Gather.Control.Api 的绝对 HTTP/HTTPS 根地址 | 例如 `http://192.168.111.18:9011`，不是 TCP 地址 |
+| `commandWorkload.baseUrl` | string | 空 | Gather 业务 API 的绝对 HTTP/HTTPS 根地址 | 例如 `http://192.168.111.18:9011`，不是 TCP 地址 |
 | `commandWorkload.targetDeviceSource` | enum | `fixedOrdinal` | `fixedOrdinal` 按 GlobalOrdinal 固定截取 HTTP 目标设备；`onlineRegistry` 从本进程 TCP 会话的全部在线设备快照中按阶段数量选取目标，只允许与 `combined` 角色组合 | 需要保证 HTTP 只请求当前真正在线的设备时使用 `onlineRegistry`；`apiOnly` 保持 `fixedOrdinal` |
-| `commandWorkload.endpointPath` | string | `/api/ammeter/reading` | POST 接口相对路径，不能为空 | 老服务路由有差异时覆盖 |
+| `commandWorkload.endpointPath` | string | `/api/ammeter/reading` | POST 接口相对路径，不能为空；GatherV4 只允许 `/Handmould/IssueCmd` 或 `/Handmould/IssueCmdSync`，启动校验会拒绝误用旧入口 | Gather.TcpCenter 使用默认值；GatherV4 必须显式覆盖 |
 | `commandWorkload.authorizationHeaderName` | string | `gather-authorize-key` | 鉴权请求头名称；与环境变量名任一为空时不发送鉴权头 | 正式环境通常保持默认名称 |
 | `commandWorkload.authorizationKeyEnvironmentVariable` | string | `GATHER_AUTHORIZE_KEY` | 保存鉴权值的环境变量名；配置了头名和变量名但环境变量缺失时终止并出中止报告 | 密钥不写入 JSON、控制台或报告 |
 | `commandWorkload.deviceMappingFile` | string/null | `null` | HTTP 使用的 `meterId,deviceId` CSV；为空且设备为 CSV 模式时复用 `devices.deviceMappingFile`；`00000` 的兼容范围与设备 CSV 完全一致 | TCP 和 HTTP 使用不同映射时才单独设置 |
@@ -176,13 +198,28 @@ meterId,deviceId
 | `commandWorkload.operationSource` | int | `6` | 请求体 `oper_source`，默认对应老项目 Test 来源 | 除非老服务枚举定义不同，否则保持 6 |
 | `commandWorkload.readingModel` | int | `0` | 请求体 `readingModel`，默认普通 Q/GDW 376.1 抄读 | 测试其他抄读模式时按老 API 枚举填写 |
 | `commandWorkload.readingCode` | int | `0` | 请求体 `readingCode`，原样透传给老 API | 需要指定读数项时按业务约定填写 |
-| `commandWorkload.requestTimeoutSeconds` | int | `70` | 单次 HTTP 端到端超时秒数，必须大于 0 | `showResult=true` 时应大于老 API 约 60 秒的设备结果等待上限 |
+| `commandWorkload.gatherV4` | object | 默认对象 | GatherV4 IssueCmd 专属业务参数；设备 AreaCode、Address 和 AmmeterId 仍由当前分片映射生成 | 仅 `target.compatibilityProfile=gatherV4` 时生效 |
+| `commandWorkload.requestTimeoutSeconds` | int | `70` | 单次 HTTP 端到端超时秒数，必须大于 0；GatherV4 必须严格大于 60 秒，避免客户端先于服务端结果等待超时 | 同步结果阶段建议保留额外网络和序列化余量 |
 | `commandWorkload.requiredOnlineRate` | double | `0.98` | 0～1 且大于 0；阶段未配置明确在线数时，按 `targetDeviceCount × requiredOnlineRate` 计算在线门槛；`onlineRegistry` 可由任意当前在线设备满足阶段配额 | 普通全量阶段要求 98% 在线再发命令 |
 | `commandWorkload.minimumOnlineCount` | int/null | `null` | 全部分片合计最低在线数，范围 0～`devices.count`；null 才按阶段目标和 `requiredOnlineRate` 计算，0 表示全局关闭在线门槛；阶段字段优先于该值 | 配成 10000 可保证功能冒烟和小流量阶段也必须等一万台业务在线后启动 |
 | `commandWorkload.onlineStableSeconds` | int | `30` | 在线门槛连续保持秒数，不能小于 0；0 表示达到即放行 | 避免刚上线又掉线时提前开始 API 压测 |
 | `commandWorkload.onlineWaitTimeoutSeconds` | int | `600` | 等待稳定在线的最长秒数，必须大于 0 | 一万台上线较慢时可放大；超时动作由阶段决定 |
 | `commandWorkload.startDelaySeconds` | int | `0` | HTTP 工作负载启动前额外等待秒数，不能小于 0 | `apiOnly` 部署时等待另一台设备负载机先上线 |
 | `commandWorkload.phases` | array | `[]` | 按顺序执行的 HTTP 阶段；启用时至少一个 | 从小流量功能验证逐步扩展到全量和阻塞场景 |
+
+### GatherV4 指令参数：`commandWorkload.gatherV4`
+
+| JSON 路径 | 类型 | 默认值/零值 | 关键影响 | 典型使用场景 |
+|---|---|---|---|---|
+| `commandWorkload.gatherV4.gatherCode` | string | 空值无效 | 必须与 Communication、DirectiveService 和 IssueWebApi 使用的采集服务编码完全一致，否则命令会进入错误分区或无法消费 | 例如测试环境配置的 `V4-Gather-8890` |
+| `commandWorkload.gatherV4.meterType` | int | `1` | GatherV4 `MeterTypeEnum` 数值；必须大于 0，1 通常表示电表 | 切换水表、燃气表或其他已支持业务模型 |
+| `commandWorkload.gatherV4.itemCodes` | string[] | `[]` 无效 | 至少一个非空采集项；决定服务端生成的实际 AFN/FN 及结果解析路径 | 先选择测试库和设备真实支持的一项抄读编码 |
+| `commandWorkload.gatherV4.density` | int | `0` 表示无冻结密度 | 原样传给 HandmouldRequest；冻结任务按 GatherV4 约定使用 -1、1、2、3、245、255 等值 | 普通实时抄读保持 0，冻结曲线按业务配置 |
+| `commandWorkload.gatherV4.point` | int | `0` 表示由采集项自身决定 | 不能小于 0；冻结曲线时控制数据点数 | 实时单点或历史多点数据测试 |
+| `commandWorkload.gatherV4.dataTime` | string/null | `null` 表示每次请求取当前本地时间 | 非空时原样发送，可固定历史时间复现问题 | 回归同一冻结时刻时填固定值 |
+| `commandWorkload.gatherV4.dataTimeFormat` | string | `yyyy-MM-dd HH:mm:ss` | 仅 `dataTime=null` 时用于格式化当前本地时间，必须是有效 .NET 日期格式 | 服务端要求不同时间精度时覆盖 |
+
+GatherV4 请求的 `areaCode` 取设备编号前四位，`address` 取后五位，`ammeterId` 取 CSV 第一列或 `meterIdStart + GlobalOrdinal`。`/Handmould/IssueCmd` 会同步等待设备结果，因此所有阶段的 `showResult` 必须为 true，且 `requestTimeoutSeconds` 必须大于 60 秒；`Status=false` 既可能是参数失败，也可能是命令已经入队后的设备结果超时，压测工具不会擅自从“估算入队数”中扣除。
 
 有效设备映射与 `meterIdStart` 必须二选一。CSV 设备模式会自动把 `devices.deviceMappingFile` 当作有效 HTTP 映射，因此这时不要再设置 `meterIdStart`。
 
@@ -197,7 +234,7 @@ meterId,deviceId
 | `commandWorkload.phases[].requestsPerDevice` | int | `1` | 每台目标设备发送的命令数，必须大于 0 | 大于 1 用于验证同设备连续命令是否排队阻塞 |
 | `commandWorkload.phases[].requestsPerSecond` | int | `10` | 所有分片合计请求数/秒，必须大于 0 | 控制业务 API 吞吐，逐级寻找容量拐点 |
 | `commandWorkload.phases[].maxConcurrency` | int | `10` | 所有分片合计最大在途 HTTP 请求数，必须大于 0 | `showResult=true` 时限制同步等待请求占用 |
-| `commandWorkload.phases[].showResult` | bool | `false` | false 表示 API 快速受理；true 表示 API 同步等待设备业务结果 | false 测下发吞吐，true 测端到端应答和阻塞风险 |
+| `commandWorkload.phases[].showResult` | bool | `false` | GatherTcpCenter 中 false 表示快速受理、true 表示同步等待；GatherV4 IssueCmd 固定为同步结果接口，全部阶段必须为 true | 旧服务可分别测试受理吞吐和同步闭环；V4 只按同步结果统计 |
 | `commandWorkload.phases[].pauseAfterSeconds` | int | `0` | 阶段结束后的等待秒数，不能小于 0；0 表示立即进入下一阶段 | 留出命令队列和服务端资源回落时间 |
 | `commandWorkload.phases[].minimumOnlineCount` | int/null | `null` | 阶段要求的全局在线数，范围 0～`devices.count`；null 继承 `commandWorkload.minimumOnlineCount`，两者都为空才按阶段目标和在线率计算；0 表示不等待。允许大于本阶段目标数 | 小规模探测也必须等全部一万台稳定在线时设 10000 |
 | `commandWorkload.phases[].onlineStableSeconds` | int/null | `null` | null 继承全局稳定时长，0 表示达到在线数立即放行 | 为功能冒烟设置较短稳定时间，为全量阶段设置较长时间 |
@@ -205,7 +242,7 @@ meterId,deviceId
 | `commandWorkload.phases[].onlineGateFailureAction` | enum | `skipPhase` | `skipPhase` 跳过并继续出报告；`runPhase` 在线不足仍执行；`abortRun` 终止本轮并出部分报告 | 正式回归推荐 skipPhase；诊断离线请求才用 runPhase；严格前置条件用 abortRun |
 | `commandWorkload.phases[].minimumApiSuccessRate` | double/null | `null` | 0～1；null 不做阶段级验收。`showResult=false` 表示 API 异步接受率，`showResult=true` 表示同步业务结果成功率 | 避免整轮成功率掩盖某一级 RPS 或最终同步阶段失败 |
 | `commandWorkload.phases[].maximumP95Milliseconds` | long/null | `null` | 当前阶段独立 HTTP 延迟 P95 上限，单位毫秒；null 不验收，设置后必须大于 0 | 分别限制异步 API 和同步结果阶段延迟 |
-| `commandWorkload.phases[].drainEnabled` | bool | `false` | true 时请求发送结束后等待原始下行、应答达到门槛并连续静默；false 保持旧场景立即进入暂停或下一阶段的行为 | 分级 RPS、全量命令和同设备多命令阶段建议开启 |
+| `commandWorkload.phases[].drainEnabled` | bool | `false` | true 时请求发送结束后等待原始下行、应答达到门槛并连续静默；GatherV4 开启该项时必须同时启用 `reporting.downstreamDiagnostics.enabled`，否则启动校验失败 | 分级 RPS、全量命令和同设备多命令阶段建议开启 |
 | `commandWorkload.phases[].minimumRawDeliveryRate` | double | `0.95` | 0～1；按 `min(至少关联到一帧原始下行的唯一命令数, API估算入队数) / API估算入队数` 计算。未知协议格式也算服务端已下发；只在开启排空和下行诊断时使用，关闭诊断时退回旧的读表收到计数 | 单独确认服务端是否消费并下发，避免把模拟器协议兼容缺口误判为服务端丢命令 |
 | `commandWorkload.phases[].minimumDeliveryRate` | double | `0.95` | 0～1；保留旧字段名以兼容场景，当前含义是 `协议已识别唯一命令数 / API估算入队数`，仅排空开启时生效 | 验收模拟器对正式服务实际下行格式的兼容覆盖率 |
 | `commandWorkload.phases[].minimumResponseRate` | double | `0.99` | 0～1；按已成功应答唯一命令数/协议已识别唯一命令数计算，仅排空开启时生效；全部下行为未知格式时排空会在原始下行静默后结束，再由识别率明确失败 | 判断模拟终端对已识别命令是否完整应答 |
@@ -249,6 +286,10 @@ meterId,deviceId
 | `scenario.phases[].durationSeconds` | int | `60` | 阶段保持时间秒数，必须大于 0 | 稳态阶段通常比爬升阶段更长 |
 | `scenario.phases[].targetDevicePercentage` | double | `100` | 0～100，按全局设备数计算本阶段目标在线设备；0 会缩容并停止所有设备 | 50 表示保持一半规模，100 表示全部设备 |
 | `scenario.phases[].connectionsPerSecond` | int/null | `null` | null 继承 `connection.connectionsPerSecond`；设置后必须大于 0 | 为不同爬升阶段配置不同速率 |
+| `scenario.phases[].waitForOnline` | bool | `false` | true 时扩容后先等待当前分片协议在线达到门槛并稳定，超时会终止本轮且保留部分报告；false 保持按固定时长推进 | GatherV4 阶梯连接、稳态前置和重启前建议开启 |
+| `scenario.phases[].minimumOnlineRate` | double | `0.98` | 0～1；开启在线屏障时必须大于 0，按当前分片目标设备数向上取整最低在线数 | 容量基线可设 0.98，严格重启前置可设 1.0 |
+| `scenario.phases[].onlineStableSeconds` | int | `0` | 在线门槛需要连续保持的秒数，不能小于 0；0 表示达到即通过，跌破门槛会重新计时 | 防止刚上线又掉线时误进业务或重启阶段 |
+| `scenario.phases[].onlineWaitTimeoutSeconds` | int | `600` | 在线屏障最长等待秒数；开启屏障时必须大于 0 | 登录慢路径可按设备规模放大到 900～1800 秒 |
 | `scenario.phases[].expectedServerRestart` | bool | `false` | true 表示本阶段首次从完整在线跌落是计划内服务端重启；同阶段恢复后再次掉线仍属于非预期事件。true 时必须启用 `manualAction.enabled` | 真实停止并启动 Gather.TcpCenter 的重启恢复场景 |
 | `scenario.phases[].manualAction` | object | 见下表 | 阶段扩容完成后先执行准备倒计时和操作窗口，再开始 `durationSeconds` 保持计时；所有分片都会等待相同总时长 | 需要人工重启、切换网络或执行外部操作的阶段 |
 | `scenario.phases[].faults` | object | 全部为 0 | 本阶段故障快照；进入下一阶段时被下一阶段配置覆盖 | 只在 fault 阶段设置非零值，恢复阶段恢复为零 |
@@ -329,9 +370,9 @@ meterId,deviceId
 | `acceptance.minimumStableOnlineSeconds` | double/null | `null` | 报告测量快照前已经连续保持完整目标在线的最短秒数，不能小于 0；0 仅要求快照时在线 | 防止刚恢复满在线就结束造成假通过 |
 | `acceptance.minimumObservedAuthenticatedDevices` | int/null | `null` | 服务端观测到的本轮新增认证设备峰值下限 | 校验客户端认为在线与服务端认证数一致；必须启用 serverObservation |
 | `acceptance.maximumObservedAuthenticatedDevices` | int/null | `null` | 服务端观测到的本轮新增认证设备峰值上限 | 限制重复 Session 或连接泄漏；必须启用 serverObservation |
-| `acceptance.minimumApiSuccessRate` | double/null | `null` | HTTP 状态和响应体 `success=true` 的业务成功率下限 | HTTP 指令负载验收 |
+| `acceptance.minimumApiSuccessRate` | double/null | `null` | HTTP 状态和业务响应成功率下限；Gather.TcpCenter 读取 `success=true`，GatherV4 读取 `Status=true` | HTTP 指令负载验收 |
 | `acceptance.minimumApiTargetCoverageRate` | double/null | `null` | 取值 0～1；实际发起 HTTP 请求数除以“已发起 + 因设备离线跳过”的计划请求数，空值不验收 | 防止只执行少量在线目标时 `minimumApiSuccessRate` 仍显示很高 |
-| `acceptance.minimumGatherReadingResponseRate` | double/null | `null` | 模拟终端已应答读表命令数/收到读表命令数的下限 | 端到端设备消息应答验收 |
+| `acceptance.minimumGatherReadingResponseRate` | double/null | `null` | 旧 GatherTcpCenter 专用：模拟终端已应答读表命令数/收到读表命令数的下限；GatherV4 必须为 null | V4 使用 `minimumCommandDeliveryRate`、`minimumCommandRecognitionRate` 和阶段 `minimumResponseRate` |
 | `acceptance.maximumApiP95Milliseconds` | long/null | `null` | HTTP 端到端延迟 P95 上限毫秒数，设置后必须大于 0 | 检测同步等待、队列阻塞和服务端卡顿 |
 | `acceptance.minimumAsyncApiAcceptanceRate` | double/null | `null` | 0～1；仅汇总 `showResult=false` 阶段的业务成功数/发起数，null 不验收 | 防止同步结果失败稀释或污染异步 API 接受率 |
 | `acceptance.minimumSyncResultSuccessRate` | double/null | `null` | 0～1；仅汇总 `showResult=true` 阶段的业务成功数/发起数，null 不验收 | 单独验收结果订阅和同步等待闭环 |
@@ -349,10 +390,24 @@ meterId,deviceId
 | `distributed.shardIndex` | int | `0` | 当前节点零基分片编号，范围 0～`shardCount-1` | 两台负载机分别使用 0、1 |
 | `distributed.shardCount` | int | `1` | 分片总数，必须大于 0 且不能大于设备总数 | 决定设备、HTTP RPS、并发和在线门槛的分摊 |
 | `distributed.startAtUtc` | ISO-8601/null | `null` | 多节点统一 UTC 启动时间；null 立即启动 | 多机正式对比测试减少启动时间偏差 |
+| `distributed.randomSeed` | int/null | `null` 表示从 RunId 稳定派生；`0` 是有效显式种子 | 控制随机设备、抖动和故障选择的可复现性；所有分片必须相同并参与报告配置签名 | 改造前后使用不同 RunId 但希望完全复现相同随机负载时显式填写 |
 
 多机报告合并要求 RunId、分片总数、目标、设备空间、流量和验收配置一致。`shardIndex`、输出目录和机器名允许不同。
 
 扩展到 30,000～50,000 台时，每台负载机必须部署内容一致的完整 CSV，不要手工拆分文件。CSV 数据行号是稳定全局序号，工具按 `GlobalOrdinal % shardCount` 自动分配设备；`devices.count`、TCP 建连速率、HTTP RPS、HTTP 并发和 HTTP 目标数继续填写所有分片合计值。只有 `connection.maxConcurrentConnecting` 是单个负载进程的本地上限。多节点启动方式和端口容量注意事项见项目 [LoadTester 使用说明](../README.md)。
+
+## 运行安全：`safety`
+
+| 字段 | 类型 | 默认值/零值 | 意义与约束 | 使用场景 |
+| --- | --- | --- | --- | --- |
+| `safety` | object | 默认对象 | 高负载、故障注入和目标白名单保护；会参与场景加载校验 | 建议所有共享及正式回归场景显式填写 |
+| `safety.environment` | string | `test` | 报告使用的环境标签，空值无效；工具不会根据该值自动推断权限 | 区分开发、测试、预发布环境 |
+| `safety.highLoadThreshold` | int | `10000` | 高负载保护设备数，必须大于 0；只有 `devices.count` 严格大于该值时触发 | 统一规定一万以上必须二次显式授权 |
+| `safety.allowHighLoad` | bool | `false` | false 时拒绝运行超过 `highLoadThreshold` 的场景 | 三万或五万场景必须显式设 true |
+| `safety.allowFaultInjection` | bool | `false` | false 时拒绝包含主动断连、延迟、丢包、校验破坏、重复帧或拆分写入的场景 | 重连风暴和异常报文测试必须显式设 true |
+| `safety.allowedTargets` | string[] | `[]` 表示兼容既有场景、不启用白名单 | 非空时 TCP 的 `target.host` 与已启用 HTTP 指令负载的 `commandWorkload.baseUrl` 主机都必须与某一项完全匹配；比较时忽略大小写，但不解析 DNS 别名，列表不能包含空白项 | 对共享五万台或 combined 脚本应同时固定 TCP 与 API 测试服务器 IP，换环境时必须同步审核 |
+
+`allowHighLoad` 和 `allowFaultInjection` 只是压测工具侧的显式意图确认，不代表目标环境已经具备容量。运行前仍需核对 HPSocket 最大连接数、设备容量、数据库测试数据、Redis 分区以及负载机端口范围。
 
 ## 场景选型
 
@@ -364,6 +419,9 @@ meterId,deviceId
 | `gather-tcpcenter-soak-10000.json` | 一万台六小时长稳；复制并替换完整 CSV 后可扩展到 3～5 万多分片 |
 | `gather-tcpcenter-reconnect-storm-50000.json` | 四分片五万台真实设备分阶段上线，人工重启老 TCP 服务并验收 98% 设备进入重连和恢复稳定性 |
 | `gather-tcpcenter-http-reading-50000.json` | 四分片五万台设备在线、全局最高 50 RPS、全量异步抄读一次和同设备多命令阻塞测试 |
+| `gatherv4-connections-10000.json` | GatherV4 一万台 CON=1 登录、F1 ACK、心跳和业务在线基线 |
+| `gatherv4-http-reading-10000.json` | GatherV4 一万台在线及 `/Handmould/IssueCmd` 同步端到端抄读；运行前必须填写真实 GatherCode、ItemCodes 和 CSV |
+| `gatherv4-reconnect-storm-10000.json` | GatherV4 一万台稳定在线后人工重启 Communication 服务，验证真实断线、自动重连、F1 再登录和恢复后稳定性 |
 
 ## 新增或修改字段时的维护清单
 

@@ -13,5 +13,10 @@ internal enum DownstreamResponseKind
     /// <summary>
     /// Gather.TcpCenter AFN=0CH/F129 读表业务响应。
     /// </summary>
-    GatherReading
+    GatherReading,
+
+    /// <summary>
+    /// GatherV4 使用设备编号、A3 和 PSEQ 关联的376.1命令响应。
+    /// </summary>
+    GatherV4Command
 }
