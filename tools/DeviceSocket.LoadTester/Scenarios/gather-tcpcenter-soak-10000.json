@@ -2,7 +2,7 @@
   // 六小时长稳场景：只维持真实设备在线和心跳，用于发现内存、线程、句柄、Socket 或 Redis 状态随时间增长。
   "role": "devicesOnly",
   "target": {
-    "host": "192.168.111.18",
+    "host": "192.168.111.222",
     "port": 6666,
     "protocol": "qGdw3761",
     "compatibilityProfile": "gatherTcpCenter"

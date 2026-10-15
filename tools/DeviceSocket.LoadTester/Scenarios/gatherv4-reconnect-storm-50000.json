@@ -1,0 +1,187 @@
+{
+  // GatherV4 五万台服务重启风暴：四台负载机达到稳定在线后，由操作人员重启 Communication，工具保持运行并自动重连。
+  "role": "devicesOnly",
+  "target": {
+    // 正式运行前替换为 GatherV4 Communication 测试地址，并同步更新 safety.allowedTargets。
+    "host": "192.168.111.222",
+    "port": 8890,
+    "protocol": "qGdw3761",
+    "compatibilityProfile": "gatherV4"
+  },
+  "devices": {
+    "count": 50000,
+    "generationMode": "csv",
+    // 所有节点必须部署内容完全一致的完整 CSV；工具按全局行号固定分配，禁止手工拆分文件。
+    "deviceMappingFile": "gatherv4-device-50000.csv"
+  },
+  "connection": {
+    "startMode": "ramp",
+    "connectionsPerSecond": 300,
+    "maxConcurrentConnecting": 1000,
+    "connectTimeoutSeconds": 5,
+    "loginTimeoutSeconds": 10,
+    "writeTimeoutSeconds": 5,
+    "noDelay": true
+  },
+  "heartbeat": {
+    "enabled": true,
+    "intervalSeconds": 60,
+    "jitterSeconds": 10,
+    "responseTimeoutSeconds": 10
+  },
+  "workload": {
+    "reportsEnabled": false,
+    "gatherV4Response": {
+      "enabled": true,
+      "mode": "normal"
+    }
+  },
+  "reconnect": {
+    // 服务恢复后从 250ms 起步并加入设备级稳定抖动，既保留风暴压力，也避免五万终端永久锁步。
+    "mode": "exponentialJitter",
+    "initialDelayMilliseconds": 250,
+    "maximumDelaySeconds": 10,
+    "multiplier": 2,
+    "jitterRatio": 0.5,
+    "maximumAttempts": 0
+  },
+  "scenario": {
+    "name": "gatherv4-reconnect-storm-50000",
+    "durationSeconds": 1,
+    "phases": [
+      {
+        "name": "canary-500",
+        "kind": "warmup",
+        "durationSeconds": 30,
+        "targetDevicePercentage": 1,
+        "connectionsPerSecond": 25,
+        "waitForOnline": true,
+        "minimumOnlineRate": 1.0,
+        "onlineStableSeconds": 5,
+        "onlineWaitTimeoutSeconds": 180
+      },
+      {
+        "name": "ramp-5000",
+        "kind": "ramp",
+        "durationSeconds": 120,
+        "targetDevicePercentage": 10,
+        "connectionsPerSecond": 100,
+        "waitForOnline": true,
+        "minimumOnlineRate": 0.98,
+        "onlineStableSeconds": 15,
+        "onlineWaitTimeoutSeconds": 600
+      },
+      {
+        "name": "ramp-25000",
+        "kind": "ramp",
+        "durationSeconds": 240,
+        "targetDevicePercentage": 50,
+        "connectionsPerSecond": 200,
+        "waitForOnline": true,
+        "minimumOnlineRate": 0.98,
+        "onlineStableSeconds": 30,
+        "onlineWaitTimeoutSeconds": 1200
+      },
+      {
+        "name": "ramp-50000",
+        "kind": "ramp",
+        "durationSeconds": 420,
+        "targetDevicePercentage": 100,
+        "connectionsPerSecond": 300,
+        "waitForOnline": true,
+        "minimumOnlineRate": 0.98,
+        "onlineStableSeconds": 60,
+        "onlineWaitTimeoutSeconds": 1800
+      },
+      {
+        // 至少 99% 在线并连续稳定两分钟后才允许进入人工重启阶段，避免把初次登录积压混入恢复时间。
+        "name": "steady-before-restart",
+        "kind": "steady",
+        "durationSeconds": 300,
+        "targetDevicePercentage": 100,
+        "connectionsPerSecond": 300,
+        "waitForOnline": true,
+        "minimumOnlineRate": 0.99,
+        "onlineStableSeconds": 120,
+        "onlineWaitTimeoutSeconds": 1800
+      },
+      {
+        // 本阶段不配置客户端主动断线，测量服务进程退出造成的真实远端断线、冷启动和重新登录。
+        "name": "restart-gatherv4-now",
+        "kind": "fault",
+        "durationSeconds": 180,
+        "targetDevicePercentage": 100,
+        "expectedServerRestart": true,
+        "manualAction": {
+          "enabled": true,
+          "message": "请在操作窗口内重启被测 GatherV4 Communication 服务；不要关闭 LoadTester。",
+          // 预留时间切换到服务器并确认 OpenTelemetry/系统监控正在采集。
+          "preparationSeconds": 20,
+          "operationSeconds": 60,
+          // 四机运行时只由 shard-000 提示，但四个分片都会等待相同的操作窗口。
+          "coordinatorOnlyPrompt": true
+        },
+        // 全局恢复速率为 1000/s，由四个分片自动分摊，避免节点数把风暴速率放大四倍。
+        "connectionsPerSecond": 1000
+      },
+      {
+        "name": "recovery-50000",
+        "kind": "recovery",
+        "durationSeconds": 600,
+        "targetDevicePercentage": 100,
+        "connectionsPerSecond": 1000,
+        "waitForOnline": true,
+        "minimumOnlineRate": 0.98,
+        "onlineStableSeconds": 120,
+        "onlineWaitTimeoutSeconds": 1200
+      },
+      {
+        "name": "cooldown",
+        "kind": "cooldown",
+        "durationSeconds": 30,
+        "targetDevicePercentage": 0,
+        "connectionsPerSecond": 300
+      }
+    ]
+  },
+  "reporting": {
+    "outputDirectory": "load-test-results",
+    "sampleIntervalSeconds": 1,
+    "checkpointIntervalSeconds": 10,
+    "writeConsoleSummary": true
+  },
+  "serverObservation": {
+    "enabled": false
+  },
+  "acceptance": {
+    // 初始容量质量只统计计划重启前阶段，避免预期中断稀释连接和登录成功率。
+    "usePreRestartPhaseRates": true,
+    "minimumConnectionSuccessRate": 0.95,
+    "minimumLoginSuccessRate": 0.95,
+    "minimumFinalOnlineRate": 0.98,
+    "minimumFinalOnlineCount": null,
+    "maximumProtocolErrorRate": 0.01,
+    // 从计划中断到恢复 98% 在线的目标上限为五分钟。
+    "maximumRecoverySeconds": 300,
+    // 至少 98% 设备应实际进入重连，否则说明重启未执行或断线观测不完整。
+    "minimumReconnects": 49000,
+    "maximumReconnectsPerDevice": 2,
+    // 计划重启恢复后的第二次服务级掉线仍判定为稳定性失败。
+    "maximumSecondaryOutages": 0,
+    "minimumStableOnlineSeconds": 120
+  },
+  "distributed": {
+    "runId": "gatherv4-reconnect-storm-50000",
+    "shardIndex": 0,
+    "shardCount": 4,
+    "randomSeed": 37615000
+  },
+  "safety": {
+    "environment": "test",
+    "highLoadThreshold": 10000,
+    "allowHighLoad": true,
+    // 虽然服务由人工重启，场景仍明确授权计划故障，避免误把普通容量脚本当作风暴脚本运行。
+    "allowFaultInjection": true,
+    "allowedTargets": ["192.168.111.222"]
+  }
+}

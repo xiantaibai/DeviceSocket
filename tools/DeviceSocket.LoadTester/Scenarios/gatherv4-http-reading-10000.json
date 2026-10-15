@@ -2,7 +2,7 @@
   // GatherV4 一万台设备在线并通过 Handmould/IssueCmd 做同步端到端命令闭环。
   "role": "combined",
   "target": {
-    "host": "127.0.0.1",
+    "host": "192.168.111.222",
     "port": 8890,
     "protocol": "qGdw3761",
     "compatibilityProfile": "gatherV4"
@@ -11,7 +11,7 @@
     "count": 10000,
     "generationMode": "csv",
     // CSV 中的 meterId 和九位 deviceId 必须在 GatherV4 测试数据库中真实存在且关系正确。
-    "deviceMappingFile": "gather-device-10000.csv"
+    "deviceMappingFile": "gatherv4-device-10000.csv"
   },
   "connection": {
     "startMode": "ramp",
@@ -43,7 +43,7 @@
     "targetDeviceSource": "onlineRegistry",
     "enabled": true,
     // 运行前替换为与 TCP 服务共用数据库、Redis 和 GatherCode 的 IssueWebApi 测试地址。
-    "baseUrl": "http://127.0.0.1:5000",
+    "baseUrl": "http://192.168.111.222:5000",
     "endpointPath": "/Handmould/IssueCmd",
     "authorizationHeaderName": "",
     "authorizationKeyEnvironmentVariable": "",
@@ -243,6 +243,6 @@
     "highLoadThreshold": 10000,
     "allowHighLoad": false,
     "allowFaultInjection": false,
-    "allowedTargets": ["127.0.0.1"]
+    "allowedTargets": ["192.168.111.222"]
   }
 }

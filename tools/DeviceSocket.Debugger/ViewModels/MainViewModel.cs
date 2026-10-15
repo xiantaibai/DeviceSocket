@@ -1,11 +1,14 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DeviceSocket.Core.Protocols.Common;
+using DeviceSocket.Core.Protocols.QGdw3761;
 using DeviceSocket.Debugger.Core.CommandSets;
 using DeviceSocket.Debugger.Core.CommandSets.Models;
 using DeviceSocket.Debugger.Core.Encoding;
@@ -25,11 +28,15 @@ public partial class MainViewModel : ViewModelBase, IAsyncDisposable
     private const int MaximumReceivedDisplayCharacters = 5_000_000;
     private const int MaximumReceivedEntryCount = 10_000;
     private const int MaximumHeartbeatEntryCount = 1_000;
+    private const int MaximumAutoReplyEntryCount = 1_000;
     private const int MaximumPendingTrafficCount = 20_000;
     private const int TrafficFlushBatchSize = 250;
     private const string AllInstructionFilter = "全部指令";
     private const string HeartbeatCommandId = "qgdw3761.heartbeat";
     private const string GatherReadingResponseCommandId = "qgdw3761.gather-reading-response";
+    private const string StandardServerProfileName = "通用 Q/GDW 376.1";
+    private const string GatherTcpCenterServerProfileName = "Gather 老服务";
+    private const string GatherV4ServerProfileName = "GatherV4";
     private readonly CommandSetLoader _commandSetLoader = new();
     private readonly CommandInputValueMemory _commandInputValueMemory = new();
     private readonly CommandEncoderRegistry _encoderRegistry = new();
@@ -42,6 +49,15 @@ public partial class MainViewModel : ViewModelBase, IAsyncDisposable
     private readonly HashSet<string> _instructionFilterValues = new(StringComparer.OrdinalIgnoreCase);
     private readonly DispatcherTimer _trafficFlushTimer;
     private readonly HashSet<string> _commandSetFiles = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Channel<AutoReplyWorkItem> _autoReplyQueue = Channel.CreateBounded<AutoReplyWorkItem>(
+        new BoundedChannelOptions(256)
+        {
+            FullMode = BoundedChannelFullMode.Wait,
+            SingleReader = true,
+            SingleWriter = false
+        });
+    private readonly CancellationTokenSource _autoReplyCancellation = new();
+    private readonly Task _autoReplyLoopTask;
     private LoadedCommandViewModel? _selectedCommand;
     private CancellationTokenSource? _heartbeatCancellation;
     private Task? _heartbeatLoopTask;
@@ -49,6 +65,8 @@ public partial class MainViewModel : ViewModelBase, IAsyncDisposable
     private int _businessMessageCount;
     private int _heartbeatMessageCount;
     private int _statusMessageCount;
+    private int _autoReplySuccessCount;
+    private int _autoReplyFailureCount;
 
     /// <summary>
     /// 保存启动定时心跳时的指令定义和参数快照，使后续切换指令或修改界面参数不会影响已启动的周期发送。
@@ -56,10 +74,25 @@ public partial class MainViewModel : ViewModelBase, IAsyncDisposable
     /// <param name="Definition">生成心跳报文使用的指令定义。</param>
     /// <param name="Values">启动时冻结的编码参数。</param>
     /// <param name="CommandName">用于发送日志展示的指令名称。</param>
+    /// <param name="ServerProfile">启动时冻结的服务端兼容类型。</param>
     private sealed record AutoHeartbeatContext(
         CommandDefinition Definition,
         IReadOnlyDictionary<string, string> Values,
-        string CommandName);
+        string CommandName,
+        QGdw3761ServerCompatibilityProfile ServerProfile);
+
+    /// <summary>
+    /// 保存收到下行帧时冻结的兼容类型和模拟读数，避免后台处理期间界面改值改变该条指令的回复语义。
+    /// </summary>
+    /// <param name="Entry">服务端下发帧对应的通信记录。</param>
+    /// <param name="ServerProfile">接收该帧时选择的服务端兼容类型。</param>
+    /// <param name="RateCountText">老 Gather 模拟费率数文本。</param>
+    /// <param name="TotalReadingKwhText">老 Gather 模拟总电能文本。</param>
+    private sealed record AutoReplyWorkItem(
+        DebugTrafficEntry Entry,
+        QGdw3761ServerCompatibilityProfile ServerProfile,
+        string RateCountText,
+        string TotalReadingKwhText);
 
     /// <summary>
     /// 初始化主视图模型。
@@ -90,6 +123,7 @@ public partial class MainViewModel : ViewModelBase, IAsyncDisposable
         };
         _trafficFlushTimer.Tick += OnTrafficFlushTimerTick;
         _trafficFlushTimer.Start();
+        _autoReplyLoopTask = RunAutoReplyLoopAsync(_autoReplyCancellation.Token);
         LogDirectory = logDirectory;
     }
 
@@ -102,6 +136,9 @@ public partial class MainViewModel : ViewModelBase, IAsyncDisposable
     /// <summary>获取接收页按单条报文组织的通信记录。</summary>
     public ObservableCollection<ReceivedTrafficItemViewModel> ReceivedEntries { get; } = [];
 
+    /// <summary>获取按时间顺序保存的自动回复结果，最多保留最近 1000 条。</summary>
+    public ObservableCollection<AutoReplyDashboardItemViewModel> AutoReplyEntries { get; } = [];
+
     /// <summary>获取接收中心可选择的 AFN/FN 或功能码筛选项。</summary>
     public ObservableCollection<string> InstructionFilterOptions { get; } = [AllInstructionFilter];
 
@@ -110,6 +147,10 @@ public partial class MainViewModel : ViewModelBase, IAsyncDisposable
 
     /// <summary>获取支持的协议显示名称。</summary>
     public IReadOnlyList<string> ProtocolOptions { get; } = ["Q/GDW 376.1", "DL/T 645-2007"];
+
+    /// <summary>获取 Q/GDW 376.1 可选择的服务端兼容类型；GatherV4 会改变 CON 和确认关联规则。</summary>
+    public IReadOnlyList<string> ServerCompatibilityOptions { get; } =
+        [StandardServerProfileName, GatherTcpCenterServerProfileName, GatherV4ServerProfileName];
 
     /// <summary>获取或设置服务器主机名或 IP。</summary>
     [ObservableProperty]
@@ -122,6 +163,34 @@ public partial class MainViewModel : ViewModelBase, IAsyncDisposable
     /// <summary>获取或设置当前协议显示名称。</summary>
     [ObservableProperty]
     private string selectedProtocolName = "Q/GDW 376.1";
+
+    /// <summary>获取或设置当前 Q/GDW 376.1 服务端兼容类型；默认保持 Gather 老服务行为。</summary>
+    [ObservableProperty]
+    private string selectedServerCompatibilityName = GatherTcpCenterServerProfileName;
+
+    /// <summary>获取当前协议是否为 Q/GDW 376.1，用于控制服务类型选择器的可见性。</summary>
+    public bool IsQGdw3761Protocol =>
+        SelectedProtocolName.StartsWith("Q/GDW", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>获取当前是否使用 Gather 老服务兼容模式，用于显示抄读模拟值配置。</summary>
+    public bool IsGatherTcpCenterProfile =>
+        IsQGdw3761Protocol &&
+        string.Equals(
+            SelectedServerCompatibilityName,
+            GatherTcpCenterServerProfileName,
+            StringComparison.Ordinal);
+
+    /// <summary>获取当前兼容模式的自动回复规则说明。</summary>
+    public string AutoReplyModeDescription => !IsQGdw3761Protocol
+        ? "当前自动回复仅支持 Q/GDW 376.1。"
+        : SelectedServerCompatibilityName switch
+        {
+            GatherTcpCenterServerProfileName =>
+                "AFN=0CH/F129 返回抄读业务数据；其他 CON=1 下行命令返回 AFN=00H/F3 确认。",
+            GatherV4ServerProfileName =>
+                "主站下行启动帧返回 AFN=00H/F1 任务全部确认，保留请求 A3 并复用 PSEQ；服务端 ACK 不重复应答。",
+            _ => "仅对 CON=1 的主站下行启动帧返回 AFN=00H/F3 终端确认。"
+        };
 
     /// <summary>获取或设置指令树当前节点。</summary>
     [ObservableProperty]
@@ -199,6 +268,43 @@ public partial class MainViewModel : ViewModelBase, IAsyncDisposable
     [ObservableProperty]
     private string allFilterLabel = "全部 0";
 
+    /// <summary>获取或设置是否自动回复服务端下发的 376.1 指令；默认关闭并保存到本地设置。</summary>
+    [ObservableProperty]
+    private bool isAutoReplyEnabled;
+
+    /// <summary>获取或设置老 Gather 抄读业务回复的费率数文本，范围 0-8，默认 4。</summary>
+    [ObservableProperty]
+    private string autoReplyRateCount = "4";
+
+    /// <summary>获取或设置老 Gather 抄读业务回复的总电能文本，单位 kWh，默认 1000.0000。</summary>
+    [ObservableProperty]
+    private string autoReplyTotalReadingKwh = "1000.0000";
+
+    /// <summary>获取或设置回复看板当前选中的记录。</summary>
+    [ObservableProperty]
+    private AutoReplyDashboardItemViewModel? selectedAutoReplyEntry;
+
+    /// <summary>获取或设置回复看板成功数和失败数说明。</summary>
+    [ObservableProperty]
+    private string autoReplyBoardStatus = "已回复 0 · 失败 0";
+
+    /// <summary>获取回复看板标签及当前记录数量。</summary>
+    public string AutoReplyTabHeader => $"回复看板 {AutoReplyEntries.Count}";
+
+    /// <summary>获取自动回复开关的即时状态文本。</summary>
+    public string AutoReplySwitchStatus => IsAutoReplyEnabled ? "自动回复已开启" : "自动回复已关闭";
+
+    /// <summary>获取接收页展示的当前服务类型和自动回复开关摘要。</summary>
+    public string ReceiveAutoReplyStatus => IsQGdw3761Protocol
+        ? $"{SelectedServerCompatibilityName} · 自动回复{(IsAutoReplyEnabled ? "开启" : "关闭")}"
+        : "当前协议不支持自动回复";
+
+    /// <summary>获取回复看板是否存在选中记录。</summary>
+    public bool HasSelectedAutoReplyEntry => SelectedAutoReplyEntry is not null;
+
+    /// <summary>获取回复看板是否应显示空详情提示。</summary>
+    public bool IsAutoReplyDetailEmpty => !HasSelectedAutoReplyEntry;
+
     /// <summary>获取业务回复分类是否处于选中状态。</summary>
     public bool IsBusinessReceiveFilterSelected => SelectedReceiveFilter == ReceiveTrafficFilter.Business;
 
@@ -243,7 +349,7 @@ public partial class MainViewModel : ViewModelBase, IAsyncDisposable
     [ObservableProperty]
     private string commandSetStatus = "尚未加载指令集";
 
-    /// <summary>获取或设置当前选中的收发标签，0 为发送、1 为接收。</summary>
+    /// <summary>获取或设置当前选中的收发标签，0 为发送、1 为接收、2 为回复看板。</summary>
     [ObservableProperty]
     private int selectedTabIndex;
 
@@ -288,7 +394,20 @@ public partial class MainViewModel : ViewModelBase, IAsyncDisposable
     {
         var settings = DebuggerSettingsStore.Load();
         HeartbeatIntervalSeconds = settings.HeartbeatIntervalSeconds;
+        AutoReplyRateCount = string.IsNullOrWhiteSpace(settings.AutoReplyRateCount)
+            ? "4"
+            : settings.AutoReplyRateCount;
+        AutoReplyTotalReadingKwh = string.IsNullOrWhiteSpace(settings.AutoReplyTotalReadingKwh)
+            ? "1000.0000"
+            : settings.AutoReplyTotalReadingKwh;
+        IsAutoReplyEnabled = settings.AutoReplyEnabled;
         RestoreCommandInputMemory(settings.InputValues);
+        SelectedServerCompatibilityName = ServerCompatibilityOptions.Contains(
+            settings.ServerCompatibilityName,
+            StringComparer.Ordinal)
+            ? settings.ServerCompatibilityName
+            : GatherTcpCenterServerProfileName;
+        _trafficCorrelator.SetQGdw3761ServerProfile(ResolveServerCompatibilityProfile());
 
         var builtInDirectory = Path.Combine(AppContext.BaseDirectory, "CommandSets");
         if (Directory.Exists(builtInDirectory))
@@ -314,6 +433,17 @@ public partial class MainViewModel : ViewModelBase, IAsyncDisposable
         await StopAutoHeartbeatAsync();
         _session.StateChanged -= OnSessionStateChanged;
         _session.TrafficOccurred -= OnTrafficOccurred;
+        _autoReplyQueue.Writer.TryComplete();
+        _autoReplyCancellation.Cancel();
+        try
+        {
+            await _autoReplyLoopTask;
+        }
+        catch (OperationCanceledException)
+        {
+            // 窗口关闭会取消后台回复循环，属于正常释放流程。
+        }
+        _autoReplyCancellation.Dispose();
         await _session.DisposeAsync();
     }
 
@@ -433,6 +563,23 @@ public partial class MainViewModel : ViewModelBase, IAsyncDisposable
     }
 
     /// <summary>
+    /// 在回复看板选择变化时切换详情正文和空状态提示。
+    /// </summary>
+    /// <param name="value">新的自动回复记录；未选择时为空。</param>
+    partial void OnSelectedAutoReplyEntryChanged(AutoReplyDashboardItemViewModel? value)
+    {
+        OnPropertyChanged(nameof(HasSelectedAutoReplyEntry));
+        OnPropertyChanged(nameof(IsAutoReplyDetailEmpty));
+    }
+
+    /// <summary>
+    /// 在自动回复开关变化时刷新即时状态说明。
+    /// </summary>
+    /// <param name="value">是否启用自动回复。</param>
+    partial void OnIsAutoReplyEnabledChanged(bool value) =>
+        NotifyAutoReplyStateChanged();
+
+    /// <summary>
     /// 在 TCP 状态变化时同步连接和断开按钮的显示及可用状态。
     /// </summary>
     /// <param name="value">新的 TCP 连接状态。</param>
@@ -450,11 +597,38 @@ public partial class MainViewModel : ViewModelBase, IAsyncDisposable
     /// <param name="value">新的协议显示名称。</param>
     partial void OnSelectedProtocolNameChanged(string value)
     {
+        OnPropertyChanged(nameof(IsQGdw3761Protocol));
+        OnPropertyChanged(nameof(IsGatherTcpCenterProfile));
+        OnPropertyChanged(nameof(AutoReplyModeDescription));
+        OnPropertyChanged(nameof(ReceiveAutoReplyStatus));
         if (_heartbeatCancellation is not null &&
             !value.StartsWith("Q/GDW", StringComparison.OrdinalIgnoreCase))
         {
             _ = StopAutoHeartbeatAsync();
         }
+    }
+
+    /// <summary>
+    /// 切换服务端兼容类型时停止旧规则下的定时心跳，并让后续确认使用对应关联策略。
+    /// </summary>
+    /// <param name="value">新的服务端兼容类型显示名称。</param>
+    partial void OnSelectedServerCompatibilityNameChanged(string value)
+    {
+        _trafficCorrelator.SetQGdw3761ServerProfile(ResolveServerCompatibilityProfile(value));
+        OnPropertyChanged(nameof(IsGatherTcpCenterProfile));
+        OnPropertyChanged(nameof(AutoReplyModeDescription));
+        OnPropertyChanged(nameof(ReceiveAutoReplyStatus));
+        if (_heartbeatCancellation is not null)
+            _ = StopAutoHeartbeatAsync();
+    }
+
+    /// <summary>
+    /// 刷新自动回复开关在回复看板和接收页中的状态说明。
+    /// </summary>
+    private void NotifyAutoReplyStateChanged()
+    {
+        OnPropertyChanged(nameof(AutoReplySwitchStatus));
+        OnPropertyChanged(nameof(ReceiveAutoReplyStatus));
     }
 
     [RelayCommand]
@@ -588,7 +762,8 @@ public partial class MainViewModel : ViewModelBase, IAsyncDisposable
         var context = new AutoHeartbeatContext(
             _selectedCommand!.Definition,
             values,
-            _selectedCommand.Definition.Name);
+            _selectedCommand.Definition.Name,
+            ResolveServerCompatibilityProfile());
         var cancellation = new CancellationTokenSource();
         _heartbeatCancellation = cancellation;
         IsAutoHeartbeatRunning = true;
@@ -763,6 +938,19 @@ public partial class MainViewModel : ViewModelBase, IAsyncDisposable
     }
 
     /// <summary>
+    /// 清空回复看板记录和成功失败计数，不影响 TCP 连接、接收日志或自动回复开关。
+    /// </summary>
+    [RelayCommand]
+    private void ClearAutoReplyBoard()
+    {
+        AutoReplyEntries.Clear();
+        SelectedAutoReplyEntry = null;
+        _autoReplySuccessCount = 0;
+        _autoReplyFailureCount = 0;
+        UpdateAutoReplyBoardStatus();
+    }
+
+    /// <summary>
     /// 以固定周期持续发送启动时冻结的 376.1 心跳参数，直到被主动停止或取消。
     /// </summary>
     /// <param name="intervalSeconds">相邻两次发送的秒数间隔。</param>
@@ -819,7 +1007,10 @@ public partial class MainViewModel : ViewModelBase, IAsyncDisposable
         if (_session.State != DebugConnectionState.Connected)
             return;
 
-        var result = _encoderRegistry.Build(context.Definition, context.Values);
+        var result = _encoderRegistry.Build(
+            context.Definition,
+            context.Values,
+            context.ServerProfile);
         await _session.SendAsync(
             result.Bytes,
             context.CommandName,
@@ -862,9 +1053,13 @@ public partial class MainViewModel : ViewModelBase, IAsyncDisposable
                 new DebuggerSettings
                 {
                     ProtocolName = SelectedProtocolName,
+                    ServerCompatibilityName = SelectedServerCompatibilityName,
                     Host = Host,
                     Port = Port,
                     HeartbeatIntervalSeconds = HeartbeatIntervalSeconds,
+                    AutoReplyEnabled = IsAutoReplyEnabled,
+                    AutoReplyRateCount = AutoReplyRateCount,
+                    AutoReplyTotalReadingKwh = AutoReplyTotalReadingKwh,
                     InputValues = SnapshotCommandInputMemory()
                 });
         }
@@ -943,6 +1138,9 @@ public partial class MainViewModel : ViewModelBase, IAsyncDisposable
         return null;
     }
 
+    /// <summary>按当前指令输入和服务端兼容类型生成待发送报文，并把可恢复错误显示到接收页。</summary>
+    /// <param name="result">成功时返回生成的报文和摘要；失败时为空。</param>
+    /// <returns>报文生成成功时返回 true。</returns>
     private bool TryBuildCurrentCommand(out CommandBuildResult? result)
     {
         result = null;
@@ -955,7 +1153,10 @@ public partial class MainViewModel : ViewModelBase, IAsyncDisposable
         try
         {
             var values = Inputs.ToDictionary(item => item.Key, item => item.Value, StringComparer.OrdinalIgnoreCase);
-            result = _encoderRegistry.Build(_selectedCommand.Definition, values);
+            result = _encoderRegistry.Build(
+                _selectedCommand.Definition,
+                values,
+                ResolveServerCompatibilityProfile());
             return true;
         }
         catch (Exception exception) when (
@@ -988,6 +1189,33 @@ public partial class MainViewModel : ViewModelBase, IAsyncDisposable
     /// <param name="entry">待进入界面刷新队列的通信记录。</param>
     private void OnTrafficOccurred(object? sender, DebugTrafficEntry entry)
     {
+        if (entry.Direction == TrafficDirection.Receive &&
+            entry.Metadata?.Protocol == DeviceProtocol.QGdw3761 &&
+            IsAutoReplyEnabled)
+        {
+            var workItem = new AutoReplyWorkItem(
+                entry,
+                ResolveServerCompatibilityProfile(),
+                AutoReplyRateCount,
+                AutoReplyTotalReadingKwh);
+            if (!_autoReplyQueue.Writer.TryWrite(workItem))
+            {
+                EnqueueTrafficEntry(
+                    CreateLocalEntry(
+                        "自动回复队列已满",
+                        "等待处理的下行指令超过 256 条，本条未进入自动回复队列；请检查服务端是否在短时间重复下发。"));
+            }
+        }
+
+        EnqueueTrafficEntry(entry);
+    }
+
+    /// <summary>
+    /// 把后台产生的通信记录加入有限 UI 队列，并淘汰最早记录防止界面失去响应。
+    /// </summary>
+    /// <param name="entry">待进入 UI 批量刷新队列的通信记录。</param>
+    private void EnqueueTrafficEntry(DebugTrafficEntry entry)
+    {
         lock (_pendingTrafficSync)
         {
             _pendingTrafficEntries.Enqueue(entry);
@@ -995,6 +1223,168 @@ public partial class MainViewModel : ViewModelBase, IAsyncDisposable
                 _pendingTrafficEntries.Dequeue();
         }
     }
+
+    /// <summary>
+    /// 串行处理服务端下行指令，保证同一调试连接上的自动回复顺序与接收顺序一致。
+    /// </summary>
+    /// <param name="cancellationToken">窗口关闭时终止后台循环的取消标记。</param>
+    private async Task RunAutoReplyLoopAsync(CancellationToken cancellationToken)
+    {
+        await foreach (var workItem in _autoReplyQueue.Reader.ReadAllAsync(cancellationToken))
+        {
+            if (!IsAutoReplyEnabled)
+                continue;
+
+            QGdw3761AutoReplyPlan? plan = null;
+            var stopwatch = Stopwatch.StartNew();
+            try
+            {
+                if (!HexCodec.TryParse(workItem.Entry.RawHex, out var bytes, out var parseError))
+                    throw new FormatException($"下行报文 HEX 解析失败：{parseError}");
+
+                var readResult = QGdw3761Codec.ReadCompleteFrame(bytes);
+                if (readResult.Package is not QGdw3761Frame request || !request.IsValid)
+                    throw new FormatException("下行报文不是合法的 Q/GDW 376.1 完整帧。");
+
+                var options = CreateAutoReplyOptions(workItem, request);
+                plan = QGdw3761AutoReplyPlanner.TryCreate(
+                    request,
+                    workItem.ServerProfile,
+                    options,
+                    DateTimeOffset.Now);
+                if (plan is null)
+                    continue;
+
+                var responseHex = HexCodec.ToHex(plan.ResponseBytes, true);
+                await _session.SendAsync(
+                    plan.ResponseBytes,
+                    $"自动回复 · {plan.ResponseInstruction}",
+                    plan.Summary,
+                    cancellationToken,
+                    trackResponse: false);
+                stopwatch.Stop();
+                var success = AutoReplyDashboardItemViewModel.Success(
+                    DateTimeOffset.Now,
+                    plan,
+                    workItem.Entry.RawHex,
+                    responseHex,
+                    stopwatch.Elapsed);
+                Dispatcher.UIThread.Post(() => AddAutoReplyBoardEntry(success));
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception exception)
+            {
+                stopwatch.Stop();
+                EnqueueTrafficEntry(CreateLocalEntry("自动回复失败", exception.Message));
+                if (plan is null)
+                    continue;
+
+                var failure = AutoReplyDashboardItemViewModel.Failure(
+                    DateTimeOffset.Now,
+                    plan,
+                    workItem.Entry.RawHex,
+                    HexCodec.ToHex(plan.ResponseBytes, true),
+                    stopwatch.Elapsed,
+                    exception.Message);
+                Dispatcher.UIThread.Post(() => AddAutoReplyBoardEntry(failure));
+            }
+        }
+    }
+
+    /// <summary>
+    /// 校验并创建当前下行帧需要的抄读模拟参数；非老 Gather F129 指令不依赖界面读数配置。
+    /// </summary>
+    /// <param name="workItem">接收下行帧时冻结的界面参数。</param>
+    /// <param name="request">已经完成解析的 376.1 下行帧。</param>
+    /// <returns>供自动回复规划器使用的强类型参数。</returns>
+    /// <exception cref="FormatException">费率数或总电能不是有效范围内的数字时抛出。</exception>
+    private static QGdw3761AutoReplyOptions CreateAutoReplyOptions(
+        AutoReplyWorkItem workItem,
+        QGdw3761Frame request)
+    {
+        var isGatherReading =
+            workItem.ServerProfile == QGdw3761ServerCompatibilityProfile.GatherTcpCenter &&
+            request.Afn == 0x0C &&
+            request.Functions.Count == 1 &&
+            request.Functions[0] == 129 &&
+            request.Points.Count == 1;
+        if (!isGatherReading)
+            return new QGdw3761AutoReplyOptions();
+
+        if (!int.TryParse(
+                workItem.RateCountText.Trim(),
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out var rateCount) ||
+            rateCount is < 0 or > 8)
+        {
+            throw new FormatException("自动回复费率数必须是 0-8 的整数。");
+        }
+
+        if (!decimal.TryParse(
+                workItem.TotalReadingKwhText.Trim(),
+                NumberStyles.Number,
+                CultureInfo.InvariantCulture,
+                out var totalReadingKwh) ||
+            totalReadingKwh is < 0m or > 999_999.9999m)
+        {
+            throw new FormatException("自动回复总电能必须是 0-999999.9999 kWh 的数字。");
+        }
+
+        return new QGdw3761AutoReplyOptions
+        {
+            RateCount = rateCount,
+            TotalReadingKwh = totalReadingKwh
+        };
+    }
+
+    /// <summary>
+    /// 在 UI 线程追加回复看板记录、执行容量淘汰并刷新统计摘要。
+    /// </summary>
+    /// <param name="item">已经完成发送或失败归档的自动回复记录。</param>
+    private void AddAutoReplyBoardEntry(AutoReplyDashboardItemViewModel item)
+    {
+        AutoReplyEntries.Add(item);
+        SelectedAutoReplyEntry = item;
+        if (item.IsSuccess)
+            _autoReplySuccessCount++;
+        else
+            _autoReplyFailureCount++;
+
+        while (AutoReplyEntries.Count > MaximumAutoReplyEntryCount)
+            AutoReplyEntries.RemoveAt(0);
+        OnPropertyChanged(nameof(AutoReplyTabHeader));
+        UpdateAutoReplyBoardStatus();
+    }
+
+    /// <summary>
+    /// 刷新回复看板的成功数和失败数说明。
+    /// </summary>
+    private void UpdateAutoReplyBoardStatus()
+    {
+        AutoReplyBoardStatus = $"已回复 {_autoReplySuccessCount} · 失败 {_autoReplyFailureCount}";
+        OnPropertyChanged(nameof(AutoReplyTabHeader));
+    }
+
+    /// <summary>把当前服务类型显示名称转换为编码和关联器共同使用的强类型兼容配置。</summary>
+    /// <returns>当前选中的强类型服务端兼容配置。</returns>
+    private QGdw3761ServerCompatibilityProfile ResolveServerCompatibilityProfile() =>
+        ResolveServerCompatibilityProfile(SelectedServerCompatibilityName);
+
+    /// <summary>把服务类型显示名称转换为强类型兼容配置，未知值回退到 Gather 老服务以保持既有行为。</summary>
+    /// <param name="displayName">界面或本地设置中的服务类型显示名称。</param>
+    /// <returns>对应的强类型服务端兼容配置。</returns>
+    private static QGdw3761ServerCompatibilityProfile ResolveServerCompatibilityProfile(
+        string displayName) =>
+        displayName switch
+        {
+            StandardServerProfileName => QGdw3761ServerCompatibilityProfile.Standard,
+            GatherV4ServerProfileName => QGdw3761ServerCompatibilityProfile.GatherV4,
+            _ => QGdw3761ServerCompatibilityProfile.GatherTcpCenter
+        };
 
     /// <summary>
     /// 响应 100 毫秒 UI 批量刷新定时器；暂停时只更新等待数量，不消费队列。

@@ -88,8 +88,8 @@ internal sealed class GatherV4QGdw3761LoadTestProtocol : ILoadTestProtocol, IDow
         CreateLinkRequest(device, QGdw3761LinkMessageKind.Logout, sequence);
 
     /// <summary>
-    /// 为地址匹配的 GatherV4 主站命令生成 AFN=00H/F3 终端确认；确认帧保留请求 A3 并复用 PSEQ，
-    /// 从而命中服务端 <c>Code-A3-PSEQ</c> 在途命令窗口。
+    /// 为地址匹配的 GatherV4 主站命令生成 AFN=00H/F1 全部确认；结果帧保留请求 A3 并复用 PSEQ，
+    /// 既命中服务端 <c>Code-A3-PSEQ</c> 在途命令窗口，也进入 GatherV4 已实现的 F1 业务结果解析链路。
     /// </summary>
     /// <param name="frame">已经完成校验和拆包的下行帧。</param>
     /// <param name="device">当前 TCP 会话模拟的设备。</param>
@@ -119,7 +119,7 @@ internal sealed class GatherV4QGdw3761LoadTestProtocol : ILoadTestProtocol, IDow
         if (mode == GatherV4ResponseMode.Drop)
             return new DownstreamResponsePlan(null, DownstreamResponseKind.GatherV4Command, TimeSpan.Zero, 0);
 
-        var payload = QGdw3761TerminalResponseEncoder.CreateConfirmation(request);
+        var payload = QGdw3761TerminalResponseEncoder.CreateAllConfirmation(request);
         if (mode == GatherV4ResponseMode.WrongA3)
         {
             // A3 的 D1-D7 是主站地址；只翻转其中一位并重算 CS，构造格式合法但不能命中当前 Mark 的响应。

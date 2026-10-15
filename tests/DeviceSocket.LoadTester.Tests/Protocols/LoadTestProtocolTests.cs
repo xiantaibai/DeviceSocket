@@ -90,7 +90,7 @@ public sealed class LoadTestProtocolTests
     }
 
     /// <summary>
-    /// 验证 GatherV4 下行命令应答保留 A3 并复用 PSEQ，使服务端 Code-A3-PSEQ 标识可以释放当前在途窗口。
+    /// 验证 GatherV4 下行命令应答生成 F1 全部确认，同时保留 A3 并复用 PSEQ，使服务端释放在途窗口并完成业务任务。
     /// </summary>
     [Fact]
     public void GatherV4DownstreamResponse_PreservesA3AndPseq()
@@ -117,6 +117,9 @@ public sealed class LoadTestProtocolTests
         Assert.Equal(DownstreamResponseKind.GatherV4Command, plan.Kind);
         Assert.Equal(command.MasterStationAddress, response.MasterStationAddress);
         Assert.Equal(command.Sequence, response.Sequence);
+        Assert.Equal(0x00, response.Afn);
+        Assert.Equal([1], response.Functions);
+        Assert.Empty(response.DataUnitPayload);
         Assert.Equal(DownstreamClassificationKind.GatherV4Command, classification.Kind);
         Assert.True(classification.IsRecognizedCommand);
     }

@@ -1,0 +1,156 @@
+{
+  // GatherV4 五万台常态连接基线：四台负载机共同验证登录、心跳、在线稳定性及客户端资源趋势，不混入 HTTP 或人工故障。
+  "role": "devicesOnly",
+  "target": {
+    // 正式运行前替换为 GatherV4 Communication 测试地址，并同步更新 safety.allowedTargets。
+    "host": "192.168.111.222",
+    "port": 8890,
+    "protocol": "qGdw3761",
+    "compatibilityProfile": "gatherV4"
+  },
+  "devices": {
+    // 四个分片部署同一份完整 CSV，工具按数据行全局序号取模，每台固定负责约 12500 台。
+    "count": 50000,
+    "generationMode": "csv",
+    // CSV 必须包含五万个唯一 meterId 和唯一 deviceId；重复设备会在启动分配阶段被明确拒绝。
+    "deviceMappingFile": "gatherv4-device-50000.csv"
+  },
+  "connection": {
+    "startMode": "ramp",
+    // 所有分片合计每秒 300 条连接，每个分片自动分摊约 75 条。
+    "connectionsPerSecond": 300,
+    // 本地闸门按单进程生效，四台负载机最多合计 4000 条连接处于建连或登录路径。
+    "maxConcurrentConnecting": 1000,
+    "connectTimeoutSeconds": 5,
+    "loginTimeoutSeconds": 10,
+    "writeTimeoutSeconds": 5,
+    "noDelay": true
+  },
+  "heartbeat": {
+    "enabled": true,
+    "intervalSeconds": 60,
+    // 为每台设备加入稳定随机抖动，避免五万台心跳永久锁步形成非预期脉冲。
+    "jitterSeconds": 10,
+    "responseTimeoutSeconds": 10
+  },
+  "workload": {
+    "reportsEnabled": false,
+    // 即使测试环境残留下行命令，也按 GatherV4 A3/PSEQ 关联规则正常确认，避免阻塞服务端发送窗口。
+    "gatherV4Response": {
+      "enabled": true,
+      "mode": "normal"
+    }
+  },
+  "reconnect": {
+    // 常态场景不主动断线；意外掉线仍按真实终端行为自动重连，并作为稳定性问题进入报告。
+    "mode": "exponentialJitter",
+    "initialDelayMilliseconds": 250,
+    "maximumDelaySeconds": 10,
+    "multiplier": 2,
+    "jitterRatio": 0.5,
+    "maximumAttempts": 0
+  },
+  "scenario": {
+    "name": "gatherv4-connections-50000",
+    "durationSeconds": 1,
+    "phases": [
+      {
+        // 全局 500 台探活，每个分片约 125 台，先验证网络、CSV 分片、登录 ACK 和心跳链路。
+        "name": "canary-500",
+        "kind": "warmup",
+        "durationSeconds": 30,
+        "targetDevicePercentage": 1,
+        "connectionsPerSecond": 25,
+        "waitForOnline": true,
+        "minimumOnlineRate": 1.0,
+        "onlineStableSeconds": 5,
+        "onlineWaitTimeoutSeconds": 180
+      },
+      {
+        "name": "ramp-5000",
+        "kind": "ramp",
+        "durationSeconds": 120,
+        "targetDevicePercentage": 10,
+        "connectionsPerSecond": 100,
+        "waitForOnline": true,
+        "minimumOnlineRate": 0.98,
+        "onlineStableSeconds": 15,
+        "onlineWaitTimeoutSeconds": 600
+      },
+      {
+        "name": "ramp-25000",
+        "kind": "ramp",
+        "durationSeconds": 240,
+        "targetDevicePercentage": 50,
+        "connectionsPerSecond": 200,
+        "waitForOnline": true,
+        "minimumOnlineRate": 0.98,
+        "onlineStableSeconds": 30,
+        "onlineWaitTimeoutSeconds": 1200
+      },
+      {
+        "name": "ramp-50000",
+        "kind": "ramp",
+        "durationSeconds": 420,
+        "targetDevicePercentage": 100,
+        "connectionsPerSecond": 300,
+        "waitForOnline": true,
+        "minimumOnlineRate": 0.98,
+        "onlineStableSeconds": 60,
+        "onlineWaitTimeoutSeconds": 1800
+      },
+      {
+        // 默认保持一小时形成常态基线；正式长稳验收可复制场景后调整为 7200 或 21600 秒。
+        "name": "steady-50000",
+        "kind": "steady",
+        "durationSeconds": 3600,
+        "targetDevicePercentage": 100,
+        "connectionsPerSecond": 300,
+        "waitForOnline": true,
+        "minimumOnlineRate": 0.99,
+        "onlineStableSeconds": 120,
+        "onlineWaitTimeoutSeconds": 1800
+      },
+      {
+        "name": "cooldown",
+        "kind": "cooldown",
+        "durationSeconds": 30,
+        "targetDevicePercentage": 0,
+        "connectionsPerSecond": 300
+      }
+    ]
+  },
+  "reporting": {
+    "outputDirectory": "load-test-results",
+    // 五万台一小时仍保留秒级在线变化，检查点每 30 秒写盘以控制额外 I/O。
+    "sampleIntervalSeconds": 1,
+    "checkpointIntervalSeconds": 30,
+    "writeConsoleSummary": true
+  },
+  "serverObservation": {
+    // GatherV4 服务端指标由 OpenTelemetry Collector 按同一 RunId 独立归档。
+    "enabled": false
+  },
+  "acceptance": {
+    "minimumConnectionSuccessRate": 0.95,
+    "minimumLoginSuccessRate": 0.95,
+    "minimumFinalOnlineRate": 0.98,
+    "minimumFinalOnlineCount": null,
+    "maximumProtocolErrorRate": 0.01,
+    // 常态场景不应出现新的服务级中断；单设备瞬时抖动仍由时间序列和重连次数辅助判断。
+    "maximumSecondaryOutages": 0
+  },
+  "distributed": {
+    "runId": "gatherv4-connections-50000",
+    "shardIndex": 0,
+    "shardCount": 4,
+    "randomSeed": 37615000
+  },
+  "safety": {
+    "environment": "test",
+    "highLoadThreshold": 10000,
+    "allowHighLoad": true,
+    "allowFaultInjection": false,
+    "allowedTargets": ["192.168.111.222"]
+  }
+}

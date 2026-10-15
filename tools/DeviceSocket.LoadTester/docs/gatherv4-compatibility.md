@@ -9,7 +9,7 @@
 | 独立兼容配置 | 已支持 | 使用 `target.compatibilityProfile=gatherV4`，不改变 `deviceSocket` 和 `gatherTcpCenter` 既有行为 |
 | 登录与心跳 | 已支持 | 发送 CON=1 的 AFN=02H/F1、F3，只有收到地址和 PSEQ 均匹配的 AFN=00H/F1 才记为成功 |
 | 流式接收 | 已支持 | 复用现有 376.1 流式拆包器，处理半包、粘包、多帧和尾部残帧 |
-| 命令关联响应 | 已支持 | 对地址匹配的主站下行命令生成 AFN=00H/F3，保留请求 A3、复用 PSEQ 并重新计算校验和 |
+| 命令关联响应 | 已支持 | 对地址匹配的主站下行命令生成 AFN=00H/F1 全部确认，保留请求 A3、复用 PSEQ 并重新计算校验和 |
 | 命令故障模式 | 已支持 | `normal`、`delayed`、`drop`、`duplicate`、`wrongA3`、`wrongPseq`；按设备稳定选样 |
 | HTTP 正式入口 | 已支持 | 调用 `/Handmould/IssueCmd` 或 `/Handmould/IssueCmdSync`，按 GatherV4 `HandmouldRequest` 和 `Status/Msg` 解析 |
 | 设备身份与分片 | 已支持 | 九位编号按前四位 AreaCode、后五位 Address；CSV 的 AmmeterId 与设备号在多节点间确定性切分 |
@@ -21,7 +21,7 @@
 
 ## 止血版明确不覆盖
 
-1. AFN=00H/F3 当前用于验证命令已下发、`Code-A3-PSEQ` 关联和同设备发送窗口释放，不等价于真实电量采集结果。要验收解析、落库和具体 `ItemCode` 数据，必须增加对应 AFN/FN 的真实业务回包模板。
+1. AFN=00H/F1 当前用于验证命令已下发、`Code-A3-PSEQ` 关联、同设备发送窗口释放以及 GatherV4 任务成功结果链路，不等价于真实电量采集结果。要验收解析、落库和具体 `ItemCode` 数据，必须增加对应 AFN/FN 的真实业务回包模板。
 2. 尚未实现 GatherV4 Redis 通讯隔离注入。Ready/Processing 的 Key、SchemaVersion、CommandId 和租约规则属于 GatherV4 契约，未建立共享 helper 前不在 LoadTester 内复制常量。
 3. 尚未覆盖人工/普通/补抄的优先级、FIFO/LIFO 自动断言，也未覆盖客户端 RST、半开连接、旧 Session 迟到报文和同步心跳洪峰。
 4. 主动上报确认目前只能被识别并避免重复应答，尚未输出独立的上报 ACK 成功、非法、重复、超时和 RTT 直方图。
@@ -37,17 +37,20 @@
 | `Scenarios/gatherv4-connections-10000.json` | 一万连接、登录 ACK、心跳和稳态基线 | TCP 地址、端口、CSV、目标白名单 |
 | `Scenarios/gatherv4-http-reading-10000.json` | 一万在线、IssueCmd、下行关联应答及同设备连续命令 | TCP/API 地址、CSV、GatherCode、ItemCodes、白名单 |
 | `Scenarios/gatherv4-reconnect-storm-10000.json` | 一万稳定在线后人工重启 Communication 并观察全量恢复 | TCP 地址、端口、CSV、白名单；按提示执行服务重启 |
+| `Scenarios/gatherv4-connections-50000.json` | 四分片五万台分阶段上线及一小时常态连接基线 | TCP 地址、端口、五万条唯一映射 CSV、目标白名单；四节点使用同一启动时间 |
+| `Scenarios/gatherv4-reconnect-storm-50000.json` | 四分片五万台稳定在线后人工重启 Communication 并观察风暴恢复 | TCP 地址、端口、五万条唯一映射 CSV、目标白名单；四节点使用同一启动时间并按提示重启服务 |
 
-三份场景都使用在线屏障。屏障时间不包含在 `durationSeconds` 内：先达到配置的在线率并连续稳定，再开始该阶段的保持计时。这样报告不会把登录尚未追平的爬升过程当作稳态样本。
+五份场景都使用在线屏障。屏障时间不包含在 `durationSeconds` 内：先达到配置的在线率并连续稳定，再开始该阶段的保持计时。这样报告不会把登录尚未追平的爬升过程当作稳态样本。
 
 ## 首轮执行顺序
 
 1. 复制正式场景为测试环境专用文件，填写 TCP/API 地址、`safety.allowedTargets`、真实 CSV、GatherCode 和 ItemCodes；禁止把凭据写入 JSON。
 2. 把连接场景临时降到 100 台，执行登录和心跳冒烟；确认客户端登录成功数与服务端 `gather.tcp.bound.connections` 对齐。
 3. 扩到 1,000 台，检查 LoadTester CPU、线程、句柄、Socket、网络和端口预检，同时观察 GatherV4 OTel 的帧、ACK、回调耗时和 GC。
-4. 执行一万台纯连接基线；只有在线屏障、客户端资源和服务端 OTel 都正常，才进入 HTTP 场景。
-5. HTTP 先保留 20 条功能阶段。确认命令下行、F3 关联、下一条命令释放和 API 返回口径后，再逐步提高 RPS/并发。
-6. 最后执行真实重启风暴。出现控制台操作窗口后重启 Communication，LoadTester 不需要人工按键，也不要停止负载进程。
+4. 执行一万台纯连接基线；只有在线屏障、客户端资源和服务端 OTel 都正常，才进入 HTTP 场景或五万台扩容。
+5. HTTP 先保留 20 条功能阶段。确认命令下行、F1 任务结果关联、下一条命令释放和 API 返回口径后，再逐步提高 RPS/并发。
+6. 五万台先执行四分片常态连接基线，确认负载机端口、客户端资源和服务端容量均有余量；所有节点必须使用同一完整 CSV、RunId、ShardCount 和 UTC 启动时间。
+7. 最后执行真实重启风暴。出现控制台操作窗口后重启 Communication，LoadTester 不需要人工按键，也不要停止负载进程。
 
 ## GatherV4 服务端同步检查
 

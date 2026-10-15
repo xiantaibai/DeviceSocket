@@ -51,7 +51,7 @@
     "targetDeviceSource": "onlineRegistry",
     "enabled": true,
     // 运行前替换为与 TCP 服务同一套环境的 Gather.Control.Api 地址。
-    "baseUrl": "http://192.168.111.18:9011",
+    "baseUrl": "http://192.168.111.222:9011",
     "endpointPath": "/api/ammeter/reading",
     "authorizationHeaderName": "gather-authorize-key",
     // 需要鉴权时改为 GATHER_AUTHORIZE_KEY，并只在四台机器的进程环境变量中保存同一个密钥。
@@ -375,6 +375,6 @@
     // 本场景包含协议拆包等故障参数时必须显式授权；不得在正式环境直接复用。
     "allowFaultInjection": true,
     // TCP 服务与业务 API 位于不同主机，两个主动施压目标都必须列入白名单。
-    "allowedTargets": ["192.168.111.222", "192.168.111.18"]
+    "allowedTargets": ["192.168.111.222", "192.168.111.222"]
   }
 }

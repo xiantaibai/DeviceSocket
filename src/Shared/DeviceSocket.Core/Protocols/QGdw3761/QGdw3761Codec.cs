@@ -212,6 +212,29 @@ public static class QGdw3761Codec
     }
 
     /// <summary>
+    /// 为主站下行启动帧生成终端 AFN=00H/F1 全部确认或 F2 全部否认，RSEQ 复用请求的 PSEQ。
+    /// </summary>
+    /// <param name="request">终端已收到的合法主站下行启动帧。</param>
+    /// <param name="accepted">true 生成 F1 全部确认；false 生成 F2 全部否认。</param>
+    /// <returns>终端应向主站发送的完整任务结果帧。</returns>
+    /// <exception cref="ArgumentException">请求不是合法的主站下行帧时抛出。</exception>
+    public static byte[] CreateTerminalAllResult(QGdw3761Frame request, bool accepted = true)
+    {
+        if (!request.IsValid || request.IsUpstream || !request.IsPrimaryMessage || request.Raw.Length < 18)
+            throw new ArgumentException("只能回复合法的 376.1 主站下行启动帧。", nameof(request));
+
+        var application = new byte[]
+        {
+            0x00,
+            (byte)(0x60 | request.Sequence),
+            0x00, 0x00, accepted ? (byte)0x01 : (byte)0x02, 0x00
+        };
+
+        // GatherV4 以 Code-A3-PSEQ 关联在途任务，因此必须原样复用地址域（包含 A3）和 PSEQ。
+        return BuildFrame(0x80, request.Raw.AsSpan(7, 5), application);
+    }
+
+    /// <summary>
     /// 创建供模拟终端使用的 AFN=02H 登录、退出登录或心跳上行帧。
     /// </summary>
     /// <param name="administrativeDivision">4 位 BCD 行政区划码。</param>

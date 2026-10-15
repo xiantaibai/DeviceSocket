@@ -51,7 +51,7 @@
     "targetDeviceSource": "onlineRegistry",
     "enabled": true,
     // 运行前替换为与 TCP 服务同一套环境的 Gather.Control.Api 地址。
-    "baseUrl": "http://192.168.111.18:9011",
+    "baseUrl": "http://192.168.111.222:9011",
     "endpointPath": "/api/ammeter/reading",
     "authorizationHeaderName": "gather-authorize-key",
     // 需要鉴权时设置为 GATHER_AUTHORIZE_KEY，并只在进程环境变量中保存密钥；空值表示不发送鉴权头。

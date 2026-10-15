@@ -99,6 +99,40 @@ public sealed class QGdw3761CodecTests
     }
 
     /// <summary>
+    /// 验证终端全部结果帧使用 F1/F2 表示成功或失败，并保留 A3 与 PSEQ 任务关联字段。
+    /// </summary>
+    /// <param name="accepted">模拟任务是否成功。</param>
+    /// <param name="expectedFunction">预期的 F1 全部确认或 F2 全部否认。</param>
+    [Theory]
+    [InlineData(true, 1)]
+    [InlineData(false, 2)]
+    public void TerminalAllResult_UsesTaskResultFunctionAndCorrelationFields(
+        bool accepted,
+        int expectedFunction)
+    {
+        var bytes = QGdw3761Codec.CreateLinkRequest("1234", 18, QGdw3761LinkMessageKind.Login);
+        bytes[6] = 0x49;
+        bytes[11] = 0x4A;
+        bytes[12] = 0x0D;
+        bytes[13] = 0x65;
+        bytes[^2] = QGdw3761Codec.CalculateChecksum(bytes.AsSpan(6, bytes.Length - 8));
+        var request = Assert.IsType<QGdw3761Frame>(QGdw3761Codec.ReadCompleteFrame(bytes).Package);
+
+        var response = Assert.IsType<QGdw3761Frame>(QGdw3761Codec.ReadCompleteFrame(
+            QGdw3761Codec.CreateTerminalAllResult(request, accepted)).Package);
+
+        Assert.True(response.IsValid);
+        Assert.True(response.IsUpstream);
+        Assert.False(response.IsPrimaryMessage);
+        Assert.Equal(request.MasterStationAddress, response.MasterStationAddress);
+        Assert.Equal(request.Sequence, response.Sequence);
+        Assert.Equal(0x00, response.Afn);
+        Assert.Equal([expectedFunction], response.Functions);
+        Assert.Equal([0], response.Points);
+        Assert.Empty(response.DataUnitPayload);
+    }
+
+    /// <summary>
     /// 验证输入半包时请求继续收取数据，不提前消费缓冲区。
     /// </summary>
     [Fact]

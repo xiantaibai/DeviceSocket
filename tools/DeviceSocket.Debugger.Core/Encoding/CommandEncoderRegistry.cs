@@ -14,6 +14,7 @@ public sealed class CommandEncoderRegistry
 {
     private const string QGdw3761LinkEncoder = "qgdw3761.link";
     private const string QGdw3761GatherReadingResponseEncoder = "qgdw3761.gatherReadingResponse";
+    private const string QGdw3761TerminalConfirmationEncoder = "qgdw3761.terminalConfirmation";
     private const string Dlt645FrameEncoder = "dlt645.frame";
     private readonly DeclarativeLayoutEncoder _layoutEncoder = new();
 
@@ -22,10 +23,13 @@ public sealed class CommandEncoderRegistry
     /// </summary>
     /// <param name="command">JSON 中定义的指令。</param>
     /// <param name="values">由界面收集的参数键值。</param>
+    /// <param name="serverProfile">当前 376.1 服务端兼容类型；非 376.1 指令忽略该参数。</param>
     /// <returns>生成的报文和摘要。</returns>
     public CommandBuildResult Build(
         CommandDefinition command,
-        IReadOnlyDictionary<string, string> values)
+        IReadOnlyDictionary<string, string> values,
+        QGdw3761ServerCompatibilityProfile serverProfile =
+            QGdw3761ServerCompatibilityProfile.Standard)
     {
         ValidateRequiredInputs(command, values);
         var effectiveValues = new Dictionary<string, string>(values, StringComparer.OrdinalIgnoreCase);
@@ -44,14 +48,17 @@ public sealed class CommandEncoderRegistry
 
         var encoder = command.Encoder.Trim();
         if (encoder.Equals(QGdw3761LinkEncoder, StringComparison.OrdinalIgnoreCase))
-            return BuildQGdw3761Link(effectiveValues);
+            return BuildQGdw3761Link(effectiveValues, serverProfile);
         if (encoder.Equals(QGdw3761GatherReadingResponseEncoder, StringComparison.OrdinalIgnoreCase))
             return BuildQGdw3761GatherReadingResponse(effectiveValues);
+        if (encoder.Equals(QGdw3761TerminalConfirmationEncoder, StringComparison.OrdinalIgnoreCase))
+            return BuildQGdw3761TerminalConfirmation(effectiveValues, serverProfile);
         if (encoder.Equals(Dlt645FrameEncoder, StringComparison.OrdinalIgnoreCase))
             return BuildDlt645Frame(effectiveValues);
 
         throw new InvalidOperationException(
-            $"编码器“{command.Encoder}”不在安全白名单中，当前支持 {QGdw3761LinkEncoder}、{QGdw3761GatherReadingResponseEncoder}、{Dlt645FrameEncoder}。");
+            $"编码器“{command.Encoder}”不在安全白名单中，当前支持 {QGdw3761LinkEncoder}、" +
+            $"{QGdw3761GatherReadingResponseEncoder}、{QGdw3761TerminalConfirmationEncoder}、{Dlt645FrameEncoder}。");
     }
 
     private static CommandBuildResult BuildRaw(
@@ -76,7 +83,13 @@ public sealed class CommandEncoderRegistry
         return new CommandBuildResult(bytes, "固定 HEX 指令");
     }
 
-    private static CommandBuildResult BuildQGdw3761Link(IReadOnlyDictionary<string, string> values)
+    /// <summary>按当前服务端兼容类型生成登录、退出或心跳链路请求。</summary>
+    /// <param name="values">界面输入和指令固定参数。</param>
+    /// <param name="serverProfile">决定 GatherV4 是否设置 CON=1 的服务端兼容类型。</param>
+    /// <returns>完整链路请求及其显示摘要。</returns>
+    private static CommandBuildResult BuildQGdw3761Link(
+        IReadOnlyDictionary<string, string> values,
+        QGdw3761ServerCompatibilityProfile serverProfile)
     {
         var division = GetValue(values, "administrativeDivision");
         var terminalAddress = ParseUInt16(GetValue(values, "terminalAddress"), "终端地址");
@@ -103,10 +116,59 @@ public sealed class CommandEncoderRegistry
             terminalAddress,
             kind,
             sequence,
-            heartbeatTime);
+            heartbeatTime,
+            confirmationRequested: serverProfile == QGdw3761ServerCompatibilityProfile.GatherV4);
         return new CommandBuildResult(
             frame,
-            $"376.1 {kind}，设备 3761:{division}-{terminalAddress:D5}，SEQ={sequence}");
+            $"376.1 {kind}，设备 3761:{division}-{terminalAddress:D5}，SEQ={sequence}" +
+            (serverProfile == QGdw3761ServerCompatibilityProfile.GatherV4
+                ? "，GatherV4 CON=1"
+                : string.Empty));
+    }
+
+    /// <summary>根据 GatherV4 主站下行帧生成保留 A3、复用 PSEQ 的 AFN=00H/F1 或 F2 任务结果。</summary>
+    /// <param name="values">包含下行原始 HEX 和任务结果值的参数集合；0 表示成功，非 0 表示失败。</param>
+    /// <param name="serverProfile">当前服务端兼容类型；必须为 GatherV4。</param>
+    /// <returns>完整终端确认帧及其关联字段摘要。</returns>
+    /// <exception cref="InvalidOperationException">当前未选择 GatherV4 服务类型时抛出。</exception>
+    /// <exception cref="FormatException">原始 HEX、帧方向、校验和或错误码无效时抛出。</exception>
+    private static CommandBuildResult BuildQGdw3761TerminalConfirmation(
+        IReadOnlyDictionary<string, string> values,
+        QGdw3761ServerCompatibilityProfile serverProfile)
+    {
+        if (serverProfile != QGdw3761ServerCompatibilityProfile.GatherV4)
+            throw new InvalidOperationException("发送 GatherV4 任务结果前，请把服务类型切换为 GatherV4。");
+
+        var requestHex = GetValue(values, "requestHex");
+        if (!HexCodec.TryParse(requestHex, out var requestBytes, out var parseError))
+            throw new FormatException($"主站下发报文：{parseError}");
+
+        var readResult = QGdw3761Codec.ReadCompleteFrame(requestBytes);
+        if (readResult.Status == FrameReadStatus.NeedMoreData ||
+            readResult.Consumed != requestBytes.Length ||
+            readResult.Package is not QGdw3761Frame request ||
+            !request.IsValid)
+        {
+            var protocolError = readResult.Package?.Error?.Message ?? "报文长度不完整或包含多余字节。";
+            throw new FormatException($"主站下发报文无效：{protocolError}");
+        }
+
+        var errorCode = ParseByte(GetValue(values, "errorCode", "0"), "确认错误码");
+        byte[] response;
+        try
+        {
+            response = QGdw3761Codec.CreateTerminalAllResult(request, accepted: errorCode == 0);
+        }
+        catch (ArgumentException exception)
+        {
+            throw new FormatException(exception.Message, exception);
+        }
+
+        var resultFunction = errorCode == 0 ? "F1 全部确认" : "F2 全部否认";
+        return new CommandBuildResult(
+            response,
+            $"GatherV4 AFN=00H/{resultFunction}，设备 {request.DeviceId}，" +
+            $"原 AFN={request.Afn:X2}H，A3={request.MasterStationAddress}，RSEQ={request.Sequence}，任务结果值={errorCode}");
     }
 
     private static CommandBuildResult BuildQGdw3761GatherReadingResponse(

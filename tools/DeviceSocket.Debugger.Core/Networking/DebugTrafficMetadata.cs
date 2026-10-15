@@ -12,6 +12,9 @@ namespace DeviceSocket.Debugger.Core.Networking;
 /// <param name="ApplicationFunctionCode">376.1 AFN（应用层功能码）；非 376.1 协议时为空。</param>
 /// <param name="Functions">376.1 数据单元功能号集合；协议不提供时为空集合。</param>
 /// <param name="Sequence">376.1 PSEQ/RSEQ 的低四位序号；协议不提供时为空。</param>
+/// <param name="IsUpstream">376.1 DIR 方向；true 为终端上行、false 为主站下行，其他协议为空。</param>
+/// <param name="IsPrimaryMessage">376.1 PRM 启动标志；true 为启动报文，其他协议为空。</param>
+/// <param name="ConfirmationRequested">376.1 CON 确认请求标志；其他协议为空。</param>
 public sealed record DebugTrafficMetadata(
     DeviceProtocol Protocol,
     ProtocolTrafficKind TrafficKind,
@@ -19,4 +22,7 @@ public sealed record DebugTrafficMetadata(
     string InstructionKey,
     byte? ApplicationFunctionCode,
     IReadOnlyList<int> Functions,
-    byte? Sequence);
+    byte? Sequence,
+    bool? IsUpstream = null,
+    bool? IsPrimaryMessage = null,
+    bool? ConfirmationRequested = null);

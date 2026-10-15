@@ -8,3 +8,5 @@ TestResults/
 **/load-test-results/
 *.user
 *.suo
+/.cursor
+/.workbuddy/

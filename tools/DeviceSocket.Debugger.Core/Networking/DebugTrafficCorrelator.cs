@@ -1,4 +1,5 @@
 using DeviceSocket.Core.Protocols.Common;
+using DeviceSocket.Debugger.Core.Protocols.QGdw3761;
 
 namespace DeviceSocket.Debugger.Core.Networking;
 
@@ -11,6 +12,18 @@ public sealed class DebugTrafficCorrelator
     private static readonly TimeSpan CorrelationWindow = TimeSpan.FromMinutes(2);
     private readonly object _syncRoot = new();
     private readonly List<PendingRequest> _pendingRequests = [];
+    private QGdw3761ServerCompatibilityProfile _qGdw3761ServerProfile;
+
+    /// <summary>
+    /// 初始化请求回复关联器；默认保留 Gather 老服务的 AFN=00H/F1 固定序号兼容行为。
+    /// </summary>
+    /// <param name="qGdw3761ServerProfile">Q/GDW 376.1 服务端兼容类型。</param>
+    public DebugTrafficCorrelator(
+        QGdw3761ServerCompatibilityProfile qGdw3761ServerProfile =
+            QGdw3761ServerCompatibilityProfile.GatherTcpCenter)
+    {
+        _qGdw3761ServerProfile = qGdw3761ServerProfile;
+    }
 
     /// <summary>
     /// 保存一条等待回复的发送请求所需的最小关联字段。
@@ -43,11 +56,11 @@ public sealed class DebugTrafficCorrelator
             }
 
             if (entry.Direction != TrafficDirection.Receive || entry.Metadata is null)
-                return CreateUnmatchedResult(entry.Category);
+                return CreateUnmatchedResult(entry.Category, entry.Metadata);
 
             var matchedIndex = FindMatchedRequest(entry.Metadata);
             if (matchedIndex < 0)
-                return CreateUnmatchedResult(entry.Category);
+                return CreateUnmatchedResult(entry.Category, entry.Metadata);
 
             var request = _pendingRequests[matchedIndex];
             _pendingRequests.RemoveAt(matchedIndex);
@@ -73,12 +86,28 @@ public sealed class DebugTrafficCorrelator
     }
 
     /// <summary>
+    /// 切换 Q/GDW 376.1 服务端兼容规则，并清除旧规则下尚未匹配的请求，避免跨模式误关联。
+    /// </summary>
+    /// <param name="profile">新的服务端兼容类型。</param>
+    public void SetQGdw3761ServerProfile(QGdw3761ServerCompatibilityProfile profile)
+    {
+        lock (_syncRoot)
+        {
+            if (_qGdw3761ServerProfile == profile)
+                return;
+            _qGdw3761ServerProfile = profile;
+            _pendingRequests.Clear();
+        }
+    }
+
+    /// <summary>
     /// 把包含结构化协议字段的业务或心跳发送记录加入有限等待队列。
     /// </summary>
     /// <param name="entry">已经成功发送的通信记录。</param>
     private void TrackPendingRequest(DebugTrafficEntry entry)
     {
-        if (entry.Metadata is null ||
+        if (!entry.TrackResponse ||
+            entry.Metadata is null ||
             entry.Category is not (
                 DebugTrafficCategory.Business or
                 DebugTrafficCategory.Heartbeat or
@@ -99,7 +128,8 @@ public sealed class DebugTrafficCorrelator
     /// <returns>匹配请求的集合索引；未找到时返回 -1。</returns>
     private int FindMatchedRequest(DebugTrafficMetadata received)
     {
-        if (IsGatherLegacyLinkConfirmation(received))
+        if (_qGdw3761ServerProfile == QGdw3761ServerCompatibilityProfile.GatherTcpCenter &&
+            IsGatherLegacyLinkConfirmation(received))
             return FindLatestPendingRequest(received);
 
         for (var index = _pendingRequests.Count - 1; index >= 0; index--)
@@ -174,16 +204,25 @@ public sealed class DebugTrafficCorrelator
     /// 为未关联记录生成清晰的状态说明，区分主动业务上报、心跳、异常和系统状态。
     /// </summary>
     /// <param name="category">记录当前分类。</param>
+    /// <param name="metadata">可选协议方向元数据，用于区分主站下行与终端主动上报。</param>
     /// <returns>未关联结果。</returns>
-    private static DebugTrafficCorrelationResult CreateUnmatchedResult(DebugTrafficCategory category)
+    private static DebugTrafficCorrelationResult CreateUnmatchedResult(
+        DebugTrafficCategory category,
+        DebugTrafficMetadata? metadata)
     {
-        var status = category switch
-        {
-            DebugTrafficCategory.Business => "主动上报 / 未匹配",
-            DebugTrafficCategory.Heartbeat => "心跳消息",
-            DebugTrafficCategory.Error => "异常消息",
-            _ => "状态消息"
-        };
+        var isQGdwServerDownstream =
+            metadata?.Protocol == DeviceProtocol.QGdw3761 &&
+            metadata.IsUpstream == false &&
+            metadata.IsPrimaryMessage == true;
+        var status = isQGdwServerDownstream
+            ? "服务端下行 / 待应答"
+            : category switch
+            {
+                DebugTrafficCategory.Business => "主动上报 / 未匹配",
+                DebugTrafficCategory.Heartbeat => "心跳消息",
+                DebugTrafficCategory.Error => "异常消息",
+                _ => "状态消息"
+            };
         return new DebugTrafficCorrelationResult(category, status, null, false);
     }
 }

@@ -47,7 +47,7 @@ dotnet run --project tools\DeviceSocket.LoadTester\DeviceSocket.LoadTester.cspro
 {
   "role": "devicesOnly",
   "target": {
-    "host": "192.168.111.18",
+    "host": "192.168.111.222",
     "port": 6666,
     "protocol": "qGdw3761",
     "compatibilityProfile": "gatherTcpCenter"
@@ -187,7 +187,7 @@ meterId,deviceId
 | 字段 | 类型 | 默认值 | 意义与约束 | 使用场景 |
 | --- | --- | --- | --- | --- |
 | `commandWorkload.enabled` | bool | `false` | 是否执行 HTTP 指令阶段；`apiOnly`/`combined` 必须为 true | 只测试连接时关闭，测试服务端下发时开启 |
-| `commandWorkload.baseUrl` | string | 空 | Gather 业务 API 的绝对 HTTP/HTTPS 根地址 | 例如 `http://192.168.111.18:9011`，不是 TCP 地址 |
+| `commandWorkload.baseUrl` | string | 空 | Gather 业务 API 的绝对 HTTP/HTTPS 根地址 | 例如 `http://192.168.111.222:9011`，不是 TCP 地址 |
 | `commandWorkload.targetDeviceSource` | enum | `fixedOrdinal` | `fixedOrdinal` 按 GlobalOrdinal 固定截取 HTTP 目标设备；`onlineRegistry` 从本进程 TCP 会话的全部在线设备快照中按阶段数量选取目标，只允许与 `combined` 角色组合 | 需要保证 HTTP 只请求当前真正在线的设备时使用 `onlineRegistry`；`apiOnly` 保持 `fixedOrdinal` |
 | `commandWorkload.endpointPath` | string | `/api/ammeter/reading` | POST 接口相对路径，不能为空；GatherV4 只允许 `/Handmould/IssueCmd` 或 `/Handmould/IssueCmdSync`，启动校验会拒绝误用旧入口 | Gather.TcpCenter 使用默认值；GatherV4 必须显式覆盖 |
 | `commandWorkload.authorizationHeaderName` | string | `gather-authorize-key` | 鉴权请求头名称；与环境变量名任一为空时不发送鉴权头 | 正式环境通常保持默认名称 |
@@ -422,6 +422,8 @@ GatherV4 请求的 `areaCode` 取设备编号前四位，`address` 取后五位�
 | `gatherv4-connections-10000.json` | GatherV4 一万台 CON=1 登录、F1 ACK、心跳和业务在线基线 |
 | `gatherv4-http-reading-10000.json` | GatherV4 一万台在线及 `/Handmould/IssueCmd` 同步端到端抄读；运行前必须填写真实 GatherCode、ItemCodes 和 CSV |
 | `gatherv4-reconnect-storm-10000.json` | GatherV4 一万台稳定在线后人工重启 Communication 服务，验证真实断线、自动重连、F1 再登录和恢复后稳定性 |
+| `gatherv4-connections-50000.json` | GatherV4 四分片五万台分阶段上线、登录/心跳确认及一小时常态在线基线 |
+| `gatherv4-reconnect-storm-50000.json` | GatherV4 四分片五万台稳定在线后人工重启 Communication，验证大规模真实断线、重新登录及恢复稳定性 |
 
 ## 新增或修改字段时的维护清单
 

@@ -14,4 +14,12 @@ internal static class QGdw3761TerminalResponseEncoder
     /// <returns>完整终端确认报文。</returns>
     internal static byte[] CreateConfirmation(QGdw3761Frame request) =>
         QGdw3761Codec.CreateTerminalConfirmation(request);
+
+    /// <summary>
+    /// 生成 GatherV4 可解析为业务成功的 AFN=00H/F1 全部确认，使服务端同时释放关联窗口并完成任务。
+    /// </summary>
+    /// <param name="request">已解析的 GatherV4 主站下行启动帧。</param>
+    /// <returns>保留 A3 并复用 PSEQ 的完整终端任务结果帧。</returns>
+    internal static byte[] CreateAllConfirmation(QGdw3761Frame request) =>
+        QGdw3761Codec.CreateTerminalAllResult(request);
 }

@@ -6,6 +6,8 @@
 
 GatherV4 已支持能力、止血版边界和首轮执行顺序见 [GatherV4 止血版兼容说明](docs/gatherv4-compatibility.md)。
 
+GatherV4 服务器监控先看 [五万设备连接使用教程](docs/gatherv4-diagnostics-wizard.md)：启动向导先输入 8，一次配置后自动打开资源、PerfView、Dump 三个状态窗口。等全部就绪后手动启动负载，异常在主窗口按 D，正常结束按 Q。教程按当前两台负载机、各约 2.5 万设备说明，并标明需要手动操作的步骤；TcpCenter 不在本次范围内。
+
 ## 核心能力
 
 - 使用 Q/GDW 376.1 模拟 TCP 建连、登录确认、心跳确认和退出登录。
@@ -35,8 +37,12 @@ GatherV4 已支持能力、止血版边界和首轮执行顺序见 [GatherV4 止
 | `gatherv4-connections-10000.json` | GatherV4 一万台 CON=1 登录、F1 ACK、心跳及业务在线基线 | 否 | 否 |
 | `gatherv4-http-reading-10000.json` | GatherV4 一万台在线及 Handmould/IssueCmd 同步指令闭环 | 是 | 否 |
 | `gatherv4-reconnect-storm-10000.json` | GatherV4 一万台稳定在线后人工重启 Communication 服务并验证自动恢复 | 否 | 是 |
+| `gatherv4-connections-50000.json` | GatherV4 四分片五万台分阶段上线及一小时常态连接基线 | 否 | 否 |
+| `gatherv4-reconnect-storm-50000.json` | GatherV4 四分片五万台稳定在线后人工重启 Communication 并验证恢复 | 否 | 是 |
 
-`Scenarios/gather-device-10000.csv` 和 `Scenarios/gather-device-50000.csv` 分别是当前一万台、五万台正式设备映射。多分片运行时每台负载机都部署同一份完整 CSV，由工具自动固定分配设备；CSV 格式示例移到 `docs/examples/gather-meter-device-map.example.csv`，示例数据不能直接用于正式压测。
+`Scenarios/gather-device-10000.csv`、`Scenarios/gather-device-50000.csv` 和 `Scenarios/gatherv4-device-50000.csv` 是对应环境的正式设备映射。多分片运行时每台负载机都部署同一份完整 CSV，由工具自动固定分配设备；`meterId` 和规范化后的 `deviceId` 必须分别全局唯一。CSV 格式示例移到 `docs/examples/gather-meter-device-map.example.csv`，示例数据不能直接用于正式压测。
+
+GatherV4 五万条唯一映射可以使用 [gatherv4-device-mapping-query.sql](docs/gatherv4-device-mapping-query.sql) 重新导出。查询先为每个集中器选取 `TB_AmmeterInfo.ID` 最小的电表，再按最终九位 `deviceId` 去重，最后截取五万条，避免数据库中重复集中器编号造成测试连接互踢。
 
 ## 运行前检查
 
@@ -126,7 +132,21 @@ dotnet run --project tools\DeviceSocket.LoadTester\DeviceSocket.LoadTester.cspro
   --run-id gatherv4-reconnect-r1
 ```
 
-运行前必须核对 TCP/HTTP 地址、`gatherV4.gatherCode`、`itemCodes` 以及 CSV 中的真实数据库映射。GatherV4 `/Handmould/IssueCmd` 会等待设备结果，场景全部使用 `showResult=true`；不要把旧服务的“异步快速受理”成功率口径直接用于 GatherV4。当前基础适配会为地址匹配的主站命令生成保留 A3、复用 PSEQ 的 AFN=00H/F3 终端确认，以验证命令下发、关联窗口释放和同设备队头阻塞；需要验证真实电量数据入库前，还应按实际采集项补充对应业务响应模板。
+五万台场景建议使用四台独立负载机。四台机器部署同一份场景和完整 CSV，使用相同的 RunId 和 UTC 启动时间，只把 `--shard-index` 分别设置为 `0`、`1`、`2`、`3`：
+
+```powershell
+# 常态连接基线；重连风暴只需把配置文件和 RunId 换成 gatherv4-reconnect-storm-50000。
+DeviceSocket.LoadTester run `
+  --config Scenarios\gatherv4-connections-50000.json `
+  --run-id gatherv4-connections-50000-r1 `
+  --shard-index 0 `
+  --shard-count 4 `
+  --start-at-utc 2026-10-10T06:00:00Z
+```
+
+常态脚本默认五万台达到 99% 在线并稳定两分钟后保持一小时；需要两小时或六小时长稳时，复制场景并把 `steady-50000.durationSeconds` 分别改为 `7200` 或 `21600`。重连脚本会在稳定阶段之后给出 20 秒准备倒计时和 60 秒操作窗口，仅 `shard-000` 输出重启提示。
+
+运行前必须核对 TCP/HTTP 地址、`gatherV4.gatherCode`、`itemCodes` 以及 CSV 中的真实数据库映射。GatherV4 `/Handmould/IssueCmd` 会等待设备结果，场景全部使用 `showResult=true`；不要把旧服务的“异步快速受理”成功率口径直接用于 GatherV4。当前基础适配会为地址匹配的主站命令生成保留 A3、复用 PSEQ 的 AFN=00H/F1 全部确认，用于验证命令下发、关联窗口释放、任务完成和同设备队头阻塞；需要验证真实电量数据入库前，还应按实际采集项补充对应业务响应模板。
 
 GatherV4 容量压测必须同时开启服务端 `GatherService.OpenTelemetry` 并让测试 Collector 留存 OTLP 指标。LoadTester 当前的 `--server-metrics` 自动解析器仍对应旧 Gather.TcpCenter 自定义 JSONL，不能把任意 Collector 导出文件冒充成同一指标结构；V4 服务端指标先作为同一 RunId 的外部证据归档，待确定 Collector 的稳定导出格式后再接入自动合并。
 
@@ -142,7 +162,7 @@ dotnet run --project tools\DeviceSocket.LoadTester\DeviceSocket.LoadTester.cspro
 
 ## 3～5 万台多分片扩展
 
-正式场景中的设备数量、阶段比例、连接速率和 HTTP 目标均按全局口径设计。仓库已经提供两个五万台四分片场景；继续复制扩容时必须同时调整：
+正式场景中的设备数量、阶段比例、连接速率和 HTTP 目标均按全局口径设计。仓库已经提供 Gather 与 GatherV4 的五万台四分片场景；继续复制扩容时必须同时调整：
 
 1. 从数据库导出包含全部目标设备的完整 CSV，例如 `gather-device-30000.csv` 或 `gather-device-50000.csv`。
 2. 把 `devices.count` 改为 CSV 的有效数据行数，并修改 `devices.deviceMappingFile`。

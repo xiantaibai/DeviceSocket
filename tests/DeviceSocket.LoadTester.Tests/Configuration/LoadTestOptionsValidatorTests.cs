@@ -178,8 +178,10 @@ public sealed class LoadTestOptionsValidatorTests
             "gather-tcpcenter-reconnect-storm-50000.json",
             "gather-tcpcenter-soak-10000.json",
             "gatherv4-connections-10000.json",
+            "gatherv4-connections-50000.json",
             "gatherv4-http-reading-10000.json",
-            "gatherv4-reconnect-storm-10000.json"
+            "gatherv4-reconnect-storm-10000.json",
+            "gatherv4-reconnect-storm-50000.json"
         };
 
         Assert.Equal(
@@ -273,6 +275,48 @@ public sealed class LoadTestOptionsValidatorTests
         Assert.Equal(1_500, allDevicesPhase.MaximumDurationSeconds);
         Assert.Equal(1_800, allDevicesPhase.DrainTimeoutSeconds);
         Assert.Equal(2_400, httpOptions.Reporting.DownstreamDiagnostics.CorrelationTimeoutSeconds);
+    }
+
+    /// <summary>
+    /// 验证 GatherV4 五万台常态和重连风暴场景使用四分片、同一真实设备全集及按五万规模设置的在线门槛。
+    /// </summary>
+    [Fact]
+    public async Task FiftyThousandGatherV4Scenarios_UseFourShardsAndScaledThresholds()
+    {
+        var scenarioDirectory = Path.Combine(AppContext.BaseDirectory, "Scenarios");
+        var connectionOptions = await LoadTestConfigurationLoader.LoadAsync(
+            Path.Combine(scenarioDirectory, "gatherv4-connections-50000.json"),
+            new RunCommandOverrides(),
+            CancellationToken.None);
+        var reconnectOptions = await LoadTestConfigurationLoader.LoadAsync(
+            Path.Combine(scenarioDirectory, "gatherv4-reconnect-storm-50000.json"),
+            new RunCommandOverrides(),
+            CancellationToken.None);
+
+        Assert.Equal(50_000, connectionOptions.Devices.Count);
+        Assert.Equal(4, connectionOptions.Distributed.ShardCount);
+        Assert.Equal(ServerCompatibilityProfile.GatherV4, connectionOptions.Target.CompatibilityProfile);
+        Assert.Equal("gatherv4-device-50000.csv", Path.GetFileName(connectionOptions.Devices.DeviceMappingFile));
+        var steadyPhase = Assert.Single(
+            connectionOptions.Scenario.Phases,
+            phase => phase.Name == "steady-50000");
+        Assert.Equal(3_600, steadyPhase.DurationSeconds);
+        Assert.True(steadyPhase.WaitForOnline);
+        Assert.Equal(0.99, steadyPhase.MinimumOnlineRate);
+
+        Assert.Equal(50_000, reconnectOptions.Devices.Count);
+        Assert.Equal(4, reconnectOptions.Distributed.ShardCount);
+        Assert.Equal(ServerCompatibilityProfile.GatherV4, reconnectOptions.Target.CompatibilityProfile);
+        Assert.Equal("gatherv4-device-50000.csv", Path.GetFileName(reconnectOptions.Devices.DeviceMappingFile));
+        Assert.Equal(49_000, reconnectOptions.Acceptance.MinimumReconnects);
+        Assert.Equal(300, reconnectOptions.Acceptance.MaximumRecoverySeconds);
+        Assert.Contains(reconnectOptions.Scenario.Phases, phase => phase.Name == "ramp-50000");
+        Assert.Contains(reconnectOptions.Scenario.Phases, phase => phase.Name == "recovery-50000");
+        var restartPhase = Assert.Single(
+            reconnectOptions.Scenario.Phases,
+            phase => phase.Name == "restart-gatherv4-now");
+        Assert.Equal(20, restartPhase.ManualAction.PreparationSeconds);
+        Assert.Equal(60, restartPhase.ManualAction.OperationSeconds);
     }
 
     /// <summary>

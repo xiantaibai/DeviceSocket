@@ -3,7 +3,7 @@
   "role": "devicesOnly",
   "target": {
     // 部署前改为测试环境 GatherV4 Communication 地址，并同步更新 safety.allowedTargets。
-    "host": "127.0.0.1",
+    "host": "192.168.111.222",
     "port": 8890,
     "protocol": "qGdw3761",
     "compatibilityProfile": "gatherV4"
@@ -12,7 +12,7 @@
     "count": 10000,
     "generationMode": "csv",
     // CSV 必须是测试库真实 AmmeterId 与九位设备编号映射，所有分片读取同一完整文件。
-    "deviceMappingFile": "gather-device-10000.csv"
+    "deviceMappingFile": "gatherv4-device-10000.csv"
   },
   "connection": {
     "startMode": "ramp",
@@ -168,7 +168,7 @@
     // 虽然服务由人工重启而不是工具主动断线，仍显式声明本轮确实授权故障场景。
     "allowFaultInjection": true,
     "allowedTargets": [
-      "127.0.0.1"
+      "192.168.111.222"
     ]
   }
 }

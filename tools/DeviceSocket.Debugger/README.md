@@ -17,7 +17,13 @@ dotnet publish tools\DeviceSocket.Debugger\DeviceSocket.Debugger.csproj `
   -c Release -r win-x64 --self-contained true
 ```
 
-启动后先在右侧选择指令，按需修改参数；协议和默认端口会随指令切换。建立 TCP 连接后点击“发送指令”，界面会自动切换到接收页。
+启动后先在右侧选择指令，按需修改参数；协议和默认端口会随指令切换。Q/GDW 376.1 还需要在顶部选择“通用 Q/GDW 376.1”“Gather 老服务”或“GatherV4”服务类型。建立 TCP 连接后点击“发送指令”，界面会自动切换到接收页。
+
+### GatherV4 兼容
+
+选择顶部“GatherV4”后，现有登录、退出登录和定时心跳会设置 `CON=1`，收到的 AFN=00H/F1 确认严格按设备编号和 PSEQ 与请求关联。该选择会保存到本地设置；TCP 已连接时不能切换，防止同一连接混用两套确认语义。
+
+主站向调试终端下发命令后，可以在“回复看板”开启自动回复：GatherV4 模式会生成保留 A3、复用原 PSEQ 的 AFN=00H/F1 任务全部确认，使服务端释放在途窗口并完成业务任务；同时排除服务端 AFN=00H/F1 ACK，避免确认循环。需要人工修改报文时，可在右侧选择“GatherV4 任务结果 / 任务结果（AFN=00H/F1/F2）”，粘贴完整下行 HEX 后手动生成和发送。
 
 ### 376.1 定时心跳
 
@@ -30,6 +36,7 @@ dotnet publish tools\DeviceSocket.Debugger\DeviceSocket.Debugger.csproj `
 - 点击“业务回复”“心跳”“异常/状态”或“全部”切换分类，各按钮显示当前缓存数量。
 - 使用搜索框按设备编号、标题、HEX 或解析内容检索，使用右侧下拉框按 AFN/FN、645 功能码或数据标识筛选。
 - 列表采用两行紧凑摘要；选中记录后，右侧固定详情区显示完整 HEX、解析结果和请求回复匹配耗时。
+- 接收页顶部持续显示当前服务类型和自动回复开关；376.1 主站启动帧会标记为“服务端下行 / 待应答”，不再误显示成“主动上报”。
 - “暂停刷新”只暂停界面消费，TCP 接收和文件日志继续运行；恢复后每 `100` 毫秒批量追加最多 `250` 条。
 - 接收中心最多保留最近 `10,000` 条、约 `5,000,000` 个字符，其中心跳最多保留最近 `1,000` 条；界面淘汰不会删除已经写入的日志文件。
 - “清空当前”只清理当前分类，“清空全部”同时清理全部分类和等待刷新队列。
@@ -45,6 +52,18 @@ dotnet publish tools\DeviceSocket.Debugger\DeviceSocket.Debugger.csproj `
 
 回填后仍可手动调整各项参数，再点击“生成报文”或“发送指令”。
 
+### 自动回复与回复看板
+
+“回复看板”用于单连接联调时自动处理服务端下发，并明确记录终端实际回复了哪条指令。自动回复默认关闭，开启状态和老 Gather 模拟读数会保存到本地设置：
+
+- `Gather 老服务`：单测量点 AFN=0CH/F129 自动返回完整抄读业务数据；可配置总电能和费率数。其他设置 `CON=1` 的主站命令返回 AFN=00H/F3 终端确认。
+- `GatherV4`：每条合法主站下行启动帧返回 AFN=00H/F1 任务全部确认，保留请求 A3 并复用 PSEQ，与 LoadTester 的 GatherV4 应答语义一致。
+- `通用 Q/GDW 376.1`：只对设置 `CON=1` 的主站下行启动帧返回 AFN=00H/F3。
+
+每条看板记录包含设备号、收到的 AFN/FN/PN/PSEQ、实际回复类型、处理耗时、下行 HEX 和上行 HEX。发送失败也会保留失败原因；看板最多保留最近 `1,000` 条，清空看板不会影响 TCP 连接、接收日志或自动回复开关。自动回复属于终端对主站命令的应答，不会进入“等待服务端回复”的请求关联队列。
+
+现场常见的 `AFN=10H/F1/PN0` 透明转发类下行，以及 `AFN=0DH/F82-F92/PN1` 轮询下行即使 `CON=0`，在 `GatherV4` 模式下也会逐条生成 F1 任务全部确认。若误选“Gather 老服务”或“通用 Q/GDW 376.1”，这类 `CON=0` 报文不会自动回复。
+
 发送、接收、连接状态和解析错误会写入：
 
 ```text
@@ -55,7 +74,7 @@ dotnet publish tools\DeviceSocket.Debugger\DeviceSocket.Debugger.csproj `
 
 内置示例位于 `CommandSets`：
 
-- `QGdw3761/basic-commands.json`：登录、心跳、退出登录、抄读回复（AFN=0CH/F129）和自定义 HEX。
+- `QGdw3761/basic-commands.json`：登录、心跳、退出登录、老 Gather 抄读回复（AFN=0CH/F129）、GatherV4 任务结果和自定义 HEX。
 - `Dlt645/basic-commands.json`：读取通信地址、读取数据、自定义 645 帧和自定义 HEX。
 
 工具启动时自动加载随程序发布的指令集，也可以通过“打开 JSON”临时加载其他文件。修改文件后点击“重新加载”即可生效。
@@ -70,6 +89,7 @@ dotnet publish tools\DeviceSocket.Debugger\DeviceSocket.Debugger.csproj `
 
 - `qgdw3761.link`
 - `qgdw3761.gatherReadingResponse`
+- `qgdw3761.terminalConfirmation`
 - `dlt645.frame`
 
 完整字段约束见 [debugger-command-set.schema.json](../../docs/debugger-command-set.schema.json)。

@@ -3,7 +3,7 @@
   "role": "devicesOnly",
   "target": {
     // 运行前替换为 GatherV4 Communication 的测试地址；仓库默认配置端口通常为 8890。
-    "host": "127.0.0.1",
+    "host": "192.168.111.222",
     "port": 8890,
     "protocol": "qGdw3761",
     "compatibilityProfile": "gatherV4"
@@ -12,7 +12,7 @@
     "count": 10000,
     "generationMode": "csv",
     // 必须替换或核对为 GatherV4 测试库已准备的 meterId,deviceId 完整映射。
-    "deviceMappingFile": "gather-device-10000.csv"
+    "deviceMappingFile": "gatherv4-device-10000.csv"
   },
   "connection": {
     "startMode": "ramp",
@@ -127,6 +127,6 @@
     "highLoadThreshold": 10000,
     "allowHighLoad": false,
     "allowFaultInjection": false,
-    "allowedTargets": ["127.0.0.1"]
+    "allowedTargets": ["192.168.111.222"]
   }
 }

@@ -220,6 +220,38 @@
       ]
     },
     {
+      "name": "GatherV4 任务结果",
+      "commands": [
+        {
+          "id": "qgdw3761.gatherv4-terminal-confirmation",
+          "name": "任务结果（AFN=00H/F1/F2）",
+          "description": "粘贴 GatherV4 主站下发的完整 376.1 报文，生成保留 A3 并复用 PSEQ 的终端任务结果；F1 可使服务端完成业务任务，使用前请把顶部服务类型切换为 GatherV4。",
+          "mode": "codec",
+          "encoder": "qgdw3761.terminalConfirmation",
+          "inputs": [
+            {
+              "key": "requestHex",
+              "label": "主站下发报文",
+              "type": "hex",
+              "default": "",
+              "description": "必须是校验和正确的主站下行启动帧；工具会从中读取设备地址、A3、AFN、DA/DT 和 PSEQ。"
+            },
+            {
+              "key": "errorCode",
+              "label": "任务结果值",
+              "type": "number",
+              "default": "0",
+              "description": "0 生成 F1 全部确认，表示任务成功；非 0 生成 F2 全部否认，表示任务失败，范围 0-255。"
+            }
+          ],
+          "response": {
+            "decoder": "qgdw3761",
+            "timeoutMs": 5000
+          }
+        }
+      ]
+    },
+    {
       "name": "原始报文",
       "commands": [
         {

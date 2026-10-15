@@ -102,11 +102,13 @@ public sealed class DebugTcpSession : IAsyncDisposable
     /// <param name="title">指令显示名称。</param>
     /// <param name="details">报文生成摘要。</param>
     /// <param name="cancellationToken">取消标记。</param>
+    /// <param name="trackResponse">是否把该发送记录登记为等待服务端回复的请求；自动终端应答必须设为 false。</param>
     public async Task SendAsync(
         ReadOnlyMemory<byte> bytes,
         string title,
         string details,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool trackResponse = true)
     {
         if (bytes.IsEmpty)
             throw new ArgumentException("发送报文不能为空。", nameof(bytes));
@@ -130,7 +132,8 @@ public sealed class DebugTcpSession : IAsyncDisposable
                 title,
                 HexCodec.ToHex(bytes.Span, true),
                 details,
-                frame);
+                frame,
+                trackResponse);
         }
         catch (Exception exception) when (exception is IOException or SocketException)
         {
@@ -365,12 +368,14 @@ public sealed class DebugTcpSession : IAsyncDisposable
     /// <param name="rawHex">完整原始报文 HEX。</param>
     /// <param name="details">解析详情或状态说明。</param>
     /// <param name="frame">可选的结构化协议帧，用于生成分类和筛选元数据。</param>
+    /// <param name="trackResponse">发送记录是否应进入请求回复关联队列。</param>
     private void Publish(
         TrafficDirection direction,
         string title,
         string rawHex,
         string details,
-        IProtocolFrame? frame = null)
+        IProtocolFrame? frame = null,
+        bool trackResponse = true)
     {
         var category = ResolveCategory(direction, frame);
         var metadata = frame is null ? null : CreateMetadata(frame);
@@ -381,7 +386,8 @@ public sealed class DebugTcpSession : IAsyncDisposable
             rawHex,
             details,
             category,
-            metadata);
+            metadata,
+            trackResponse);
         _fileLogger.TryWrite(entry);
         TrafficOccurred?.Invoke(this, entry);
     }
@@ -447,7 +453,10 @@ public sealed class DebugTcpSession : IAsyncDisposable
                 CreateQGdwInstructionKey(qGdw),
                 qGdw.Afn,
                 qGdw.Functions,
-                qGdw.Sequence),
+                qGdw.Sequence,
+                qGdw.IsUpstream,
+                qGdw.IsPrimaryMessage,
+                qGdw.ConfirmationRequested),
             Dlt645Frame dlt645 => new DebugTrafficMetadata(
                 dlt645.Protocol,
                 dlt645.TrafficKind,

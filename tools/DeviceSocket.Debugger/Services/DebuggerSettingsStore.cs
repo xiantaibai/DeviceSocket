@@ -11,6 +11,9 @@ internal sealed class DebuggerSettings
     /// <summary>获取或设置最后使用的协议显示名称。</summary>
     public string ProtocolName { get; set; } = "Q/GDW 376.1";
 
+    /// <summary>获取或设置最后使用的 Q/GDW 376.1 服务端兼容类型显示名称；默认兼容 Gather 老服务。</summary>
+    public string ServerCompatibilityName { get; set; } = "Gather 老服务";
+
     /// <summary>获取或设置最后使用的服务器地址。</summary>
     public string Host { get; set; } = "127.0.0.1";
 
@@ -19,6 +22,15 @@ internal sealed class DebuggerSettings
 
     /// <summary>获取或设置最后使用的定时心跳间隔，单位秒。</summary>
     public string HeartbeatIntervalSeconds { get; set; } = "120";
+
+    /// <summary>获取或设置是否自动回复 Q/GDW 376.1 服务端下发指令；默认关闭，避免调试时意外回包。</summary>
+    public bool AutoReplyEnabled { get; set; }
+
+    /// <summary>获取或设置老 Gather 自动抄读回复的费率数量文本；默认 4，有效范围 0-8，零值表示仅返回总示值。</summary>
+    public string AutoReplyRateCount { get; set; } = "4";
+
+    /// <summary>获取或设置老 Gather 自动抄读回复的总电能文本，单位 kWh；默认 1000.0000。</summary>
+    public string AutoReplyTotalReadingKwh { get; set; } = "1000.0000";
 
     /// <summary>按协议名和参数键保存最近修改过的指令输入值。</summary>
     public Dictionary<string, Dictionary<string, string>> InputValues { get; set; } =

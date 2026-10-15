@@ -2,6 +2,7 @@ using DeviceSocket.Core.Protocols.Common;
 using DeviceSocket.Core.Protocols.QGdw3761;
 using DeviceSocket.Debugger.Core.CommandSets.Models;
 using DeviceSocket.Debugger.Core.Encoding;
+using DeviceSocket.Debugger.Core.Protocols.QGdw3761;
 
 namespace DeviceSocket.Tests.Debugger;
 
@@ -142,6 +143,89 @@ public sealed class CommandEncoderRegistryTests
         Assert.Equal(
             "68 12 90 78 56 34 12 68 11 04 33 33 34 33 68 16",
             HexCodec.ToHex(result.Bytes, true));
+    }
+
+    /// <summary>
+    /// 验证 GatherV4 服务类型下复用现有登录编码器时自动设置 CON=1 请求主站确认。
+    /// </summary>
+    [Fact]
+    public void QGdw3761Login_GatherV4RequestsConfirmation()
+    {
+        var command = new CommandDefinition
+        {
+            Id = "login-v4",
+            Name = "登录",
+            Encoder = "qgdw3761.link",
+            FixedValues = new Dictionary<string, string> { ["linkKind"] = "Login" }
+        };
+        var values = new Dictionary<string, string>
+        {
+            ["administrativeDivision"] = "2608",
+            ["terminalAddress"] = "10001",
+            ["sequence"] = "7"
+        };
+
+        var result = new CommandEncoderRegistry().Build(
+            command,
+            values,
+            QGdw3761ServerCompatibilityProfile.GatherV4);
+        var frame = Assert.IsType<QGdw3761Frame>(
+            QGdw3761Codec.ReadCompleteFrame(result.Bytes).Package);
+
+        Assert.True(frame.IsValid);
+        Assert.True(frame.ConfirmationRequested);
+        Assert.Equal(7, frame.Sequence);
+        Assert.Contains("GatherV4 CON=1", result.Summary, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 验证 GatherV4 任务结果编码器保留下行 A3、复用 PSEQ，并生成服务端可解析的 F1 全部确认。
+    /// </summary>
+    [Fact]
+    public void QGdw3761GatherV4TerminalConfirmation_PreservesCorrelationFields()
+    {
+        var requestBytes = QGdw3761Codec.CreateLinkRequest(
+            "2608",
+            10001,
+            QGdw3761LinkMessageKind.Login,
+            sequence: 1);
+        requestBytes[6] = 0x49;
+        requestBytes[11] = 0x4A;
+        requestBytes[12] = 0x0C;
+        requestBytes[^2] = QGdw3761Codec.CalculateChecksum(
+            requestBytes.AsSpan(6, requestBytes.Length - 8));
+        var request = Assert.IsType<QGdw3761Frame>(
+            QGdw3761Codec.ReadCompleteFrame(requestBytes).Package);
+        var preparedBytes = QGdw3761Codec.PrepareReliableDownstreamCommand(request, sequence: 9);
+        var prepared = Assert.IsType<QGdw3761Frame>(
+            QGdw3761Codec.ReadCompleteFrame(preparedBytes).Package);
+        var command = new CommandDefinition
+        {
+            Id = "v4-confirmation",
+            Name = "指令确认",
+            Encoder = "qgdw3761.terminalConfirmation"
+        };
+
+        var result = new CommandEncoderRegistry().Build(
+            command,
+            new Dictionary<string, string>
+            {
+                ["requestHex"] = HexCodec.ToHex(preparedBytes, true),
+                ["errorCode"] = "0"
+            },
+            QGdw3761ServerCompatibilityProfile.GatherV4);
+        var response = Assert.IsType<QGdw3761Frame>(
+            QGdw3761Codec.ReadCompleteFrame(result.Bytes).Package);
+
+        Assert.True(response.IsValid);
+        Assert.True(response.IsUpstream);
+        Assert.False(response.IsPrimaryMessage);
+        Assert.Equal(0x00, response.Afn);
+        Assert.Equal([1], response.Functions);
+        Assert.Equal(prepared.MasterStationAddress, response.MasterStationAddress);
+        Assert.Equal(prepared.Sequence, response.Sequence);
+        Assert.Empty(response.DataUnitPayload);
+        Assert.Contains("F1 全部确认", result.Summary, StringComparison.Ordinal);
     }
 
     /// <summary>
