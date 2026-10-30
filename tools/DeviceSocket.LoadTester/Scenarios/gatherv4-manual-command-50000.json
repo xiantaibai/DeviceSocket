@@ -1,0 +1,332 @@
+{
+  // 人工命令专项：默认工具调用 API；加 --role devicesOnly 改为业务页面手动下发，设备仍自动 F1 并记录报告。
+  // 192.168.111.222 是文档示例地址，运行前同时修改 TCP、API、白名单、GatherCode、采集项及真实 CSV。
+  "role": "combined",
+  "target": {
+    "host": "192.168.111.222",
+    "port": 8890,
+    "protocol": "qGdw3761",
+    "compatibilityProfile": "gatherV4"
+  },
+  "devices": {
+    "count": 50000,
+    "generationMode": "csv",
+    "deviceMappingFile": "gatherv4-device-50000.csv"
+  },
+  "connection": {
+    "startMode": "ramp",
+    "connectionsPerSecond": 300,
+    "maxConcurrentConnecting": 500,
+    "connectTimeoutSeconds": 5,
+    "loginTimeoutSeconds": 10,
+    "writeTimeoutSeconds": 5,
+    "noDelay": true
+  },
+  "heartbeat": {
+    "enabled": true,
+    "intervalSeconds": 60,
+    "jitterSeconds": 10,
+    "responseTimeoutSeconds": 10
+  },
+  "workload": {
+    "reportsEnabled": false,
+    "reportIntervalSeconds": 300,
+    "jitterSeconds": 30,
+    "gatherV4Response": {
+      "enabled": true,
+      "mode": "normal",
+      "affectedDevicePercentage": 100,
+      "delayMilliseconds": 1000,
+      "maximumPendingResponsesPerDevice": 32,
+      "repeatObservationSeconds": 60
+    }
+  },
+  "commandWorkload": {
+    "targetDeviceSource": "onlineRegistry",
+    "enabled": true,
+    "baseUrl": "http://192.168.111.222:6383",
+    "endpointPath": "/Handmould/IssueCmd",
+    "authorizationHeaderName": "",
+    "authorizationKeyEnvironmentVariable": "",
+    "deviceMappingFile": null,
+    "meterIdStart": null,
+    "requestTimeoutSeconds": 90,
+    "minimumOnlineCount": 50000,
+    "requiredOnlineRate": 0.98,
+    "onlineStableSeconds": 60,
+    "onlineWaitTimeoutSeconds": 1200,
+    "startDelaySeconds": 0,
+    "gatherV4": {
+      "gatherCode": "V4-Gather-8890",
+      "meterType": 1,
+      // AFN=0DH/F82：测量点 A 相有功功率曲线；采用 GatherV4 已配置的电表采集项验证人工下发与 F1 确认。
+      "itemCodes": [
+        "0D_82"
+      ],
+      "density": 0,
+      "point": 1,
+      "dataTime": null,
+      "dataTimeFormat": "yyyy-MM-dd HH:mm:ss",
+      "validateResultData": true,
+      "expectedCommandsPerRequest": 1, // 先用 20 条功能阶段核对真实拆分数量，不能按采集项个数猜测。
+      "expectedResultItemCodes": [] // 空集合按 itemCodes 校验；透明转发返回类型不同需填写真实返回 DataType。
+    },
+    "phases": [
+      {
+        "name": "functional-20",
+        "targetDeviceCount": 20,
+        "requestsPerDevice": 1,
+        "requestsPerSecond": 2,
+        "maxConcurrency": 10,
+        "showResult": true,
+        "pauseAfterSeconds": 0,
+        "onlineGateFailureAction": "abortRun",
+        "minimumApiSuccessRate": 0.99,
+        "maximumP95Milliseconds": 30000,
+        "drainEnabled": true,
+        "minimumRawDeliveryRate": 1,
+        "minimumDeliveryRate": 1,
+        "minimumResponseRate": 1,
+        "drainTimeoutSeconds": 600,
+        "quietSeconds": 20,
+        "drainFailureAction": "abortRun",
+        "circuitBreakerEnabled": true,
+        "maximumDurationSeconds": 600,
+        "maximumConsecutiveFailures": 20,
+        "maximumTimeoutRate": 0.1,
+        "circuitBreakerMinimumRequests": 50,
+        "circuitBreakerAction": "abortRun",
+        "postConfirmationObservationSeconds": 30
+      },
+      {
+        "name": "steady-10rps",
+        "targetDeviceCount": 1000,
+        "requestsPerDevice": 1,
+        "requestsPerSecond": 10,
+        "maxConcurrency": 100,
+        "showResult": true,
+        "pauseAfterSeconds": 0,
+        "onlineGateFailureAction": "abortRun",
+        "minimumApiSuccessRate": 0.99,
+        "maximumP95Milliseconds": 30000,
+        "drainEnabled": true,
+        "minimumRawDeliveryRate": 1,
+        "minimumDeliveryRate": 1,
+        "minimumResponseRate": 1,
+        "drainTimeoutSeconds": 600,
+        "quietSeconds": 20,
+        "drainFailureAction": "abortRun",
+        "circuitBreakerEnabled": true,
+        "maximumDurationSeconds": 600,
+        "maximumConsecutiveFailures": 20,
+        "maximumTimeoutRate": 0.1,
+        "circuitBreakerMinimumRequests": 50,
+        "circuitBreakerAction": "abortRun",
+        "postConfirmationObservationSeconds": 30
+      },
+      {
+        "name": "steady-50rps",
+        "targetDeviceCount": 1000,
+        "requestsPerDevice": 1,
+        "requestsPerSecond": 50,
+        "maxConcurrency": 200,
+        "showResult": true,
+        "pauseAfterSeconds": 0,
+        "onlineGateFailureAction": "abortRun",
+        "minimumApiSuccessRate": 0.99,
+        "maximumP95Milliseconds": 30000,
+        "drainEnabled": true,
+        "minimumRawDeliveryRate": 1,
+        "minimumDeliveryRate": 1,
+        "minimumResponseRate": 1,
+        "drainTimeoutSeconds": 600,
+        "quietSeconds": 20,
+        "drainFailureAction": "abortRun",
+        "circuitBreakerEnabled": true,
+        "maximumDurationSeconds": 600,
+        "maximumConsecutiveFailures": 20,
+        "maximumTimeoutRate": 0.1,
+        "circuitBreakerMinimumRequests": 50,
+        "circuitBreakerAction": "abortRun",
+        "postConfirmationObservationSeconds": 30
+      },
+      {
+        "name": "steady-100rps",
+        "targetDeviceCount": 2000,
+        "requestsPerDevice": 1,
+        "requestsPerSecond": 100,
+        "maxConcurrency": 300,
+        "showResult": true,
+        "pauseAfterSeconds": 0,
+        "onlineGateFailureAction": "abortRun",
+        "minimumApiSuccessRate": 0.99,
+        "maximumP95Milliseconds": 30000,
+        "drainEnabled": true,
+        "minimumRawDeliveryRate": 1,
+        "minimumDeliveryRate": 1,
+        "minimumResponseRate": 1,
+        "drainTimeoutSeconds": 600,
+        "quietSeconds": 20,
+        "drainFailureAction": "abortRun",
+        "circuitBreakerEnabled": true,
+        "maximumDurationSeconds": 600,
+        "maximumConsecutiveFailures": 20,
+        "maximumTimeoutRate": 0.1,
+        "circuitBreakerMinimumRequests": 50,
+        "circuitBreakerAction": "abortRun",
+        "postConfirmationObservationSeconds": 30
+      },
+      {
+        "name": "same-device-1000x5",
+        "targetDeviceCount": 1000,
+        "requestsPerDevice": 5,
+        "requestsPerSecond": 50,
+        "maxConcurrency": 200,
+        "showResult": true,
+        "pauseAfterSeconds": 0,
+        "onlineGateFailureAction": "abortRun",
+        "minimumApiSuccessRate": 0.99,
+        "maximumP95Milliseconds": 30000,
+        "drainEnabled": true,
+        "minimumRawDeliveryRate": 1,
+        "minimumDeliveryRate": 1,
+        "minimumResponseRate": 1,
+        "drainTimeoutSeconds": 600,
+        "quietSeconds": 20,
+        "drainFailureAction": "abortRun",
+        "circuitBreakerEnabled": true,
+        "maximumDurationSeconds": 600,
+        "maximumConsecutiveFailures": 20,
+        "maximumTimeoutRate": 0.1,
+        "circuitBreakerMinimumRequests": 50,
+        "circuitBreakerAction": "abortRun",
+        "postConfirmationObservationSeconds": 30
+      },
+      {
+        "name": "full-coverage-50000",
+        "targetDeviceCount": 50000,
+        "requestsPerDevice": 1,
+        "requestsPerSecond": 100,
+        "maxConcurrency": 300,
+        "showResult": true,
+        "pauseAfterSeconds": 0,
+        "onlineGateFailureAction": "abortRun",
+        "minimumApiSuccessRate": 0.99,
+        "maximumP95Milliseconds": 30000,
+        "drainEnabled": true,
+        "minimumRawDeliveryRate": 1,
+        "minimumDeliveryRate": 1,
+        "minimumResponseRate": 1,
+        "drainTimeoutSeconds": 600,
+        "quietSeconds": 20,
+        "drainFailureAction": "abortRun",
+        "circuitBreakerEnabled": true,
+        "maximumDurationSeconds": 2180,
+        "maximumConsecutiveFailures": 20,
+        "maximumTimeoutRate": 0.1,
+        "circuitBreakerMinimumRequests": 50,
+        "circuitBreakerAction": "abortRun",
+        "postConfirmationObservationSeconds": 30
+      }
+    ]
+  },
+  "reconnect": {
+    "mode": "exponentialJitter",
+    "initialDelayMilliseconds": 250,
+    "maximumDelaySeconds": 10,
+    "multiplier": 2,
+    "jitterRatio": 0.5,
+    "maximumAttempts": 0
+  },
+  "scenario": {
+    "name": "gatherv4-manual-command-50000",
+    "durationSeconds": 1,
+    "phases": [
+      {
+        "name": "functional-100",
+        "kind": "warmup",
+        "durationSeconds": 30,
+        "targetDevicePercentage": 0.2,
+        "connectionsPerSecond": 25,
+        "waitForOnline": true,
+        "minimumOnlineRate": 1,
+        "onlineStableSeconds": 5,
+        "onlineWaitTimeoutSeconds": 180
+      },
+      {
+        "name": "ramp-50000",
+        "kind": "ramp",
+        "durationSeconds": 60,
+        "targetDevicePercentage": 100,
+        "connectionsPerSecond": 500,
+        "waitForOnline": true,
+        "minimumOnlineRate": 1,
+        "onlineStableSeconds": 60,
+        "onlineWaitTimeoutSeconds": 1800
+      },
+      {
+        "name": "manual-command-observation",
+        "kind": "steady",
+        "durationSeconds": 3600,
+        "targetDevicePercentage": 100,
+        "connectionsPerSecond": 300,
+        "waitForOnline": true,
+        "minimumOnlineRate": 1,
+        "onlineStableSeconds": 0,
+        "onlineWaitTimeoutSeconds": 1800
+      },
+      {
+        "name": "cooldown",
+        "kind": "cooldown",
+        "durationSeconds": 30,
+        "targetDevicePercentage": 0,
+        "connectionsPerSecond": 300
+      }
+    ]
+  },
+  "reporting": {
+    "outputDirectory": "load-test-results",
+    "sampleIntervalSeconds": 1,
+    "checkpointIntervalSeconds": 10,
+    "writeConsoleSummary": true,
+    "downstreamDiagnostics": {
+      "enabled": true,
+      "captureUnknownFrames": true,
+      "maxSamplesPerFingerprint": 5,
+      "maxTotalSamples": 500,
+      "rawHexMaxBytes": 512,
+      "correlationTimeoutSeconds": 1800
+    }
+  },
+  "serverObservation": {
+    "enabled": false
+  },
+  "acceptance": {
+    "minimumConnectionSuccessRate": 0.95,
+    "minimumLoginSuccessRate": 0.95,
+    "minimumFinalOnlineRate": 0.98,
+    "maximumProtocolErrorRate": 0.01,
+    "minimumApiSuccessRate": 0.99,
+    "minimumApiTargetCoverageRate": 0.98,
+    "maximumApiP95Milliseconds": 90000,
+    "minimumSyncResultSuccessRate": 0.99,
+    "minimumCommandDeliveryRate": 1,
+    "minimumCommandRecognitionRate": 1,
+    "maximumUnobservedCommands": 0
+  },
+  "distributed": {
+    "runId": "gatherv4-manual-command-50000",
+    "shardIndex": 0,
+    "shardCount": 2,
+    "randomSeed": 37610001
+  },
+  "safety": {
+    "environment": "test",
+    "highLoadThreshold": 10000,
+    "allowHighLoad": true,
+    "allowFaultInjection": false,
+    "allowedTargets": [
+      "192.168.111.222"
+    ]
+  }
+}

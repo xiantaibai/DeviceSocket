@@ -6,6 +6,12 @@ namespace DeviceSocket.LoadTester.Configuration;
 public sealed class CommandPhaseOptions
 {
     /// <summary>
+    /// 配置 commandWorkload.phases[].postConfirmationObservationSeconds；默认 0，范围 0～3600，单位秒；
+    /// HTTP 发压结束后至少保持设备在线观察该时长，统计 F1 后疑似重发和下一条任务；0 不增加观察窗口，未开启排空时也生效。
+    /// </summary>
+    public int PostConfirmationObservationSeconds { get; set; }
+
+    /// <summary>
     /// 获取或设置 <c>commandWorkload.phases[].name</c>；用于控制台和报告定位阶段，默认空值无效。
     /// </summary>
     public string Name { get; set; } = string.Empty;

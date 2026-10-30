@@ -19,5 +19,8 @@ public enum GatherV4ResponseMode
     WrongA3,
 
     /// <summary>返回错误 PSEQ 的合法帧，验证服务端不会误关联同设备其他命令。</summary>
-    WrongPseq
+    WrongPseq,
+
+    /// <summary>返回地址和序号正确的 F2 全部否认，验证服务端失败结果不能误算任务成功；追加枚举以保留既有数值兼容。</summary>
+    Deny
 }

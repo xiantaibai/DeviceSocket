@@ -129,6 +129,7 @@ public sealed class LoadTestProtocolTests
     /// <param name="expectedSendCount">预期写出次数。</param>
     [Theory]
     [InlineData(GatherV4ResponseMode.Delayed, 1)]
+    [InlineData(GatherV4ResponseMode.Deny, 1)]
     [InlineData(GatherV4ResponseMode.Drop, 0)]
     [InlineData(GatherV4ResponseMode.Duplicate, 2)]
     [InlineData(GatherV4ResponseMode.WrongA3, 1)]

@@ -8,12 +8,14 @@ namespace DeviceSocket.LoadTester.Protocols;
 /// <param name="Delay">首次响应前等待时长。</param>
 /// <param name="SendCount">相同响应的发送次数；零表示不发送。</param>
 /// <param name="IsBusinessFailure">是否为协议格式合法但业务数据无效的模拟失败响应。</param>
+/// <param name="ResponseMatchesRequest">应答地址、A3/PSEQ 及结果是否正确；故障应答不能计入正确确认成功率。</param>
 internal sealed record DownstreamResponsePlan(
     byte[]? Payload,
     DownstreamResponseKind Kind,
     TimeSpan Delay,
     int SendCount,
-    bool IsBusinessFailure = false)
+    bool IsBusinessFailure = false,
+    bool ResponseMatchesRequest = true)
 {
     /// <summary>
     /// 为普通协议应答创建无延迟、单次发送计划。

@@ -21,6 +21,7 @@ internal interface ICommandWorkloadAdapter
     /// <summary>同时按 HTTP 状态码和服务端 JSON 语义判定业务结果。</summary>
     /// <param name="statusCode">HTTP 状态码。</param>
     /// <param name="payload">完整响应体。</param>
+    /// <param name="mapping">本次请求的设备及电表映射，用于防止其他电表结果误算成功。</param>
     /// <returns>统一后的成功状态、错误码和消息。</returns>
-    CommandApiEvaluation EvaluateResponse(HttpStatusCode statusCode, byte[] payload);
+    CommandApiEvaluation EvaluateResponse(HttpStatusCode statusCode, byte[] payload, GatherDeviceMeterMapping mapping);
 }

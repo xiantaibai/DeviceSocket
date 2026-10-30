@@ -32,8 +32,9 @@ internal sealed class GatherTcpCenterCommandWorkloadAdapter : ICommandWorkloadAd
     }
 
     /// <inheritdoc />
-    public CommandApiEvaluation EvaluateResponse(HttpStatusCode statusCode, byte[] payload)
+    public CommandApiEvaluation EvaluateResponse(HttpStatusCode statusCode, byte[] payload, GatherDeviceMeterMapping mapping)
     {
+        _ = mapping;
         if ((int)statusCode is < 200 or >= 300)
             return new CommandApiEvaluation(false, $"API_HTTP_{(int)statusCode}", null, false);
         try

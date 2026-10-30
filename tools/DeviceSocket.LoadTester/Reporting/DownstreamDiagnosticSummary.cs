@@ -7,7 +7,7 @@ namespace DeviceSocket.LoadTester.Reporting;
 /// </summary>
 public sealed record DownstreamDiagnosticSummary
 {
-    /// <summary>获取已经注册到命令关联器的 HTTP 请求数。</summary>
+    /// <summary>获取 HTTP 请求按预检拆分数换算的预期子命令数；旧报告一请求一命令时与请求数一致。</summary>
     public long RegisteredCommands { get; init; }
 
     /// <summary>获取至少关联到一帧原始下行的唯一命令数。</summary>

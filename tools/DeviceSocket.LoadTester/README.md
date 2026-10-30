@@ -6,7 +6,9 @@
 
 GatherV4 已支持能力、止血版边界和首轮执行顺序见 [GatherV4 止血版兼容说明](docs/gatherv4-compatibility.md)。
 
-GatherV4 服务器监控先看 [五万设备连接使用教程](docs/gatherv4-diagnostics-wizard.md)：启动向导先输入 8，一次配置后自动打开资源、PerfView、Dump 三个状态窗口。等全部就绪后手动启动负载，异常在主窗口按 D，正常结束按 Q。教程按当前两台负载机、各约 2.5 万设备说明，并标明需要手动操作的步骤；TcpCenter 不在本次范围内。
+GatherV4 人工下发与自动 F1 确认使用 [人工命令压测说明](docs/GatherV4人工命令下发与自动确认压测.md)：新增一万／五万台场景，支持业务页面手动下发（`--role devicesOnly`）、工具 API 发压、Data 完整校验、同设备五命令、确认后观察及 Collector OTLP JSON 报告。
+
+GatherV4 日常服务器监控先看 [轻量监控教程](docs/gatherv4-simple-monitor.md)：固定配置只维护一次，每轮输入 RunId 后用一个窗口记录进程资源、服务状态和统一时间线，按 M 标记事件、按 Q 结束并自动归档。PerfView、ProcDump 只在已确认的异常场景中单独使用，不再与日常监控默认捆绑；TcpCenter 不在本次范围内。
 
 ## 核心能力
 
@@ -42,7 +44,7 @@ GatherV4 服务器监控先看 [五万设备连接使用教程](docs/gatherv4-di
 
 `Scenarios/gather-device-10000.csv`、`Scenarios/gather-device-50000.csv` 和 `Scenarios/gatherv4-device-50000.csv` 是对应环境的正式设备映射。多分片运行时每台负载机都部署同一份完整 CSV，由工具自动固定分配设备；`meterId` 和规范化后的 `deviceId` 必须分别全局唯一。CSV 格式示例移到 `docs/examples/gather-meter-device-map.example.csv`，示例数据不能直接用于正式压测。
 
-GatherV4 五万条唯一映射可以使用 [gatherv4-device-mapping-query.sql](docs/gatherv4-device-mapping-query.sql) 重新导出。查询先为每个集中器选取 `TB_AmmeterInfo.ID` 最小的电表，再按最终九位 `deviceId` 去重，最后截取五万条，避免数据库中重复集中器编号造成测试连接互踢。
+GatherV4 一万／五万条唯一映射可以使用 [gatherv4-device-mapping-query.sql](docs/gatherv4-device-mapping-query.sql) 重新导出。查询与服务端 `AmmeterDal.GetAmmeter` 的有效条件保持一致：集中器有效、电表状态在 `[0, 100)`、存在有效 `TB_AmmeterGatherItem` 且属于指定 `GatherCode`；人工 `0D_82` 场景还排除特殊表并限制有效测量点。随后为每个集中器选取 `TB_AmmeterInfo.ID` 最小的有效电表，再按最终九位 `deviceId` 去重。不要继续使用仅判断 `TB_AmmeterInfo.ID > 0` 的宽松查询，否则设备可以登录，但人工下发会返回“表信息不存在于缓存中”。
 
 ## 运行前检查
 
@@ -148,7 +150,7 @@ DeviceSocket.LoadTester run `
 
 运行前必须核对 TCP/HTTP 地址、`gatherV4.gatherCode`、`itemCodes` 以及 CSV 中的真实数据库映射。GatherV4 `/Handmould/IssueCmd` 会等待设备结果，场景全部使用 `showResult=true`；不要把旧服务的“异步快速受理”成功率口径直接用于 GatherV4。当前基础适配会为地址匹配的主站命令生成保留 A3、复用 PSEQ 的 AFN=00H/F1 全部确认，用于验证命令下发、关联窗口释放、任务完成和同设备队头阻塞；需要验证真实电量数据入库前，还应按实际采集项补充对应业务响应模板。
 
-GatherV4 容量压测必须同时开启服务端 `GatherService.OpenTelemetry` 并让测试 Collector 留存 OTLP 指标。LoadTester 当前的 `--server-metrics` 自动解析器仍对应旧 Gather.TcpCenter 自定义 JSONL，不能把任意 Collector 导出文件冒充成同一指标结构；V4 服务端指标先作为同一 RunId 的外部证据归档，待确定 Collector 的稳定导出格式后再接入自动合并。
+GatherV4 容量压测必须开启服务端 `GatherService.OpenTelemetry` 并让测试 Collector 留存 OTLP 指标。`report generate --server-metrics` 现已独立支持 Collector 标准 OTLP JSON/JSONL（累计 Sum/Gauge）；不把 V4 指标套成旧 Gather.TcpCenter JSONL。格式、窗口及证据边界见人工命令压测说明。
 
 ## 六小时长稳
 

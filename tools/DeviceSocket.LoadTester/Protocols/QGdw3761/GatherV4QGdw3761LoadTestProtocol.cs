@@ -119,7 +119,9 @@ internal sealed class GatherV4QGdw3761LoadTestProtocol : ILoadTestProtocol, IDow
         if (mode == GatherV4ResponseMode.Drop)
             return new DownstreamResponsePlan(null, DownstreamResponseKind.GatherV4Command, TimeSpan.Zero, 0);
 
-        var payload = QGdw3761TerminalResponseEncoder.CreateAllConfirmation(request);
+        var payload = mode == GatherV4ResponseMode.Deny
+            ? QGdw3761Codec.CreateTerminalAllResult(request, accepted: false)
+            : QGdw3761TerminalResponseEncoder.CreateAllConfirmation(request);
         if (mode == GatherV4ResponseMode.WrongA3)
         {
             // A3 的 D1-D7 是主站地址；只翻转其中一位并重算 CS，构造格式合法但不能命中当前 Mark 的响应。
@@ -139,7 +141,9 @@ internal sealed class GatherV4QGdw3761LoadTestProtocol : ILoadTestProtocol, IDow
             mode == GatherV4ResponseMode.Delayed
                 ? TimeSpan.FromMilliseconds(_responseOptions.DelayMilliseconds)
                 : TimeSpan.Zero,
-            mode == GatherV4ResponseMode.Duplicate ? 2 : 1);
+            mode == GatherV4ResponseMode.Duplicate ? 2 : 1,
+            IsBusinessFailure: mode == GatherV4ResponseMode.Deny,
+            ResponseMatchesRequest: mode is not (GatherV4ResponseMode.WrongA3 or GatherV4ResponseMode.WrongPseq or GatherV4ResponseMode.Deny));
     }
 
     /// <summary>
@@ -267,7 +271,7 @@ internal sealed class GatherV4QGdw3761LoadTestProtocol : ILoadTestProtocol, IDow
     /// <param name="device">待判断虚拟设备。</param>
     /// <param name="percentage">影响比例，单位百分比。</param>
     /// <returns>设备落入指定稳定桶时返回 true。</returns>
-    private static bool IsAffectedDevice(VirtualDeviceDescriptor device, double percentage)
+    internal static bool IsAffectedDevice(VirtualDeviceDescriptor device, double percentage)
     {
         if (percentage <= 0)
             return false;

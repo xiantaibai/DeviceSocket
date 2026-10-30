@@ -20,6 +20,9 @@ internal static class NodeReportWriter
         Directory.CreateDirectory(outputDirectory);
         var serializerOptions = LoadTestConfigurationLoader.CreateSerializerOptions();
         await File.WriteAllTextAsync(
+            Path.Combine(outputDirectory, "gatherv4-command-samples.jsonl"),
+            BuildJsonLines(report.GatherV4CommandSamples, serializerOptions), new UTF8Encoding(false), cancellationToken);
+        await File.WriteAllTextAsync(
             Path.Combine(outputDirectory, "node-summary.json"),
             JsonSerializer.Serialize(report, serializerOptions),
             new UTF8Encoding(false),
@@ -87,7 +90,7 @@ internal static class NodeReportWriter
     private static string BuildHttpErrorsCsv(IEnumerable<HttpRequestErrorDetail> errors)
     {
         var builder = new StringBuilder(
-            "timestampUtc,phase,meterId,deviceId,showResult,requestSequence,httpStatusCode,errorCode,errorMessage,elapsedMilliseconds,timedOut,prevalidationRejected,shardIndex\n");
+            "timestampUtc,phase,meterId,deviceId,showResult,requestSequence,httpStatusCode,errorCode,errorMessage,elapsedMilliseconds,timedOut,prevalidationRejected,shardIndex,configuredDeviceFault\n");
         foreach (var error in errors.OrderBy(item => item.TimestampUtc).ThenBy(item => item.RequestSequence))
         {
             builder.Append(Csv(error.TimestampUtc.ToString("O"))).Append(',')
@@ -102,7 +105,7 @@ internal static class NodeReportWriter
                 .Append(error.ElapsedMilliseconds).Append(',')
                 .Append(error.TimedOut).Append(',')
                 .Append(error.PrevalidationRejected).Append(',')
-                .Append(error.ShardIndex).Append('\n');
+                .Append(error.ShardIndex).Append(',').Append(Csv(error.ConfiguredDeviceFault)).Append('\n');
         }
         return builder.ToString();
     }
@@ -148,7 +151,7 @@ internal static class NodeReportWriter
         var builder = new StringBuilder(
             "phase,requestSequence,meterId,deviceId,showResult,httpStatusCode,apiSucceeded,prevalidationRejected," +
             "downstreamKind,associationConfidence,duplicateDownstreamFrames,responseSent,outcome," +
-            "registeredAtUtc,httpCompletedAtUtc,firstDownstreamAtUtc,responseSentAtUtc\n");
+            "registeredAtUtc,httpCompletedAtUtc,firstDownstreamAtUtc,responseSentAtUtc,expectedDownstreamCommands,observedDownstreamCommands,correctlyRespondedCommands\n");
         foreach (var trace in traces.OrderBy(item => item.RequestSequence))
         {
             builder.Append(Csv(trace.PhaseName)).Append(',')
@@ -167,7 +170,9 @@ internal static class NodeReportWriter
                 .Append(Csv(trace.RegisteredAtUtc.ToString("O"))).Append(',')
                 .Append(Csv(trace.HttpCompletedAtUtc?.ToString("O"))).Append(',')
                 .Append(Csv(trace.FirstDownstreamAtUtc?.ToString("O"))).Append(',')
-                .Append(Csv(trace.ResponseSentAtUtc?.ToString("O"))).Append('\n');
+                .Append(Csv(trace.ResponseSentAtUtc?.ToString("O"))).Append(',')
+                .Append(trace.ExpectedDownstreamCommands).Append(',').Append(trace.ObservedDownstreamCommands).Append(',')
+                .Append(trace.CorrectlyRespondedCommands).Append('\n');
         }
         return builder.ToString();
     }
@@ -196,7 +201,7 @@ internal static class NodeReportWriter
     {
         var metrics = report.Metrics;
         var commandPhases = report.CommandPhases.Where(item => item.Status != CommandPhaseStatus.Skipped).ToArray();
-        var estimatedEnqueued = commandPhases.Sum(item => item.ApiEstimatedEnqueued);
+        var estimatedEnqueued = commandPhases.Sum(item => item.ExpectedDownstreamCommands ?? item.ApiEstimatedEnqueued);
         var rawObservedCommands = commandPhases.Sum(item => item.RawDownstreamCommandsObserved);
         var recognizedCommands = commandPhases.Sum(item => item.ProtocolRecognizedCommands);
         var unsupportedCommands = commandPhases.Sum(item => item.UnsupportedCommands);
@@ -226,6 +231,8 @@ internal static class NodeReportWriter
         builder.AppendLine($"| 出站/入站丢包注入 | {metrics.InjectedOutboundDrops:N0}/{metrics.InjectedInboundDrops:N0} |");
         builder.AppendLine($"| 错误校验和/粘包/半包注入 | {metrics.InjectedCorruptFrames:N0}/{metrics.InjectedDuplicateFrames:N0}/{metrics.InjectedFragmentedWrites:N0} |");
         builder.AppendLine($"| 下发应答 | {metrics.DownstreamResponsesSent:N0} |");
+        if (report.Options.Target.CompatibilityProfile == ServerCompatibilityProfile.GatherV4)
+            builder.AppendLine(GatherV4CommandReportFormatter.MarkdownRows(metrics.GatherV4Commands));
         builder.AppendLine($"| HTTP API 发起/成功/失败/超时 | {metrics.ApiRequestsStarted:N0}/{metrics.ApiRequestsSucceeded:N0}/{metrics.ApiRequestsFailed:N0}/{metrics.ApiRequestTimeouts:N0} |");
         builder.AppendLine($"| HTTP 目标设备累计要求/在线/离线跳过 | {metrics.ApiTargetsRequired:N0}/{metrics.ApiTargetsOnline:N0}/{metrics.ApiRequestsSkippedOffline:N0} |");
         builder.AppendLine($"| 旧 Gather 读表命令收到/已应答/丢弃 | {metrics.GatherReadingCommandsReceived:N0}/{metrics.GatherReadingCommandsResponded:N0}/{metrics.GatherReadingResponsesDropped:N0} |");
@@ -233,7 +240,7 @@ internal static class NodeReportWriter
         if (commandPhases.Length > 0)
         {
             builder.AppendLine(
-                $"| HTTP 估算入队/原始下行/协议识别/不支持/未观测 | " +
+                $"| 预计下行命令/原始下行/协议识别/不支持/未观测 | " +
                 $"{estimatedEnqueued:N0}/{rawObservedCommands:N0}/{recognizedCommands:N0}/{unsupportedCommands:N0}/{unobservedCommands:N0} |");
             builder.AppendLine($"| HTTP 原始下行交付率 | {Rate(Math.Min(rawObservedCommands, estimatedEnqueued), estimatedEnqueued):P2} |");
             builder.AppendLine($"| HTTP 协议识别率 | {Rate(recognizedCommands, rawObservedCommands):P2} |");

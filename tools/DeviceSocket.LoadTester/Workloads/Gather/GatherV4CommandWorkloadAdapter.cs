@@ -6,7 +6,7 @@ using DeviceSocket.LoadTester.Configuration;
 
 namespace DeviceSocket.LoadTester.Workloads.Gather;
 
-/// <summary>生成 GatherV4 Handmould/IssueCmd 请求，并按 ResultMsg 的 Status/Msg 语义判定同步结果。</summary>
+/// <summary>生成 GatherV4 人工任务请求，逐项核对本表有效结果，防止部分返回被误算完整成功。</summary>
 internal sealed class GatherV4CommandWorkloadAdapter : ICommandWorkloadAdapter
 {
     private readonly GatherV4CommandOptions _options;
@@ -39,7 +39,7 @@ internal sealed class GatherV4CommandWorkloadAdapter : ICommandWorkloadAdapter
     }
 
     /// <inheritdoc />
-    public CommandApiEvaluation EvaluateResponse(HttpStatusCode statusCode, byte[] payload)
+    public CommandApiEvaluation EvaluateResponse(HttpStatusCode statusCode, byte[] payload, GatherDeviceMeterMapping mapping)
     {
         if ((int)statusCode is < 200 or >= 300)
             return new CommandApiEvaluation(false, $"API_HTTP_{(int)statusCode}", null, false);
@@ -47,17 +47,63 @@ internal sealed class GatherV4CommandWorkloadAdapter : ICommandWorkloadAdapter
         {
             using var document = JsonDocument.Parse(payload);
             var root = document.RootElement;
-            if (!CommandApiJson.TryGetBoolean(root, "status", out var succeeded))
+            if (root.ValueKind != JsonValueKind.Object || !CommandApiJson.TryGetBoolean(root, "status", out var succeeded))
                 return new CommandApiEvaluation(false, "API_INVALID_RESPONSE", CommandApiJson.ReadMessage(root), false);
-            return succeeded
-                ? new CommandApiEvaluation(true, null, CommandApiJson.ReadMessage(root), false)
-                // IssueCmd 在命令已经入队后仍可能因等待设备结果超时返回 Status=false，不能误标成“入队前拒绝”。
-                : new CommandApiEvaluation(false, "API_GATHERV4_BUSINESS_FAILURE", CommandApiJson.ReadMessage(root), false);
+            // 服务端超时后仍可能存在已入队任务，失败结果一律不冒充确定的入队前拒绝。
+            if (!succeeded)
+                return new CommandApiEvaluation(false, "API_GATHERV4_BUSINESS_FAILURE", CommandApiJson.ReadMessage(root), false);
+            return _options.ValidateResultData
+                ? ValidateResults(root, mapping)
+                : new CommandApiEvaluation(true, null, CommandApiJson.ReadMessage(root), false);
         }
         catch (JsonException)
         {
             return new CommandApiEvaluation(false, "API_INVALID_JSON", null, false);
         }
+    }
+
+    /// <summary>核对有效表号与采集项覆盖；F1 只证明确认链路，不把其中的零读数当作真实采集值。</summary>
+    /// <param name="root">HTTP JSON 对象。</param>
+    /// <param name="mapping">本次请求的真实电表映射。</param>
+    /// <returns>空数据、错误电表、无效数据或缺项时返回独立稳定错误码。</returns>
+    private CommandApiEvaluation ValidateResults(JsonElement root, GatherDeviceMeterMapping mapping)
+    {
+        if (!TryReadProperty(root, "data", out var data) || data.ValueKind != JsonValueKind.Array || data.GetArrayLength() == 0)
+            return new CommandApiEvaluation(false, "API_GATHERV4_EMPTY_RESULT", "Status 成功但没有设备结果。", false);
+
+        var returned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in data.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object ||
+                !TryReadProperty(item, "meterId", out var meter) || meter.ValueKind != JsonValueKind.Number || !meter.TryGetInt32(out var meterId) || meterId != mapping.MeterId)
+                return new CommandApiEvaluation(false, "API_GATHERV4_RESULT_DEVICE_MISMATCH", "结果电表与本次请求不一致。", false);
+            if (!CommandApiJson.TryGetBoolean(item, "validData", out var valid) || !valid)
+                return new CommandApiEvaluation(false, "API_GATHERV4_INVALID_RESULT", "设备返回无效或否认结果。", false);
+            if (TryReadProperty(item, "dataType", out var type) && type.ValueKind == JsonValueKind.String)
+                returned.Add(type.GetString()!);
+        }
+        var expected = _options.ExpectedResultItemCodes.Count > 0 ? _options.ExpectedResultItemCodes : _options.ItemCodes;
+        var missing = expected.Where(code => !returned.Contains(code)).ToArray();
+        return missing.Length > 0
+            ? new CommandApiEvaluation(false, "API_GATHERV4_PARTIAL_RESULT", $"结果缺少采集项：{string.Join(',', missing)}。", false)
+            : new CommandApiEvaluation(true, null, "已核验本表有效结果及配置的全部返回项；未证明真实示值或落库。", false);
+    }
+
+    /// <summary>读取大小写不敏感的结果属性，兼容新旧服务的 JSON 命名。</summary>
+    /// <param name="root">JSON 对象。</param>
+    /// <param name="name">属性名。</param>
+    /// <param name="value">找到的属性值。</param>
+    /// <returns>属性存在时返回 true。</returns>
+    private static bool TryReadProperty(JsonElement root, string name, out JsonElement value)
+    {
+        foreach (var property in root.EnumerateObject())
+            if (property.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+            {
+                value = property.Value;
+                return true;
+            }
+        value = default;
+        return false;
     }
 
     /// <summary>表示 GatherV4 HandmouldRequest 的最小稳定字段集合。</summary>

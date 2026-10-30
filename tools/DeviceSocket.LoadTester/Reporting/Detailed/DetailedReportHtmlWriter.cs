@@ -209,7 +209,7 @@ internal static class DetailedReportHtmlWriter
         AppendMetric(builder, "HTTP 成功率", httpRate.HasValue ? $"{httpRate:F2}%" : "无请求", $"{metrics.ApiRequestsSucceeded:N0} / {metrics.ApiRequestsStarted:N0}", httpRate is null or >= 99d);
         var rawCommands = analysis.CommandPhases.Sum(item => item.RawDownstreamCommands);
         var recognizedCommands = analysis.CommandPhases.Sum(item => item.RecognizedCommands);
-        var estimatedCommands = analysis.CommandPhases.Sum(item => item.EstimatedEnqueued);
+        var estimatedCommands = analysis.CommandPhases.Sum(item => item.ExpectedDownstreamCommands);
         AppendMetric(
             builder,
             "原始下行交付率",
@@ -232,7 +232,19 @@ internal static class DetailedReportHtmlWriter
                 : metrics.OutageCount;
         AppendMetric(builder, "非预期二次掉线", secondaryOutages.ToString("N0", CultureInfo.InvariantCulture), $"总中断 {metrics.OutageCount:N0}", secondaryOutages == 0);
         AppendMetric(builder, "ACK 发送完成峰值", analysis.Server is { } completedServer ? $"{completedServer.MaximumAckSendCompletedElapsedMilliseconds:N0} ms" : "不可评估", "Socket Send 完成回调", analysis.AcceptanceChecks.FirstOrDefault(item => item.Name == "ACK 发送完成最大耗时")?.Status == DetailedAcceptanceStatus.Passed);
-        builder.AppendLine("</div></section>");
+        builder.AppendLine("</div>");
+        if (metrics.GatherV4Commands.ReceivedFrames > 0)
+            builder.AppendLine(GatherV4CommandReportFormatter.Html(metrics.GatherV4Commands));
+        if (analysis.GatherV4ServerMetrics.Count > 0)
+        {
+            builder.AppendLine("<h3 class=\"table-title\">GatherV4 服务端 OTLP 证据</h3><div class=\"table-wrap\"><table><thead><tr><th>指标</th><th>峰值</th><th>末值</th><th>累计增量</th><th>重置</th></tr></thead><tbody>");
+            foreach (var metric in analysis.GatherV4ServerMetrics)
+                builder.Append("<tr><td>").Append(Html(metric.Name)).Append("</td><td>").Append(metric.Maximum.ToString("N2", CultureInfo.InvariantCulture))
+                    .Append("</td><td>").Append(metric.Last.ToString("N2", CultureInfo.InvariantCulture)).Append("</td><td>")
+                    .Append(metric.Increase?.ToString("N0", CultureInfo.InvariantCulture) ?? "不可评估").Append("</td><td>").Append(metric.CounterResets).AppendLine("</td></tr>");
+            builder.AppendLine("</tbody></table></div><p>Processing 完成操作计数属于服务聚合证据，不能代替逐 CommandId 的完成确认。</p>");
+        }
+        builder.AppendLine("</section>");
     }
 
     /// <summary>

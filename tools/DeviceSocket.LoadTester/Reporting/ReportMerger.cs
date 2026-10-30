@@ -106,7 +106,7 @@ internal static class ReportMerger
     private static void ValidateReports(IReadOnlyList<NodeReport> reports)
     {
         var first = reports[0];
-        if (reports.Any(item => item.SchemaVersion is not 1 and not 2 and not 3))
+        if (reports.Any(item => item.SchemaVersion is not 1 and not 2 and not 3 and not 4))
             throw new InvalidDataException("节点报告的 SchemaVersion 不受当前合并器支持。");
         if (reports.Any(item => item.SchemaVersion != first.SchemaVersion))
             throw new InvalidDataException("不能混合合并不同 SchemaVersion 的节点报告。");

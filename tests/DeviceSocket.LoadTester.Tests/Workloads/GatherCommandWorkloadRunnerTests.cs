@@ -61,7 +61,7 @@ public sealed class GatherCommandWorkloadRunnerTests
             };
             var devices = DeviceAddressAllocator.Allocate(options);
             var metrics = new LoadTestMetrics();
-            var serverTask = ServeOneResponseAsync(listener, "{\"Status\":true,\"Msg\":\"抄读成功\"}");
+            var serverTask = ServeOneResponseAsync(listener, "{\"Status\":true,\"Msg\":\"抄读成功\",\"Data\":[{\"MeterId\":7001,\"ValidData\":true,\"DataType\":\"10_1\"}]}");
             using var runner = new GatherCommandWorkloadRunner(options, devices, metrics);
 
             await runner.RunAsync(waitForOnline: false, CancellationToken.None);

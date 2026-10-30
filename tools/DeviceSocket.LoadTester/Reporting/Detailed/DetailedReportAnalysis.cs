@@ -63,6 +63,8 @@ internal sealed record DetailedReportAnalysis
 
     /// <summary>获取 TcpCenter 峰值、区间增量和里程碑摘要；缺少服务端文件时为空。</summary>
     public TcpCenterAnalysisSummary? Server { get; init; }
+    /// <summary>获取独立解析的 GatherV4 OTLP 命令和资源证据；缺失指标不补零，不套用旧 TcpCenter 指标结构。</summary>
+    public IReadOnlyList<GatherV4ServerMetricEvidence> GatherV4ServerMetrics { get; init; } = [];
 
     /// <summary>获取 TCP cooldown 阶段对应的服务端摘要；验收与自动问题诊断不会使用该窗口，避免计划缩容造成误报。</summary>
     public TcpCenterAnalysisSummary? CooldownServer { get; init; }
@@ -397,6 +399,8 @@ internal sealed record LoadGeneratorResourceSummary
 /// </summary>
 internal sealed record DetailedCommandPhaseSummary
 {
+    /// <summary>获取按预检配置换算的预期下行命令数；与 HTTP 估算入队请求数分开统计。</summary>
+    public long ExpectedDownstreamCommands { get; init; }
     /// <summary>获取阶段名称。</summary>
     public required string Name { get; init; }
 

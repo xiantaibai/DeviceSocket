@@ -43,6 +43,8 @@ public sealed record CommandPhaseResult
     public long ApiPrevalidationRejected { get; init; }
     /// <summary>获取 API 估算已进入服务端命令链路的请求数；按发起数减明确预校验拒绝计算，是上界估算而非服务端确认值。</summary>
     public long ApiEstimatedEnqueued { get; init; }
+    /// <summary>获取按预检一请求子命令数量换算的预计下行数；旧报告缺失时退回 ApiEstimatedEnqueued。</summary>
+    public long? ExpectedDownstreamCommands { get; init; }
     /// <summary>获取异步阶段被 API 接受的请求数；同步阶段保持为零。</summary>
     public long ApiBusinessAccepted { get; init; }
     /// <summary>获取同步阶段成功返回设备业务结果的请求数；异步阶段保持为零。</summary>

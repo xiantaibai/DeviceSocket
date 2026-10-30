@@ -8,7 +8,7 @@ internal sealed record DetailedReportGenerationOptions
     /// <summary>获取必填的 LoadTester 结果目录，可以是单个 <c>shard-xxx</c> 目录或包含多个分片的运行根目录。</summary>
     internal required string InputDirectory { get; init; }
 
-    /// <summary>获取可选的 Gather.TcpCenter JSONL 指标文件；为空时自动在结果目录识别符合服务指标结构的 JSONL。</summary>
+    /// <summary>获取可选服务端指标；旧 Gather 使用自定义 JSONL，GatherV4 使用 Collector OTLP JSON/JSONL；V4 必须显式指定并与压测窗口重叠。</summary>
     internal string? ServerMetricsPath { get; init; }
 
     /// <summary>获取可选的测试背景 JSON 路径；为空时从节点报告自动推断场景信息，其余服务器和代码信息显示未填写。</summary>

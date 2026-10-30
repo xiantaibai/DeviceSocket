@@ -38,14 +38,18 @@ internal sealed class GatherCommandTraceRegistry
     /// <param name="mapping">真实电表与模拟设备映射。</param>
     /// <param name="showResult">是否同步等待业务结果。</param>
     /// <param name="now">登记时刻。</param>
+    /// <param name="expectedCommands">预检确认的一次请求下行命令数，默认 1；HTTP 与 TCP 之间仍属于顺序推断关联。</param>
     /// <returns>节点内唯一关联标识。</returns>
     internal long Register(
         string phaseName,
         long requestSequence,
         GatherDeviceMeterMapping mapping,
         bool showResult,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        int expectedCommands = 1)
     {
+        if (expectedCommands is < 1 or > 1024)
+            throw new ArgumentOutOfRangeException(nameof(expectedCommands), "一次请求的预期子命令必须在 1～1024 之间。");
         var id = Interlocked.Increment(ref _requestId);
         lock (_sync)
         {
@@ -56,7 +60,8 @@ internal sealed class GatherCommandTraceRegistry
                 mapping.MeterId,
                 mapping.Device.DeviceId,
                 showResult,
-                now);
+                now,
+                expectedCommands);
             _traces.Add(id, trace);
             GetDeviceState(trace.DeviceId).Pending.Enqueue(id);
         }
@@ -92,6 +97,15 @@ internal sealed class GatherCommandTraceRegistry
         }
     }
 
+    /// <summary>新连接建立时清除该设备旧会话指纹，避免旧 Session 的序号复用污染新连接去重。</summary>
+    /// <param name="deviceId">规范化设备编号。</param>
+    internal void ResetDeviceSession(string deviceId)
+    {
+        lock (_sync)
+            if (_devices.TryGetValue(deviceId, out var state))
+                state.RecentFingerprints.Clear();
+    }
+
     /// <summary>
     /// 把设备收到的原始下行与同设备最早的有效期望命令关联，并识别相同报文指纹的重试。
     /// </summary>
@@ -123,7 +137,7 @@ internal sealed class GatherCommandTraceRegistry
                 repeatedTrace.DuplicateDownstreamFrames++;
                 _duplicateDownstreamFrames++;
                 CaptureSample(classification, device.DeviceId, repeatedTrace, now, duplicate: true);
-                return new DownstreamTraceMatch(repeatedTrace.RequestId, true, repeatedTrace.PhaseName);
+                return new DownstreamTraceMatch(repeatedTrace.RequestId, true, repeatedTrace.PhaseName, classification.Fingerprint);
             }
 
             MutableTrace? trace = null;
@@ -133,14 +147,13 @@ internal sealed class GatherCommandTraceRegistry
                 if (!_traces.TryGetValue(candidateId, out var candidate) ||
                     candidate.PrevalidationRejected ||
                     now - candidate.RegisteredAtUtc > TimeSpan.FromSeconds(_options.CorrelationTimeoutSeconds) ||
-                    candidate.FirstDownstreamAtUtc.HasValue)
+                    candidate.ObservedCommands >= candidate.ExpectedCommands)
                 {
                     state.Pending.Dequeue();
                     continue;
                 }
 
                 trace = candidate;
-                state.Pending.Dequeue();
                 break;
             }
 
@@ -151,15 +164,27 @@ internal sealed class GatherCommandTraceRegistry
                 return new DownstreamTraceMatch(null, false, null);
             }
 
-            trace.FirstDownstreamAtUtc = now;
+            trace.FirstDownstreamAtUtc ??= now;
+            trace.ObservedCommands++;
+            if (trace.ObservedCommands >= trace.ExpectedCommands)
+                state.Pending.Dequeue();
             trace.DownstreamKind = classification.Kind;
             trace.AssociationConfidence = CommandAssociationConfidence.Ordered;
             trace.DownstreamFingerprint = classification.Fingerprint;
-            trace.Recognized = classification.IsRecognizedCommand;
-            trace.Unsupported = classification.IsUnsupportedCommand;
+            trace.Recognized |= classification.IsRecognizedCommand;
+            trace.Unsupported |= classification.IsUnsupportedCommand;
+            if (classification.IsRecognizedCommand)
+                trace.RecognizedCommands++;
+            if (classification.IsUnsupportedCommand)
+                trace.UnsupportedCommands++;
+            // 只保留关联窗口内的指纹，并为每设备设置硬上限，长时间循环发压不能无限积累历史帧。
+            foreach (var stale in state.RecentFingerprints.Where(pair => now - pair.Value.ObservedAtUtc > TimeSpan.FromSeconds(_options.CorrelationTimeoutSeconds)).Select(pair => pair.Key).ToArray())
+                state.RecentFingerprints.Remove(stale);
+            if (state.RecentFingerprints.Count >= 1024)
+                state.RecentFingerprints.Remove(state.RecentFingerprints.MinBy(pair => pair.Value.ObservedAtUtc).Key);
             state.RecentFingerprints[classification.Fingerprint] = new RecentFingerprint(trace.RequestId, now);
             CaptureSample(classification, device.DeviceId, trace, now, duplicate: false);
-            return new DownstreamTraceMatch(trace.RequestId, false, trace.PhaseName);
+            return new DownstreamTraceMatch(trace.RequestId, false, trace.PhaseName, classification.Fingerprint);
         }
     }
 
@@ -167,17 +192,20 @@ internal sealed class GatherCommandTraceRegistry
     /// 记录模拟设备已为关联命令成功写出至少一条业务响应。
     /// </summary>
     /// <param name="requestId">下行关联标识；无法关联时为空。</param>
-    /// <param name="now">首次成功写出时刻。</param>
-    internal void RecordResponse(long? requestId, DateTimeOffset now)
+    /// <param name="now">成功写出时刻。</param>
+    /// <param name="fingerprint">对应下行指纹；重复回复不得增加唯一子命令应答数，旧调用方可省略。</param>
+    internal void RecordResponse(long? requestId, DateTimeOffset now, string? fingerprint = null)
     {
         if (!requestId.HasValue)
             return;
         lock (_sync)
         {
-            if (_traces.TryGetValue(requestId.Value, out var trace) && !trace.ResponseSent)
+            if (_traces.TryGetValue(requestId.Value, out var trace))
             {
-                trace.ResponseSent = true;
-                trace.ResponseSentAtUtc = now;
+                if (trace.ResponseFingerprints.Add(fingerprint ?? trace.DownstreamFingerprint ?? "legacy"))
+                    trace.RespondedCommands++;
+                trace.ResponseSent = trace.RespondedCommands >= trace.ExpectedCommands;
+                trace.ResponseSentAtUtc ??= now;
             }
         }
     }
@@ -192,15 +220,15 @@ internal sealed class GatherCommandTraceRegistry
         lock (_sync)
         {
             var source = _traces.Values.Where(item => string.Equals(item.PhaseName, phaseName, StringComparison.Ordinal)).ToArray();
-            var estimated = source.LongCount(item => !item.PrevalidationRejected);
-            var delivered = source.LongCount(item => item.FirstDownstreamAtUtc.HasValue);
-            var recognized = source.LongCount(item => item.Recognized);
-            var unsupported = source.LongCount(item => item.Unsupported);
+            var estimated = source.Where(item => !item.PrevalidationRejected).Sum(item => (long)item.ExpectedCommands);
+            var delivered = source.Sum(item => (long)item.ObservedCommands);
+            var recognized = source.Sum(item => (long)item.RecognizedCommands);
+            var unsupported = source.Sum(item => (long)item.UnsupportedCommands);
             return new CommandPhaseTraceSnapshot(
                 estimated,
                 delivered,
                 recognized,
-                source.LongCount(item => item.ResponseSent),
+                source.Sum(item => (long)item.RespondedCommands),
                 unsupported,
                 source.Sum(item => (long)item.DuplicateDownstreamFrames));
         }
@@ -231,11 +259,11 @@ internal sealed class GatherCommandTraceRegistry
             var source = _traces.Values.ToArray();
             return new DownstreamDiagnosticSummary
             {
-                RegisteredCommands = source.LongLength,
-                CommandsWithDownstream = source.LongCount(item => item.FirstDownstreamAtUtc.HasValue),
-                RecognizedCommands = source.LongCount(item => item.Recognized),
-                UnsupportedCommands = source.LongCount(item => item.Unsupported),
-                RespondedCommands = source.LongCount(item => item.ResponseSent),
+                RegisteredCommands = source.Sum(item => (long)item.ExpectedCommands),
+                CommandsWithDownstream = source.Sum(item => (long)item.ObservedCommands),
+                RecognizedCommands = source.Sum(item => (long)item.RecognizedCommands),
+                UnsupportedCommands = source.Sum(item => (long)item.UnsupportedCommands),
+                RespondedCommands = source.Sum(item => (long)item.RespondedCommands),
                 UnmatchedDownstreamFrames = _unmatchedDownstreamFrames,
                 DuplicateDownstreamFrames = _duplicateDownstreamFrames,
                 Classifications = new Dictionary<DownstreamClassificationKind, long>(_classifications)
@@ -334,6 +362,9 @@ internal sealed class GatherCommandTraceRegistry
             DuplicateDownstreamFrames = trace.DuplicateDownstreamFrames,
             ResponseSentAtUtc = trace.ResponseSentAtUtc,
             ResponseSent = trace.ResponseSent,
+            ExpectedDownstreamCommands = trace.ExpectedCommands,
+            ObservedDownstreamCommands = trace.ObservedCommands,
+            CorrectlyRespondedCommands = trace.RespondedCommands,
             Outcome = outcome
         };
     }
@@ -368,7 +399,8 @@ internal sealed class GatherCommandTraceRegistry
         int meterId,
         string deviceId,
         bool showResult,
-        DateTimeOffset registeredAtUtc)
+        DateTimeOffset registeredAtUtc,
+        int expectedCommands)
     {
         internal long RequestId { get; } = requestId;
         internal string PhaseName { get; } = phaseName;
@@ -377,6 +409,18 @@ internal sealed class GatherCommandTraceRegistry
         internal string DeviceId { get; } = deviceId;
         internal bool ShowResult { get; } = showResult;
         internal DateTimeOffset RegisteredAtUtc { get; } = registeredAtUtc;
+        /// <summary>获取预检确认的子命令数量；不根据采集项个数猜测。</summary>
+        internal int ExpectedCommands { get; } = expectedCommands;
+        /// <summary>获取本请求已关联的不同下行命令数量。</summary>
+        internal int ObservedCommands { get; set; }
+        /// <summary>获取已识别子命令数量。</summary>
+        internal int RecognizedCommands { get; set; }
+        /// <summary>获取不支持的子命令数量。</summary>
+        internal int UnsupportedCommands { get; set; }
+        /// <summary>获取正确回复的不同子命令数量。</summary>
+        internal int RespondedCommands { get; set; }
+        /// <summary>获取用于回复去重的子命令指纹集合，受预期命令数量限制。</summary>
+        internal HashSet<string> ResponseFingerprints { get; } = new(StringComparer.Ordinal);
         internal DateTimeOffset? HttpCompletedAtUtc { get; set; }
         internal int? HttpStatusCode { get; set; }
         internal bool? ApiSucceeded { get; set; }
@@ -400,7 +444,8 @@ internal sealed class GatherCommandTraceRegistry
 /// <param name="RequestId">可空请求标识。</param>
 /// <param name="Duplicate">是否为已关联命令的重复或重试下行。</param>
 /// <param name="PhaseName">可空阶段名称。</param>
-internal sealed record DownstreamTraceMatch(long? RequestId, bool Duplicate, string? PhaseName);
+/// <param name="Fingerprint">可空子命令指纹，供应答时去重；不代表服务端业务 CommandId。</param>
+internal sealed record DownstreamTraceMatch(long? RequestId, bool Duplicate, string? PhaseName, string? Fingerprint = null);
 
 /// <summary>
 /// 表示单个 HTTP 阶段的唯一命令交付、识别和响应计数。

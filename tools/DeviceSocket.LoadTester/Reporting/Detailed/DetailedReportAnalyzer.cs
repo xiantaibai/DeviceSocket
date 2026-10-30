@@ -180,14 +180,20 @@ internal static class DetailedReportAnalyzer
         var resources = BuildResourceSummary(inputs.Nodes);
         var expectedServerRestart = HasExpectedServerRestart(reports);
         var warnings = inputs.Warnings.ToList();
-        if (inputs.ServerMetricsPath is null)
+        var isGatherV4 = reports[0].Options.Target.CompatibilityProfile == ServerCompatibilityProfile.GatherV4;
+        var gatherV4Metrics = isGatherV4 && !string.IsNullOrWhiteSpace(serverMetricsPath)
+            ? await GatherV4ServerEvidenceReader.ReadAsync(serverMetricsPath, startedAt, activeServerEndedAt, warnings, cancellationToken)
+            : [];
+        if (inputs.ServerMetricsPath is null && !isGatherV4)
         {
-            warnings.Add(reports[0].Options.Target.CompatibilityProfile == ServerCompatibilityProfile.GatherV4
-                ? "未导入 GatherV4 服务端指标；当前自动解析器只支持旧 Gather.TcpCenter 自定义 JSONL，V4 OTLP 指标需由测试 Collector 按同一 RunId 独立归档。"
-                : "未找到通讯服务指标文件，业务在线、Pipeline 和服务进程稳定性无法验收。");
+            warnings.Add("未找到通讯服务指标文件，业务在线、Pipeline 和服务进程稳定性无法验收。");
         }
-        else if (serverWindow.Count == 0)
+        else if (!isGatherV4 && serverWindow.Count == 0)
             warnings.Add("服务端指标时间与 LoadTester 测试时间不重叠，请检查 --server-time-zone 参数和两台机器时钟。");
+        if (isGatherV4 && gatherV4Metrics.Count == 0)
+            warnings.Add("未获得 GatherV4 命令链路 OTLP JSON 证据；使用 --server-metrics 指定 Collector 的 JSON/JSONL 文件，服务端任务完成不作已验证结论。");
+        if (isGatherV4 && !reports[0].Options.CommandWorkload.GatherV4.ValidateResultData)
+            warnings.Add("本轮关闭 GatherV4 Data 完整性校验，HTTP Status 成功不能证明全部采集项已返回。");
         if (cooldownStartedAt.HasValue)
         {
             warnings.Add(
@@ -201,6 +207,8 @@ internal static class DetailedReportAnalyzer
             serverSummary,
             target,
             options);
+        if (isGatherV4)
+            checks = BuildGatherV4AcceptanceChecks(reports, checks.Take(2), gatherV4Metrics, clientMetrics, target);
         var findings = BuildFindings(clientMetrics, commandPhases, serverSummary, target, options, expectedServerRestart);
         var title = FirstNonBlank(options.Title, background.Report.Title) ?? $"{reports[0].RunId} 负载测试详细报告";
         var environment = NormalizeMetadata(FirstNonBlank(options.Environment, background.Report.Environment));
@@ -233,6 +241,7 @@ internal static class DetailedReportAnalyzer
             ClientTimeline = clientTimeline,
             ServerTimeline = serverWindow.Select(item => item.Timeline).ToArray(),
             Server = serverSummary,
+            GatherV4ServerMetrics = gatherV4Metrics,
             CooldownServer = cooldownServerSummary,
             CooldownServerTimeline = cooldownServerWindow.Select(item => item.Timeline).ToArray(),
             CommandPhases = commandPhases,
@@ -370,7 +379,9 @@ internal static class DetailedReportAnalyzer
             nodes.Add(new NodeSeries($"{report.ShardIndex:D3}:{report.NodeName}", report, entries));
         }
 
-        var resolvedServerPath = ResolveServerMetricsPath(root, serverMetricsPath, warnings);
+        // GatherV4 指标交给独立 OTLP 读取器，严禁套用旧 TcpCenter JSONL 导致零值伪造。
+        var resolvedServerPath = nodes[0].Report.Options.Target.CompatibilityProfile == ServerCompatibilityProfile.GatherV4
+            ? null : ResolveServerMetricsPath(root, serverMetricsPath, warnings);
         var serverSamples = resolvedServerPath is null
             ? []
             : await ReadServerMetricsAsync(resolvedServerPath, timeZone, warnings, cancellationToken);
@@ -863,6 +874,7 @@ internal static class DetailedReportAnalyzer
             .Select(group =>
             {
                 var estimated = group.Sum(item => item.ApiEstimatedEnqueued);
+                var expectedCommands = group.Sum(item => item.ExpectedDownstreamCommands ?? item.ApiEstimatedEnqueued);
                 var legacyReceived = group.Sum(item => item.GatherReadingCommandsReceived);
                 var legacyResponded = group.Sum(item => item.GatherReadingCommandsResponded);
                 var rawDelivered = group.Sum(item => item.RawDownstreamCommandsObserved);
@@ -899,6 +911,7 @@ internal static class DetailedReportAnalyzer
                     TimeoutRequests = group.Sum(item => item.ApiRequestTimeouts),
                     PrevalidationRejected = group.Sum(item => item.ApiPrevalidationRejected),
                     EstimatedEnqueued = estimated,
+                    ExpectedDownstreamCommands = expectedCommands,
                     SkippedOfflineRequests = group.Sum(item => item.ApiRequestsSkippedOffline),
                     CommandsReceived = legacyReceived,
                     RawDownstreamCommands = rawDelivered,
@@ -907,9 +920,9 @@ internal static class DetailedReportAnalyzer
                     DuplicateDownstreamFrames = group.Sum(item => item.DuplicateDownstreamFrames),
                     CommandsResponded = responded,
                     CommandsUnobserved = group.Sum(item => item.GatherReadingCommandsUnobserved),
-                    RawDeliveryRate = Rate(Math.Min(rawDelivered, estimated), estimated),
+                    RawDeliveryRate = Rate(Math.Min(rawDelivered, expectedCommands), expectedCommands),
                     RecognitionRate = Rate(recognized, rawDelivered),
-                    DeliveryRate = Rate(Math.Min(recognized, estimated), estimated),
+                    DeliveryRate = Rate(Math.Min(recognized, expectedCommands), expectedCommands),
                     ResponseRate = Rate(responded, recognized),
                     DrainSatisfied = group.All(item => !item.DrainSatisfied.HasValue)
                         ? null
@@ -1005,6 +1018,52 @@ internal static class DetailedReportAnalyzer
             expectedServerRestart
                 ? "场景包含计划重启；只允许一次 ProcessId 变化，额外变化仍判定失败。"
                 : "依据服务指标 ProcessId 在测试窗口内是否变化。"));
+        return checks;
+    }
+
+    /// <summary>按 GatherV4 独立证据生成容量、人工任务结果和队列收敛判定，缺失指标保持不可评估。</summary>
+    /// <param name="reports">本轮各分片报告。</param>
+    /// <param name="initial">客户端运行及协议在线基础判定。</param>
+    /// <param name="evidence">OTLP 有效窗口内服务端证据。</param>
+    /// <param name="metrics">聚合客户端指标。</param>
+    /// <param name="target">全局目标设备数。</param>
+    /// <returns>不混用旧 TcpCenter 指标的三态验收项。</returns>
+    private static IReadOnlyList<DetailedAcceptanceCheck> BuildGatherV4AcceptanceChecks(
+        IReadOnlyList<NodeReport> reports, IEnumerable<DetailedAcceptanceCheck> initial,
+        IReadOnlyList<GatherV4ServerMetricEvidence> evidence, MetricSnapshot metrics, int target)
+    {
+        var checks = initial.ToList();
+        foreach (var (name, title) in new[]
+        {
+            ("gather.tcp.socket.connections", "通讯服务物理连接容量"),
+            ("gather.tcp.bound.connections", "通讯服务绑定在线容量")
+        })
+        {
+            var value = evidence.FirstOrDefault(item => item.Name == name);
+            checks.Add(value is null ? CreateUnavailableCheck(title) : CreateCheck(title, value.Maximum >= target,
+                value.Maximum.ToString("N0", CultureInfo.InvariantCulture), $">= {target:N0}", "来源：GatherV4 Collector OTLP Gauge 有效窗口峰值。"));
+        }
+        foreach (var (name, title, counter) in new[]
+        {
+            ("gather.tcp.command.inflight", "GatherV4 命令在途收敛", false),
+            ("gather.tcp.pipeline.pending", "GatherV4 队列收敛", false),
+            ("gather.tcp.pipeline.rejected", "GatherV4 管线无拒绝", true)
+        })
+        {
+            var value = evidence.FirstOrDefault(item => item.Name == name);
+            var actual = counter ? value?.Increase : value?.Last;
+            checks.Add(actual is null ? CreateUnavailableCheck(title) : CreateCheck(title, actual == 0,
+                actual.Value.ToString("N0", CultureInfo.InvariantCulture), "0", counter ? "有效窗口 Counter 增量。" : "有效窗口最后采样值；包含该服务全部任务，需隔离定时采集。"));
+        }
+        var started = metrics.ApiRequestsStarted;
+        var strict = reports.All(item => item.Options.CommandWorkload.GatherV4.ValidateResultData);
+        checks.Add(started > 0 && strict
+            ? CreateCheck("人工任务结果完整返回", metrics.ApiRequestsSucceeded == started,
+                $"{metrics.ApiRequestsSucceeded:N0}/{started:N0}", "全部请求返回本表有效完整结果", "Data 已核验 MeterId、ValidData 和配置返回项；不证明真实示值或落库。")
+            : CreateUnavailableCheck("人工任务结果完整返回"));
+        var command = metrics.GatherV4Commands;
+        checks.Add(CreateCheck("设备应答调度无丢失", command.QueueRejected == 0 && command.WriteFailures == 0 && command.PendingResponses == 0,
+            $"拒绝 {command.QueueRejected:N0} / 写失败 {command.WriteFailures:N0} / 待回复 {command.PendingResponses:N0}", "全部为 0", "故意不回复和错误应答单独计量，不冒充正确 F1 成功。"));
         return checks;
     }
 
@@ -1150,7 +1209,7 @@ internal static class DetailedReportAnalyzer
             });
         }
 
-        var estimatedCommands = commandPhases.Sum(item => item.EstimatedEnqueued);
+        var estimatedCommands = commandPhases.Sum(item => item.ExpectedDownstreamCommands);
         var rawCommands = commandPhases.Sum(item => item.RawDownstreamCommands);
         var recognizedCommands = commandPhases.Sum(item => item.RecognizedCommands);
         if (estimatedCommands > 0 && rawCommands < estimatedCommands * 0.8)

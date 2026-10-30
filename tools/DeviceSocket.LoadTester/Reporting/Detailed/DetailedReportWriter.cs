@@ -206,6 +206,10 @@ internal static class DetailedReportWriter
         builder.AppendLine($"| 最严重恢复/当前连续稳定 | {FormatRecovery(metrics)}/{metrics.CurrentStableOnlineMilliseconds / 1000d:F1} 秒 |");
         builder.AppendLine($"| HTTP发起/成功/失败/超时 | {metrics.ApiRequestsStarted:N0}/{metrics.ApiRequestsSucceeded:N0}/{metrics.ApiRequestsFailed:N0}/{metrics.ApiRequestTimeouts:N0} |");
         builder.AppendLine($"| 设备命令收到/应答（旧累计口径） | {metrics.GatherReadingCommandsReceived:N0}/{metrics.GatherReadingCommandsResponded:N0} |");
+        if (metrics.GatherV4Commands.ReceivedFrames > 0)
+            builder.AppendLine(GatherV4CommandReportFormatter.MarkdownRows(metrics.GatherV4Commands));
+        foreach (var evidence in analysis.GatherV4ServerMetrics)
+            builder.AppendLine($"| OTLP {Md(evidence.Name)} 峰值/末值/增量 | {evidence.Maximum:N2}/{evidence.Last:N2}/{evidence.Increase?.ToString("N0", CultureInfo.InvariantCulture) ?? "不可评估"} |");
         if (analysis.CommandPhases.Count > 0)
         {
             builder.AppendLine(
@@ -394,7 +398,7 @@ internal static class DetailedReportWriter
     /// <returns>阶段 CSV。</returns>
     private static string BuildPhaseCsv(DetailedReportAnalysis analysis)
     {
-        var builder = new StringBuilder("name,showResult,planned,started,succeeded,failed,timeouts,skippedOffline,estimatedEnqueued,rawDownstream,recognized,unsupported,commandsResponded,unobserved,duplicateFrames,rawDeliveryRate,recognitionRate,responseRate,durationSeconds\n");
+        var builder = new StringBuilder("name,showResult,planned,started,succeeded,failed,timeouts,skippedOffline,estimatedEnqueued,rawDownstream,recognized,unsupported,commandsResponded,unobserved,duplicateFrames,rawDeliveryRate,recognitionRate,responseRate,durationSeconds,expectedDownstreamCommands\n");
         foreach (var phase in analysis.CommandPhases)
         {
             builder.Append(Csv(phase.Name)).Append(',').Append(phase.ShowResult).Append(',')
@@ -408,7 +412,8 @@ internal static class DetailedReportWriter
                 .Append(phase.RawDeliveryRate.ToString("F6", CultureInfo.InvariantCulture)).Append(',')
                 .Append(phase.RecognitionRate.ToString("F6", CultureInfo.InvariantCulture)).Append(',')
                 .Append(phase.ResponseRate.ToString("F6", CultureInfo.InvariantCulture)).Append(',')
-                .Append((phase.EndedAtUtc - phase.StartedAtUtc).TotalSeconds.ToString("F1", CultureInfo.InvariantCulture)).Append('\n');
+                .Append((phase.EndedAtUtc - phase.StartedAtUtc).TotalSeconds.ToString("F1", CultureInfo.InvariantCulture)).Append(',')
+                .Append(phase.ExpectedDownstreamCommands).Append('\n');
         }
         return builder.ToString();
     }

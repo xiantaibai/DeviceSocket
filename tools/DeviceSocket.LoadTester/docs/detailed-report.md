@@ -6,6 +6,7 @@
 
 - LoadTester 的 `node-summary.json` 与 `node-timeseries.jsonl`；
 - 可选的 Gather.TcpCenter 服务指标 JSONL，例如 `20260821.jsonl`。
+- GatherV4 可显式通过 `--server-metrics` 指定 Collector OTLP JSON/JSONL；使用独立解析与命令证据，详见 [GatherV4 人工命令压测](GatherV4人工命令下发与自动确认压测.md)，不能传入二进制 OTLP 或伪装旧 JSONL。
 - 可选的测试背景 JSON，用于补充服务器规格、服务/代码版本、场景说明和关键运行参数。
 
 命令只读取既有结果，不会重新建立 TCP 连接、发送设备报文或调用 HTTP API，也不会覆盖源报告。它把同一份事实模型分别渲染给两类受众：

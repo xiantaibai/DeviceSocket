@@ -10,6 +10,26 @@ namespace DeviceSocket.LoadTester.Tests.Configuration;
 /// </summary>
 public sealed class LoadTestOptionsValidatorTests
 {
+    /// <summary>新增人工命令场景使用已配置的 0D_82，必须全量覆盖、包含同设备五次排队，并可切为纯设备待命。</summary>
+    /// <param name="count">全局设备数量。</param>
+    [Theory]
+    [InlineData(10000)]
+    [InlineData(50000)]
+    public async Task ManualCommandScenarios_CoverAllDevicesAndSupportPassiveOverride(int count)
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "Scenarios", $"gatherv4-manual-command-{count}.json");
+        var combined = await LoadTestConfigurationLoader.LoadAsync(path, new RunCommandOverrides());
+        Assert.True(combined.CommandWorkload.GatherV4.ValidateResultData);
+        Assert.Equal(new[] { "0D_82" }, combined.CommandWorkload.GatherV4.ItemCodes);
+        Assert.Empty(combined.CommandWorkload.GatherV4.ExpectedResultItemCodes);
+        Assert.Contains(combined.CommandWorkload.Phases, phase => phase.TargetDeviceCount == count && phase.RequestsPerDevice == 1);
+        Assert.Contains(combined.CommandWorkload.Phases, phase => phase.RequestsPerDevice == 5);
+        Assert.All(combined.CommandWorkload.Phases, phase => Assert.Equal(30, phase.PostConfirmationObservationSeconds));
+        var passive = await LoadTestConfigurationLoader.LoadAsync(path, new RunCommandOverrides(Role: LoadTestRole.DevicesOnly));
+        Assert.False(passive.CommandWorkload.Enabled);
+        Assert.True(passive.Workload.GatherV4Response.Enabled);
+        Assert.Equal(LoadTestRole.DevicesOnly, passive.Role);
+    }
     /// <summary>
     /// 验证默认测试配置可以通过完整校验。
     /// </summary>
@@ -180,6 +200,8 @@ public sealed class LoadTestOptionsValidatorTests
             "gatherv4-connections-10000.json",
             "gatherv4-connections-50000.json",
             "gatherv4-http-reading-10000.json",
+            "gatherv4-manual-command-10000.json",
+            "gatherv4-manual-command-50000.json",
             "gatherv4-reconnect-storm-10000.json",
             "gatherv4-reconnect-storm-50000.json"
         };

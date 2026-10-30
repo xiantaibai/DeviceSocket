@@ -9,9 +9,13 @@
     <None Update="Scenarios\*.json" CopyToOutputDirectory="PreserveNewest" />
     <None Update="Scenarios\*.csv" CopyToOutputDirectory="PreserveNewest" />
     <None Update="docs\detailed-report.md" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="docs\gatherv4-simple-monitor.md" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="docs\GatherV4人工命令下发与自动确认压测.md" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="docs\gatherv4-device-mapping-query.sql" CopyToOutputDirectory="PreserveNewest" />
     <None Update="docs\report-background.example.json" CopyToOutputDirectory="PreserveNewest" />
     <None Update="docs\examples\*.csv" CopyToOutputDirectory="PreserveNewest" />
     <None Update="scripts\*.ps1" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="scripts\*.psd1" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <PropertyGroup>

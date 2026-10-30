@@ -8,6 +8,7 @@ using DeviceSocket.LoadTester.Devices;
 using DeviceSocket.LoadTester.Metrics;
 using DeviceSocket.LoadTester.Reporting;
 using DeviceSocket.LoadTester.Runtime;
+using DeviceSocket.LoadTester.Protocols.QGdw3761;
 
 namespace DeviceSocket.LoadTester.Workloads.Gather;
 
@@ -439,7 +440,8 @@ internal sealed class GatherCommandWorkloadRunner : IDisposable
             workItem.Sequence,
             mapping,
             phase.ShowResult,
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            ExpectedCommandsPerRequest);
         using var request = new HttpRequestMessage(HttpMethod.Post, _options.CommandWorkload.EndpointPath)
         {
             Content = new ByteArrayContent(_commandAdapter.CreateRequestPayload(mapping, phase, DateTimeOffset.Now))
@@ -454,7 +456,7 @@ internal sealed class GatherCommandWorkloadRunner : IDisposable
         {
             using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
             var payload = await response.Content.ReadAsByteArrayAsync(timeout.Token);
-            var evaluation = _commandAdapter.EvaluateResponse(response.StatusCode, payload);
+            var evaluation = _commandAdapter.EvaluateResponse(response.StatusCode, payload, mapping);
             _metrics.ApiRequestCompleted(evaluation.Succeeded, stopwatch.Elapsed, evaluation.ErrorCode);
             tracker.RecordCompleted(
                 evaluation.Succeeded,
@@ -555,8 +557,22 @@ internal sealed class GatherCommandWorkloadRunner : IDisposable
             ElapsedMilliseconds = Math.Max(0, (long)Math.Ceiling(elapsed.TotalMilliseconds)),
             TimedOut = timedOut,
             PrevalidationRejected = prevalidationRejected,
-            ShardIndex = _options.Distributed.ShardIndex
+            ShardIndex = _options.Distributed.ShardIndex,
+            ConfiguredDeviceFault = GetConfiguredDeviceFault(workItem.Mapping.Device)
         });
+    }
+
+    /// <summary>回填与协议适配器一致的稳定设备故障选样，供报告区分测试注入背景与未知业务失败。</summary>
+    /// <param name="device">本次请求目标设备。</param>
+    /// <returns>非正常模式名称；正常设备或旧服务为空。</returns>
+    private string? GetConfiguredDeviceFault(VirtualDeviceDescriptor device)
+    {
+        if (_options.Target.CompatibilityProfile != ServerCompatibilityProfile.GatherV4)
+            return null;
+        var response = _options.Workload.GatherV4Response;
+        if (!response.Enabled) return "drop";
+        return response.Mode != GatherV4ResponseMode.Normal && GatherV4QGdw3761LoadTestProtocol.IsAffectedDevice(device, response.AffectedDevicePercentage)
+            ? response.Mode.ToString() : null;
     }
 
     /// <summary>清理错误消息中的换行并限制长度，避免服务端异常页无限放大报告。</summary>
@@ -582,6 +598,11 @@ internal sealed class GatherCommandWorkloadRunner : IDisposable
         PhaseExecutionTracker tracker,
         CancellationToken cancellationToken)
     {
+        if (phase.PostConfirmationObservationSeconds > 0)
+        {
+            Console.WriteLine($"[确认后观察] {phase.Name} 保持设备在线 {phase.PostConfirmationObservationSeconds} 秒，继续记录疑似重发及后续命令。");
+            await Task.Delay(TimeSpan.FromSeconds(phase.PostConfirmationObservationSeconds), cancellationToken);
+        }
         if (!phase.DrainEnabled)
             return DrainResult.NotRequired;
         if (tracker.EstimatedEnqueued == 0)
@@ -599,7 +620,7 @@ internal sealed class GatherCommandWorkloadRunner : IDisposable
             ? Math.Max(phase.MinimumRawDeliveryRate, phase.MinimumDeliveryRate)
             : phase.MinimumRawDeliveryRate;
         Console.WriteLine(
-            $"[HTTP排空] {phase.Name} 等待估算入队 {tracker.EstimatedEnqueued:N0} 条追平，" +
+            $"[HTTP排空] {phase.Name} 估算入队请求 {tracker.EstimatedEnqueued:N0}，预计下行 {tracker.EstimatedEnqueued * ExpectedCommandsPerRequest:N0} 条，" +
             $"原始下行率≥{requiredRawDeliveryRate:P1}，协议识别率≥{phase.MinimumDeliveryRate:P1}，" +
             $"应答率≥{phase.MinimumResponseRate:P1}，静默 {phase.QuietSeconds:N0} 秒。");
         while (DateTimeOffset.UtcNow < deadline)
@@ -620,9 +641,8 @@ internal sealed class GatherCommandWorkloadRunner : IDisposable
                 lastChangedAt = now;
             }
 
-            var rawDeliveryRate = Rate(
-                Math.Min(counters.RawDelivered, tracker.EstimatedEnqueued),
-                tracker.EstimatedEnqueued);
+            var expectedCommands = checked(tracker.EstimatedEnqueued * ExpectedCommandsPerRequest);
+            var rawDeliveryRate = Rate(Math.Min(counters.RawDelivered, expectedCommands), expectedCommands);
             var responseRate = Rate(counters.Responded, counters.Recognized);
             // 全部报文均为未知格式时不能生成业务响应；达到原始下行门槛并静默后结束排空，
             // 再由协议识别率验收明确失败，避免无意义地等满整个超时时间。
@@ -648,12 +668,16 @@ internal sealed class GatherCommandWorkloadRunner : IDisposable
         stopwatch.Stop();
         var finalCounters = ReadDrainCounters(phase.Name, before, DateTimeOffset.UtcNow);
         var reason =
-            $"业务排空超过 {phase.DrainTimeoutSeconds} 秒；估算入队/原始下行/协议识别/不支持/设备应答 " +
-            $"{tracker.EstimatedEnqueued:N0}/{finalCounters.RawDelivered:N0}/{finalCounters.Recognized:N0}/" +
+            $"业务排空超过 {phase.DrainTimeoutSeconds} 秒；预计下行/原始下行/协议识别/不支持/设备应答 " +
+            $"{tracker.EstimatedEnqueued * ExpectedCommandsPerRequest:N0}/{finalCounters.RawDelivered:N0}/{finalCounters.Recognized:N0}/" +
             $"{finalCounters.Unsupported:N0}/{finalCounters.Responded:N0}。";
         Console.WriteLine($"[HTTP排空超时] {phase.Name}：{reason}");
         return new DrainResult(true, false, stopwatch.Elapsed, reason);
     }
+
+    /// <summary>获取预检约定的一请求下行子命令数量，旧服务保持一对一口径。</summary>
+    private int ExpectedCommandsPerRequest => _options.Target.CompatibilityProfile == ServerCompatibilityProfile.GatherV4
+        ? _options.CommandWorkload.GatherV4.ExpectedCommandsPerRequest : 1;
 
     /// <summary>计算阶段级 HTTP 成功率、P95 和排空门槛验收。</summary>
     /// <param name="phase">当前阶段规则。</param>
@@ -681,7 +705,7 @@ internal sealed class GatherCommandWorkloadRunner : IDisposable
             var trace = _commandTraceRegistry?.GetPhaseSnapshot(phase.Name);
             if (trace is not null)
             {
-                var recognitionRate = Rate(trace.Recognized, tracker.EstimatedEnqueued);
+                var recognitionRate = Rate(trace.Recognized, checked(tracker.EstimatedEnqueued * ExpectedCommandsPerRequest));
                 if (recognitionRate < phase.MinimumDeliveryRate)
                 {
                     failures.Add(
@@ -824,6 +848,7 @@ internal sealed class GatherCommandWorkloadRunner : IDisposable
         var received = Delta(after?.GatherReadingCommandsReceived, before?.GatherReadingCommandsReceived);
         var responded = Delta(after?.GatherReadingCommandsResponded, before?.GatherReadingCommandsResponded);
         var estimatedEnqueued = tracker?.EstimatedEnqueued ?? 0;
+        var expectedCommands = checked(estimatedEnqueued * ExpectedCommandsPerRequest);
         var trace = _commandTraceRegistry?.GetPhaseSnapshot(phase.Name);
         var rawDelivered = trace?.RawDelivered ?? received;
         var recognized = trace?.Recognized ?? received;
@@ -850,6 +875,7 @@ internal sealed class GatherCommandWorkloadRunner : IDisposable
             ApiRequestTimeouts = tracker?.Timeouts ?? 0,
             ApiPrevalidationRejected = tracker?.PrevalidationRejected ?? 0,
             ApiEstimatedEnqueued = estimatedEnqueued,
+            ExpectedDownstreamCommands = expectedCommands,
             ApiBusinessAccepted = phase.ShowResult ? 0 : tracker?.Succeeded ?? 0,
             SyncResultsSucceeded = phase.ShowResult ? tracker?.Succeeded ?? 0 : 0,
             ApiRequestLatency = tracker?.Latency ?? new MergeableHistogram().Snapshot(),
@@ -861,16 +887,16 @@ internal sealed class GatherCommandWorkloadRunner : IDisposable
                 ? targetSelection.Targets.Count
                 : 0,
             ApiRequestsSkippedOffline = Delta(after?.ApiRequestsSkippedOffline, before?.ApiRequestsSkippedOffline),
-            GatherReadingCommandsReceived = received,
-            GatherReadingCommandsResponded = responded,
+            GatherReadingCommandsReceived = _options.Target.CompatibilityProfile == ServerCompatibilityProfile.GatherV4 ? recognized : received,
+            GatherReadingCommandsResponded = _options.Target.CompatibilityProfile == ServerCompatibilityProfile.GatherV4 ? correlatedResponded : responded,
             RawDownstreamCommandsObserved = rawDelivered,
             ProtocolRecognizedCommands = recognized,
             UnsupportedCommands = unsupported,
             DuplicateDownstreamFrames = duplicateFrames,
-            GatherReadingCommandsUnobserved = Math.Max(0, estimatedEnqueued - rawDelivered),
-            RawDeliveryRate = Rate(Math.Min(rawDelivered, estimatedEnqueued), estimatedEnqueued),
+            GatherReadingCommandsUnobserved = Math.Max(0, expectedCommands - rawDelivered),
+            RawDeliveryRate = Rate(Math.Min(rawDelivered, expectedCommands), expectedCommands),
             ProtocolRecognitionRate = Rate(recognized, rawDelivered),
-            GatherReadingDeliveryRate = Rate(Math.Min(recognized, estimatedEnqueued), estimatedEnqueued),
+            GatherReadingDeliveryRate = Rate(Math.Min(recognized, expectedCommands), expectedCommands),
             GatherReadingResponseRate = Rate(correlatedResponded, recognized),
             DrainEnabled = phase.DrainEnabled,
             DrainSatisfied = drain.IsRequired ? drain.Satisfied : null,

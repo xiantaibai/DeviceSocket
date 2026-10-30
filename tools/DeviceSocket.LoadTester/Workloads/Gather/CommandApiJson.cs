@@ -10,6 +10,8 @@ internal static class CommandApiJson
     /// <returns>服务端消息；字段不存在或不是字符串时返回 null。</returns>
     internal static string? ReadMessage(JsonElement root)
     {
+        if (root.ValueKind != JsonValueKind.Object)
+            return null;
         foreach (var property in root.EnumerateObject())
         {
             if ((property.Name.Equals("msg", StringComparison.OrdinalIgnoreCase) ||

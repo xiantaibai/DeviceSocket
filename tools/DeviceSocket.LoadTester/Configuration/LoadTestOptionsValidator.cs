@@ -390,6 +390,10 @@ public static class LoadTestOptionsValidator
     private static void ValidateGatherV4Response(LoadTestOptions options, ICollection<string> errors)
     {
         var response = options.Workload.GatherV4Response;
+        if (response.MaximumPendingResponsesPerDevice is < 1 or > 1024)
+            errors.Add("workload.gatherV4Response.maximumPendingResponsesPerDevice: 必须在 1～1024 之间。");
+        if (response.RepeatObservationSeconds is < 1 or > 3600)
+            errors.Add("workload.gatherV4Response.repeatObservationSeconds: 必须在 1～3600 秒之间。");
         if (!Enum.IsDefined(response.Mode))
             errors.Add("workload.gatherV4Response.mode: 应答模式不受支持。");
         if (response.AffectedDevicePercentage is < 0 or > 100)
@@ -518,6 +522,8 @@ public static class LoadTestOptionsValidator
         foreach (var phase in command.Phases)
         {
             var path = $"commandWorkload.phases[{phase.Name}]";
+            if (phase.PostConfirmationObservationSeconds is < 0 or > 3600)
+                errors.Add($"{path}.postConfirmationObservationSeconds: 必须在 0～3600 秒之间。");
             if (string.IsNullOrWhiteSpace(phase.Name))
                 errors.Add("commandWorkload.phases.name: 阶段名称不能为空。");
             if (phase.TargetDeviceCount < 0 || phase.TargetDeviceCount > options.Devices.Count)
@@ -595,6 +601,10 @@ public static class LoadTestOptionsValidator
     {
         var command = options.CommandWorkload;
         var gatherV4 = command.GatherV4;
+        if (gatherV4.ExpectedCommandsPerRequest is < 1 or > 1024)
+            errors.Add("commandWorkload.gatherV4.expectedCommandsPerRequest: 必须在 1～1024 之间，并与预检拆分命令数一致。");
+        if (gatherV4.ExpectedResultItemCodes is null || gatherV4.ExpectedResultItemCodes.Any(string.IsNullOrWhiteSpace))
+            errors.Add("commandWorkload.gatherV4.expectedResultItemCodes: 返回项编码不能为空。");
         var normalizedEndpoint = command.EndpointPath.Trim().TrimEnd('/');
         if (!string.Equals(normalizedEndpoint, "/Handmould/IssueCmd", StringComparison.OrdinalIgnoreCase) &&
             !string.Equals(normalizedEndpoint, "/Handmould/IssueCmdSync", StringComparison.OrdinalIgnoreCase))

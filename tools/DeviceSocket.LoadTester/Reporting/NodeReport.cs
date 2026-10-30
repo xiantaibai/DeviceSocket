@@ -9,8 +9,11 @@ namespace DeviceSocket.LoadTester.Reporting;
 /// </summary>
 public sealed record NodeReport
 {
-    /// <summary>获取节点报告结构版本；版本 3 新增逐请求命令关联、原始下行分类和未知报文诊断产物。</summary>
-    public int SchemaVersion { get; init; } = 3;
+    /// <summary>获取节点报告结构版本；版本 4 新增 GatherV4 被动命令事实、一请求多命令及独立应答样本。</summary>
+    public int SchemaVersion { get; init; } = 4;
+    /// <summary>获取最多 500 条 GatherV4 最近应答样本，单独写入 JSONL，不内嵌节点摘要。</summary>
+    [JsonIgnore]
+    public IReadOnlyList<GatherV4CommandSample> GatherV4CommandSamples { get; init; } = [];
     /// <summary>获取整轮分布式测试共享的运行编号，对应 <c>distributed.runId</c>。</summary>
     public required string RunId { get; init; }
     /// <summary>获取执行当前分片的负载机名称。</summary>

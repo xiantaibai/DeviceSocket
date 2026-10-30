@@ -111,6 +111,12 @@ public static class LoadTestConfigurationLoader
             options.Distributed.StartAtUtc = overrides.StartAtUtc.Value.ToUniversalTime();
         if (!string.IsNullOrWhiteSpace(overrides.OutputDirectory))
             options.Reporting.OutputDirectory = overrides.OutputDirectory;
+        if (overrides.Role.HasValue)
+        {
+            options.Role = overrides.Role.Value;
+            if (options.Role == LoadTestRole.DevicesOnly)
+                options.CommandWorkload.Enabled = false;
+        }
 
         if (string.IsNullOrWhiteSpace(options.Distributed.RunId) && options.Distributed.ShardCount == 1)
             options.Distributed.RunId = $"load-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}"[..42];

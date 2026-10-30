@@ -5,6 +5,7 @@
 TestResults/
 **/logs/
 /artifacts/
+/output/
 **/load-test-results/
 *.user
 *.suo

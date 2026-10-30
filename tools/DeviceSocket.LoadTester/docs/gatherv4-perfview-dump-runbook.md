@@ -1,8 +1,10 @@
 # GatherV4 PerfView 与 Dump 进阶参考：手动命令及各场景排查
 
+> 日常压测不要从本文的复杂组合向导开始。先使用 [GatherV4 压测服务器轻量监控](gatherv4-simple-monitor.md)，只记录进程资源、服务状态和统一时间线；只有出现 CPU、内存、卡住或崩溃等明确症状时，才按本文单独运行对应的 PerfView 或 ProcDump 操作。
+
 本手册按“完成一个场景，再开始下一个场景”编写。场景来自当前仓库的五份 `Scenarios/gatherv4-*.json`；本次不包含 Gather.TcpCenter。
 
-第一次使用先读 [五万设备连接使用教程](gatherv4-diagnostics-wizard.md)，启动向导后输入 **8：一键自动启动监控**。它从准备四个脚本到手动开负载、异常按 D、正常按 Q，按实际操作顺序说明。本机各对象每轮重新定位，不复用旧 PID；当前五万复测按两台负载机、各约 2.5 万设备教学。
+旧版多窗口组合向导保留用于兼容既有取证，不再作为日常入口。新监控按固定 `Service`、`Port` 或 `ProcessId` 定位目标，常规压测不需要重复选择工具和 PID。
 
 交互入口的固定工具路径在脚本顶部 `$configuredToolPaths` 中维护，首次部署时改为服务器实际安装位置。文件存在时自动使用；只有对应工具找不到时才询问本次替代路径。本文手动命令仍通过 `$common.PerfViewPath` 和 `$common.ProcDumpPath` 指定工具。
 

@@ -36,6 +36,12 @@ public static class AcceptanceEvaluator
         ArgumentOutOfRangeException.ThrowIfNegative(shardIndex);
         ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(shardIndex, shardCount);
         var checks = new List<AcceptanceCheck>();
+        if (metrics.GatherV4Commands.ReceivedFrames > 0)
+        {
+            checks.Add(new AcceptanceCheck("gatherV4ResponseQueueRejected", metrics.GatherV4Commands.QueueRejected, "<=", 0, metrics.GatherV4Commands.QueueRejected == 0));
+            checks.Add(new AcceptanceCheck("gatherV4ResponseWriteFailures", metrics.GatherV4Commands.WriteFailures, "<=", 0, metrics.GatherV4Commands.WriteFailures == 0));
+            checks.Add(new AcceptanceCheck("gatherV4PendingResponses", metrics.GatherV4Commands.PendingResponses, "<=", 0, metrics.GatherV4Commands.PendingResponses == 0));
+        }
         if (role != LoadTestRole.ApiOnly)
         {
             var rateCounters = ResolveRateCounters(metrics, options, phases);
@@ -123,7 +129,7 @@ public static class AcceptanceEvaluator
                     Rate(syncPhases.Sum(item => item.SyncResultsSucceeded), syncRequests),
                     options.MinimumSyncResultSuccessRate);
             }
-            var estimatedEnqueued = completedCommandPhases.Sum(item => item.ApiEstimatedEnqueued);
+            var estimatedEnqueued = completedCommandPhases.Sum(item => item.ExpectedDownstreamCommands ?? item.ApiEstimatedEnqueued);
             if (estimatedEnqueued > 0)
             {
                 var rawDelivered = completedCommandPhases.Sum(item => item.RawDownstreamCommandsObserved);

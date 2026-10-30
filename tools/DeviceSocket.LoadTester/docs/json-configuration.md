@@ -165,9 +165,11 @@ meterId,deviceId
 | JSON 路径 | 类型 | 默认值/零值 | 关键影响 | 典型使用场景 |
 |---|---|---|---|---|
 | `workload.gatherV4Response.enabled` | bool | `true` | false 表示识别下行命令但全部不应答，必须显式开启 `safety.allowFaultInjection` | 验证单设备在途命令超时、恢复和后续队列是否阻塞 |
-| `workload.gatherV4Response.mode` | enum | `normal` | `normal` 正确应答；`delayed` 延迟；`drop` 丢弃；`duplicate` 重复；`wrongA3` 使用错误主站地址；`wrongPseq` 使用错误启动序号 | 验证慢设备、重复回包幂等和 Code-A3-PSEQ 严格关联 |
+| `workload.gatherV4Response.mode` | enum | `normal` | `normal` 正确 F1；`deny` 返回 F2 全部否认；`delayed` 延迟；`drop` 丢弃；`duplicate` 重复；`wrongA3` 使用错误主站地址；`wrongPseq` 使用错误启动序号 | 验证慢设备、失败结果、重复回包幂等和 Code-A3-PSEQ 严格关联；所有非 normal 模式均需故障授权 |
 | `workload.gatherV4Response.affectedDevicePercentage` | double | `100` | 0～100；只有命中的稳定设备桶使用异常模式，0 表示所有设备正常 | 在一万台正常终端中混入少量异常终端 |
 | `workload.gatherV4Response.delayMilliseconds` | int | `1000` | delayed 模式额外等待毫秒数，不能小于 0；0 表示立即应答 | 构造接近服务端命令超时的慢设备 |
+| `workload.gatherV4Response.maximumPendingResponsesPerDevice` | int | `32` | 单连接待发送延迟回复上限，范围 1～1024 条；零或 null 无效。队满显式累计 queueRejected 并使验收失败，不阻塞心跳；断线取消旧会话回复 | 限制服务端突发、重试与慢应答造成的客户端积压 |
+| `workload.gatherV4Response.repeatObservationSeconds` | int | `60` | 同会话疑似重发窗口，范围 1～3600 秒，零或 null 无效；每个有命令的连接最多记住最近 64 个指纹，过期或重连后不延用历史去重 | 观察正确 F1 后同帧再次到达；同帧可能来自新任务或序号复用，不等于重复执行 |
 
 关闭应答或使用非 `normal` 模式仅允许 `target.compatibilityProfile=gatherV4`，并且必须设置 `safety.allowFaultInjection=true`。`wrongA3` 和 `wrongPseq` 生成的是校验和正确但不能命中当前在途 Mark 的报文，用来验证服务端不会错误释放下一条命令。
 
@@ -212,8 +214,11 @@ meterId,deviceId
 | JSON 路径 | 类型 | 默认值/零值 | 关键影响 | 典型使用场景 |
 |---|---|---|---|---|
 | `commandWorkload.gatherV4.gatherCode` | string | 空值无效 | 必须与 Communication、DirectiveService 和 IssueWebApi 使用的采集服务编码完全一致，否则命令会进入错误分区或无法消费 | 例如测试环境配置的 `V4-Gather-8890` |
+| `commandWorkload.gatherV4.validateResultData` | bool | `true` | 同步结果必须 Status=true 且 Data 非空、每条 MeterId 匹配、ValidData=true，并覆盖全部预期 DataType；false 恢复历史仅 Status 判定，报告不能据此证明任务完整返回；null 无效 | 防止服务端超时返回部分结果仍 Status 成功；真实电量与落库仍需专项验证 |
+| `commandWorkload.gatherV4.expectedCommandsPerRequest` | int | `1` | 预检确定的一次请求生成命令数，范围 1～1024，零或 null 无效；用于 HTTP 一对多 FIFO 推断关联及排空分母，不能按 itemCodes 个数直接猜测；各分片必须一致 | 服务端分组拆成两帧时填 2；首轮先核对 20 条功能阶段 |
+| `commandWorkload.gatherV4.expectedResultItemCodes` | string[] | `[]` | 空集合按 itemCodes 校验，非空则指定期望返回 DataType，每项非空；null 无效。重复返回同一个类型不能补齐缺失类型；仅 validateResultData=true 时参与结果判定 | 透明转发 `16_1` 实际 F1 返回 `00_1` 时，明确配置 `["00_1"]`，不做隐式映射 |
 | `commandWorkload.gatherV4.meterType` | int | `1` | GatherV4 `MeterTypeEnum` 数值；必须大于 0，1 通常表示电表 | 切换水表、燃气表或其他已支持业务模型 |
-| `commandWorkload.gatherV4.itemCodes` | string[] | `[]` 无效 | 至少一个非空采集项；决定服务端生成的实际 AFN/FN 及结果解析路径 | 先选择测试库和设备真实支持的一项抄读编码 |
+| `commandWorkload.gatherV4.itemCodes` | string[] | `[]` 无效 | 至少一个非空采集项；决定服务端生成的实际 AFN/FN 及结果解析路径，且必须在服务端采集项分组中存在 | 新增人工命令一万／五万场景使用 `["0D_82"]`，即 AFN=0DH/F82 测量点 A 相有功功率曲线；F1 仅验证确认链路，仍需核对测试环境实际配置 |
 | `commandWorkload.gatherV4.density` | int | `0` 表示无冻结密度 | 原样传给 HandmouldRequest；冻结任务按 GatherV4 约定使用 -1、1、2、3、245、255 等值 | 普通实时抄读保持 0，冻结曲线按业务配置 |
 | `commandWorkload.gatherV4.point` | int | `0` 表示由采集项自身决定 | 不能小于 0；冻结曲线时控制数据点数 | 实时单点或历史多点数据测试 |
 | `commandWorkload.gatherV4.dataTime` | string/null | `null` 表示每次请求取当前本地时间 | 非空时原样发送，可固定历史时间复现问题 | 回归同一冻结时刻时填固定值 |
@@ -330,7 +335,7 @@ GatherV4 请求的 `areaCode` 取设备编号前四位，`address` 取后五位�
 | `reporting.checkpointIntervalSeconds` | int | `10` | 原子覆盖 `run-checkpoint.json` 的周期，必须大于 0 且不小于采样周期 | 进程被强制结束时保留最后累计指标 |
 | `reporting.writeConsoleSummary` | bool | `true` | 是否每次采样输出控制台摘要，不影响文件报告 | 后台部署或减少控制台开销时关闭 |
 | `reporting.downstreamDiagnostics` | object | `{...}` | 下行关联与协议诊断配置对象，不能为 null；修改其内容会进入多节点配置签名 | HTTP 指令压测建议保持启用，纯连接场景不会产生追踪记录 |
-| `reporting.downstreamDiagnostics.enabled` | bool | `true` | 是否登记 HTTP 期望命令并关联设备原始下行；false 时不生成逐请求关联和未知样本，阶段排空退回旧聚合指标 | 正式 HTTP 回归保持 true；极限连接数但不执行 HTTP 时取值无影响 |
+| `reporting.downstreamDiagnostics.enabled` | bool | `true` | 是否登记 HTTP 期望命令并关联设备原始下行；纯设备模式也生成下行分类和受控未知样本。false 不生成逐请求关联，阶段排空退回旧聚合；GatherV4 独立命令指标与最近 500 条回复样本仍保留 | 正式 HTTP 回归保持 true；业务页面手动下发也可查看分类及自动 F1 结果 |
 | `reporting.downstreamDiagnostics.captureUnknownFrames` | bool | `true` | 是否保存未知、非法、地址不匹配或当前不支持报文的限量样本；false 仍保留分类计数和逐请求结果 | 报告需要控制敏感原始报文落盘时关闭 |
 | `reporting.downstreamDiagnostics.maxSamplesPerFingerprint` | int | `5` | 每个完整报文指纹最多保存的样本数，范围 0～100；0 表示不保存样本但仍分类计数 | 同类未知报文很多时避免 JSONL 无界增长，排障可临时增大 |
 | `reporting.downstreamDiagnostics.maxTotalSamples` | int | `500` | 当前节点全部未知样本总上限，范围 0～10000；0 表示不保存样本但仍分类计数；与单指纹上限同时满足才会落盘 | 3～5 万台设备地址不同会形成大量唯一指纹，使用全局上限约束内存与报告大小 |
@@ -426,6 +431,18 @@ GatherV4 请求的 `areaCode` 取设备编号前四位，`address` 取后五位�
 | `gatherv4-reconnect-storm-50000.json` | GatherV4 四分片五万台稳定在线后人工重启 Communication，验证大规模真实断线、重新登录及恢复稳定性 |
 
 ## 新增或修改字段时的维护清单
+
+### 人工命令观察与运行覆盖
+
+| 字段 | 类型 | 默认值 | 意义与约束 | 使用场景 |
+| --- | --- | --- | --- | --- |
+| `commandWorkload.phases[].postConfirmationObservationSeconds` | int | `0` | 请求发送结束后至少保持当前设备在线观察的秒数，范围 0～3600；0 不额外等待，null 无效。未开启 drainEnabled 时也生效，开启时先观察再排空；各分片参数参与签名一致性检查 | 推荐 30 秒，观察确认后的疑似重发和同设备后续命令 |
+
+以上新增场景参数均在启动时读取，不热更新，修改后重新执行压测。`expectedCommandsPerRequest` 是人工预检约定，不提供服务端 CommandId 精确关联；混入定时任务、错误约定拆分数量或同一设备并行任务重排时，FIFO 关联只能作推断。
+
+新增 `gatherv4-manual-command-10000.json` 和 `gatherv4-manual-command-50000.json`；默认 combined、API 发压、F1 自动回复、Data 严格校验。`run --role devicesOnly` 覆盖 `role` 并关闭 `commandWorkload.enabled`，沿用同一 CSV 和设备观测阶段，从业务页面手动下发。所有分片应使用相同角色覆盖，不能把不同角色报告强行合并。
+
+五万场景默认两个分片，设备数、HTTP 目标数、requestsPerSecond、maxConcurrency 都是全局口径。命令行 `--shard-count` 可覆盖为更多节点；每台机器部署同一完整 CSV，保持 RunId 与 UTC 启动时间一致。
 
 配置代码变更不能只修改 Options 类。提交前必须同时完成：
 

@@ -9,6 +9,23 @@ namespace DeviceSocket.LoadTester.Tests.Reporting;
 /// </summary>
 public sealed class ReportMergerTests
 {
+    /// <summary>一请求命令拆分数不同的分片不得合并，防止交付率分母不一致。</summary>
+    [Fact]
+    public async Task MismatchedGatherV4CommandSplit_IsRejected()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"device-v4-signature-{Guid.NewGuid():N}");
+        try
+        {
+            var first = CreateReport(0, "node-a");
+            var second = CreateReport(1, "node-b");
+            second.Options.CommandWorkload.GatherV4.ExpectedCommandsPerRequest = 2;
+            await NodeReportWriter.WriteAsync(first, Path.Combine(root, "shard-000"), CancellationToken.None);
+            await NodeReportWriter.WriteAsync(second, Path.Combine(root, "shard-001"), CancellationToken.None);
+            var failure = await Assert.ThrowsAsync<InvalidDataException>(() => ReportMerger.MergeAsync(root, Path.Combine(root, "merged"), CancellationToken.None));
+            Assert.Contains("设备空间", failure.Message, StringComparison.Ordinal);
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+    }
     /// <summary>
     /// 验证两个完整分片可以生成统一设备数、连接数和登录数报告。
     /// </summary>

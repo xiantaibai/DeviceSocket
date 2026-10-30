@@ -1,4 +1,5 @@
 using DeviceSocket.LoadTester.CommandLine;
+using DeviceSocket.LoadTester.Configuration;
 using DeviceSocket.LoadTester.Reporting.Detailed;
 
 namespace DeviceSocket.LoadTester.Tests.CommandLine;
@@ -8,6 +9,14 @@ namespace DeviceSocket.LoadTester.Tests.CommandLine;
 /// </summary>
 public sealed class CommandLineParserTests
 {
+    /// <summary>同一正式场景可切换为纯设备待命，保留自动应答而不调用 HTTP。</summary>
+    [Fact]
+    public void RunCommand_ParsesPassiveDeviceRole()
+    {
+        var command = Assert.IsType<RunLoadTesterCommand>(CommandLineParser.Parse(
+            ["run", "--config", "manual.json", "--role", "devicesOnly"]));
+        Assert.Equal(LoadTestRole.DevicesOnly, command.Overrides.Role);
+    }
     /// <summary>
     /// 验证特殊运行编号不会生成可逃逸报告根目录的相对路径片段。
     /// </summary>

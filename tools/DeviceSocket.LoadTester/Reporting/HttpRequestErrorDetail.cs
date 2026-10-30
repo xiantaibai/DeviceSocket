@@ -5,6 +5,8 @@ namespace DeviceSocket.LoadTester.Reporting;
 /// </summary>
 public sealed record HttpRequestErrorDetail
 {
+    /// <summary>获取当前设备配置的 GatherV4 故障应答模式；空表示正常。只说明注入背景，不能据此认定 HTTP 失败完全由注入引起。</summary>
+    public string? ConfiguredDeviceFault { get; init; }
     /// <summary>获取失败被客户端确认的 UTC 时间。</summary>
     public required DateTimeOffset TimestampUtc { get; init; }
 

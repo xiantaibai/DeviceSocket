@@ -5,6 +5,8 @@ namespace DeviceSocket.LoadTester.Metrics;
 /// </summary>
 public sealed record MetricSnapshot
 {
+    /// <summary>获取 GatherV4 的被动下行、正确/故障应答及确认后疑似重发事实；旧报告缺失时为零。</summary>
+    public GatherV4CommandSummary GatherV4Commands { get; init; } = new();
     /// <summary>获取快照采集的 UTC 时间。</summary>
     public DateTimeOffset TimestampUtc { get; init; }
     /// <summary>获取当前阶段要求保持的协议在线设备数。</summary>

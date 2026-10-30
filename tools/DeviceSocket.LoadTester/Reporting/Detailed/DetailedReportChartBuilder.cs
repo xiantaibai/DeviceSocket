@@ -94,16 +94,26 @@ internal static class DetailedReportChartBuilder
             new BarItem($"{item.Name}-失败", item.FailedRequests, "#dc2626")
         }).ToArray();
         var metrics = analysis.ClientMetrics;
-        var estimatedCommands = analysis.CommandPhases.Sum(item => item.EstimatedEnqueued);
+        var estimatedCommands = analysis.CommandPhases.Sum(item => item.ExpectedDownstreamCommands);
         var rawCommands = analysis.CommandPhases.Sum(item => item.RawDownstreamCommands);
         var recognizedCommands = analysis.CommandPhases.Sum(item => item.RecognizedCommands);
         var respondedCommands = analysis.CommandPhases.Sum(item => item.CommandsResponded);
-        var funnelBars = new[]
+        var funnelBars = analysis.CommandPhases.Count == 0 && metrics.GatherV4Commands.ReceivedFrames > 0
+            ? new[]
+            {
+                new BarItem("命令帧", metrics.GatherV4Commands.ReceivedFrames, "#64748b"),
+                new BarItem("观察去重", metrics.GatherV4Commands.ObservedCommands, "#2563eb"),
+                new BarItem("正确F1", metrics.GatherV4Commands.CorrectConfirmationsSent, "#059669"),
+                new BarItem("故障应答", metrics.GatherV4Commands.FaultResponsesSent, "#d97706"),
+                new BarItem("故意丢弃", metrics.GatherV4Commands.IntentionalDrops, "#ea580c"),
+                new BarItem("确认后疑似重发", metrics.GatherV4Commands.RepeatedAfterConfirmation, "#7c3aed")
+            }
+            : new[]
         {
             new BarItem("计划目标", metrics.ApiTargetsRequired, "#64748b"),
             new BarItem("HTTP发起", metrics.ApiRequestsStarted, "#2563eb"),
             new BarItem("API成功", metrics.ApiRequestsSucceeded, "#7c3aed"),
-            new BarItem("估算入队", estimatedCommands, "#0f766e"),
+            new BarItem("预计下行", estimatedCommands, "#0f766e"),
             new BarItem("原始下行", rawCommands, "#ea580c"),
             new BarItem("协议识别", recognizedCommands, "#d97706"),
             new BarItem("设备应答", respondedCommands, "#059669")

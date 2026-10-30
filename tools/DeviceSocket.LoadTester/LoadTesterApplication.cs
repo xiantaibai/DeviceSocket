@@ -123,7 +123,7 @@ internal static class LoadTesterApplication
         var outputDirectory = GetNodeOutputDirectory(options);
         var metrics = new LoadTestMetrics();
         var onlineRegistry = new DeviceOnlineRegistry();
-        var commandTraceRegistry = options.CommandWorkload.Enabled && options.Reporting.DownstreamDiagnostics.Enabled
+        var commandTraceRegistry = options.Reporting.DownstreamDiagnostics.Enabled
             ? new GatherCommandTraceRegistry(options.Reporting.DownstreamDiagnostics)
             : null;
         var protocol = LoadTestProtocolFactory.Create(options);
@@ -255,14 +255,15 @@ internal static class LoadTesterApplication
             EndedAtUtc = execution.EndedAtUtc,
             Options = options,
             Metrics = execution.Measurement,
+            GatherV4CommandSamples = metrics.GatherV4Commands.GetSamples(),
             Resources = resourceSampler.Sample(),
             GatewayObservation = gatewayObservation,
             Phases = execution.Phases,
             CommandPhases = commandPhases,
             HttpRequestErrors = commandRunner?.ErrorDetails.ToArray() ?? [],
-            CommandTraces = commandRunner?.CommandTraces ?? [],
-            DownstreamDiagnosticSamples = commandRunner?.DownstreamSamples ?? [],
-            DownstreamDiagnostics = commandRunner?.DownstreamSummary,
+            CommandTraces = commandTraceRegistry?.GetTraces() ?? [],
+            DownstreamDiagnosticSamples = commandTraceRegistry?.GetSamples() ?? [],
+            DownstreamDiagnostics = commandTraceRegistry?.GetSummary(),
             Acceptance = acceptance,
             PreflightWarnings = preflight.Warnings,
             RunStatus = runStatus,

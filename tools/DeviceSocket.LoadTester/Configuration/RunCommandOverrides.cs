@@ -8,9 +8,11 @@ namespace DeviceSocket.LoadTester.Configuration;
 /// <param name="ShardCount">覆盖 <c>distributed.shardCount</c>；空表示保留配置文件值，非空时必须大于零。</param>
 /// <param name="StartAtUtc">覆盖 <c>distributed.startAtUtc</c>；空表示保留配置文件值，非空时用于多机同步启动。</param>
 /// <param name="OutputDirectory">覆盖 <c>reporting.outputDirectory</c>；空表示保留配置文件值。</param>
+/// <param name="Role">覆盖 role；devicesOnly 同时关闭 HTTP 发压，供业务页面手动下发并由设备自动确认。</param>
 public sealed record RunCommandOverrides(
     string? RunId = null,
     int? ShardIndex = null,
     int? ShardCount = null,
     DateTimeOffset? StartAtUtc = null,
-    string? OutputDirectory = null);
+    string? OutputDirectory = null,
+    LoadTestRole? Role = null);

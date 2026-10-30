@@ -67,6 +67,13 @@ public sealed record CommandTraceDetail
     /// <summary>获取模拟设备是否成功写出至少一条业务响应。</summary>
     public bool ResponseSent { get; init; }
 
+    /// <summary>获取一次 HTTP 请求预期生成的下行命令数；来自预检配置，默认 1。</summary>
+    public int ExpectedDownstreamCommands { get; init; } = 1;
+    /// <summary>获取按设备 FIFO 推断关联的不同下行命令数；不能冒充 CommandId 精确关联。</summary>
+    public int ObservedDownstreamCommands { get; init; }
+    /// <summary>获取成功写出正确关联应答的子命令数；错误 A3/PSEQ 和故意不回复不计入。</summary>
+    public int CorrectlyRespondedCommands { get; init; }
+
     /// <summary>获取命令最终诊断结果。</summary>
     [JsonConverter(typeof(JsonStringEnumConverter))]
     public required CommandTraceOutcome Outcome { get; init; }

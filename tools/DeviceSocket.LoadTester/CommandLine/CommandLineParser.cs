@@ -46,7 +46,7 @@ internal static class CommandLineParser
         Console.WriteLine();
         Console.WriteLine("执行负载测试：");
         Console.WriteLine("  run --config <file> [--run-id <id>] [--shard-index <n>] [--shard-count <n>]");
-        Console.WriteLine("      [--start-at-utc <ISO-8601>] [--output <directory>]");
+        Console.WriteLine("      [--start-at-utc <ISO-8601>] [--output <directory>] [--role devicesOnly|apiOnly|combined]");
         Console.WriteLine();
         Console.WriteLine("合并多节点报告：");
         Console.WriteLine("  report merge --input <directory> --output <directory>");
@@ -60,17 +60,27 @@ internal static class CommandLineParser
         Console.WriteLine("      [--ack-milliseconds <n>] [--target-devices <n>]");
     }
 
+    /// <summary>解析运行覆盖参数；纯设备角色关闭 HTTP 发压但保留命令自动回复及观测。</summary>
+    /// <param name="args">run 后的参数。</param>
+    /// <returns>可执行运行命令。</returns>
     private static RunLoadTesterCommand ParseRun(ReadOnlySpan<string> args)
     {
         var values = ParseOptions(args);
-        RejectUnknown(values, "--config", "--run-id", "--shard-index", "--shard-count", "--start-at-utc", "--output");
+        RejectUnknown(values, "--config", "--run-id", "--shard-index", "--shard-count", "--start-at-utc", "--output", "--role");
         var configurationPath = Required(values, "--config");
+        LoadTestRole? role = null;
+        if (Optional(values, "--role") is { } text)
+        {
+            if (!Enum.TryParse<LoadTestRole>(text, true, out var parsed) || !Enum.IsDefined(parsed))
+                throw new ArgumentException("--role 仅支持 devicesOnly、apiOnly 或 combined。");
+            role = parsed;
+        }
         var overrides = new RunCommandOverrides(
             Optional(values, "--run-id"),
             OptionalInt(values, "--shard-index"),
             OptionalInt(values, "--shard-count"),
             OptionalDateTimeOffset(values, "--start-at-utc"),
-            Optional(values, "--output"));
+            Optional(values, "--output"), role);
         return new RunLoadTesterCommand(configurationPath, overrides);
     }
 

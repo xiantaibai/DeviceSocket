@@ -7,6 +7,24 @@ namespace DeviceSocket.LoadTester.Configuration;
 public sealed class GatherV4CommandOptions
 {
     /// <summary>
+    /// 配置 commandWorkload.gatherV4.validateResultData；默认 true，要求 Status 成功且 Data 中本表的 ValidData、采集项覆盖完整；
+    /// false 仅兼容历史 Status 判定，报告不得据此证明任务完整完成。运行前读取，修改后需重启压测。
+    /// </summary>
+    public bool ValidateResultData { get; set; } = true;
+
+    /// <summary>
+    /// 配置 commandWorkload.gatherV4.expectedCommandsPerRequest；默认 1，范围 1～1024，表示预检确认的一次 HTTP 请求拆分下行命令数；
+    /// 不按 ItemCodes 数量猜测，必须与服务端分组规则一致，用于一对多关联及排空分母，零值无效。
+    /// </summary>
+    public int ExpectedCommandsPerRequest { get; set; } = 1;
+
+    /// <summary>
+    /// 配置 commandWorkload.gatherV4.expectedResultItemCodes；默认空集合表示使用 itemCodes，非空时覆盖预期返回 DataType 集合；
+    /// 用于透明转发或组合项与返回项不同的场景，每项不能为空，零元素不是关闭校验；修改后需重启压测。
+    /// </summary>
+    public List<string> ExpectedResultItemCodes { get; set; } = [];
+
+    /// <summary>
     /// 获取或设置 <c>commandWorkload.gatherV4.gatherCode</c>；默认空值无效，必须与被测 Communication、DirectiveService 和 IssueWebApi 使用的采集服务编码一致。
     /// </summary>
     public string GatherCode { get; set; } = string.Empty;

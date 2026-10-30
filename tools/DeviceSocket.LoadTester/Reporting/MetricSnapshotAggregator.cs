@@ -68,6 +68,7 @@ internal static class MetricSnapshotAggregator
             ApiTargetsOnline = source.Sum(item => item.ApiTargetsOnline),
             ApiRequestsSkippedOffline = source.Sum(item => item.ApiRequestsSkippedOffline),
             GatherReadingCommandsReceived = source.Sum(item => item.GatherReadingCommandsReceived),
+            GatherV4Commands = GatherV4CommandSummary.Merge(source.Select(item => item.GatherV4Commands)),
             GatherReadingCommandsResponded = source.Sum(item => item.GatherReadingCommandsResponded),
             GatherReadingResponsesSent = source.Sum(item => item.GatherReadingResponsesSent),
             GatherReadingResponsesDropped = source.Sum(item => item.GatherReadingResponsesDropped),

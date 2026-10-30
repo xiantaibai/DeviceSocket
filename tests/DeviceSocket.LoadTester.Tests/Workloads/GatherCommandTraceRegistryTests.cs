@@ -11,6 +11,29 @@ namespace DeviceSocket.LoadTester.Tests.Workloads;
 /// </summary>
 public sealed class GatherCommandTraceRegistryTests
 {
+    /// <summary>一次 HTTP 拆为两条命令时，第二个子命令不得抢占下一次请求；重复应答不能补齐未回复项。</summary>
+    [Fact]
+    public void MultipleCommands_AreCorrelatedAndRespondedSeparately()
+    {
+        var registry = new GatherCommandTraceRegistry(new DownstreamDiagnosticsOptions());
+        var device = CreateDevice();
+        var mapping = new GatherDeviceMeterMapping(device, 7001);
+        var now = DateTimeOffset.UtcNow;
+        var first = registry.Register("phase", 1, mapping, true, now, expectedCommands: 2);
+        var second = registry.Register("phase", 2, mapping, true, now, expectedCommands: 1);
+        var one = registry.RecordDownstream(device, CreateClassification("one", DownstreamClassificationKind.GatherV4Command, true, false), now);
+        var two = registry.RecordDownstream(device, CreateClassification("two", DownstreamClassificationKind.GatherV4Command, true, false), now.AddMilliseconds(10));
+        Assert.Equal(first, one.RequestId);
+        Assert.Equal(first, two.RequestId);
+        registry.RecordResponse(first, now, "one");
+        registry.RecordResponse(first, now, "one");
+        Assert.False(registry.GetTraces()[0].ResponseSent);
+        registry.RecordResponse(first, now, "two");
+        Assert.True(registry.GetTraces()[0].ResponseSent);
+        Assert.Equal(2, registry.GetPhaseSnapshot("phase").Responded);
+        var third = registry.RecordDownstream(device, CreateClassification("three", DownstreamClassificationKind.GatherV4Command, true, false), now.AddMilliseconds(20));
+        Assert.Equal(second, third.RequestId);
+    }
     /// <summary>
     /// 验证原始下行、已识别、不支持、已应答和重复帧分别计数，不会把未知格式当成服务端未下发。
     /// </summary>

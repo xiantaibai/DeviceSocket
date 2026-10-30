@@ -8,6 +8,8 @@ namespace DeviceSocket.LoadTester.Metrics;
 /// </summary>
 public sealed class LoadTestMetrics
 {
+    /// <summary>获取与 HTTP 工作负载解耦的 GatherV4 设备命令计量器。</summary>
+    internal GatherV4CommandMetrics GatherV4Commands { get; } = new();
     private readonly ConcurrentDictionary<string, long> _errors = new(StringComparer.Ordinal);
     private readonly object _recoveryLock = new();
     private readonly MergeableHistogram _connectionLatency = new();
@@ -478,6 +480,7 @@ public sealed class LoadTestMetrics
             ApiTargetsRequired = Interlocked.Read(ref _apiTargetsRequired),
             ApiTargetsOnline = Interlocked.Read(ref _apiTargetsOnline),
             ApiRequestsSkippedOffline = Interlocked.Read(ref _apiRequestsSkippedOffline),
+            GatherV4Commands = GatherV4Commands.Snapshot(),
             GatherReadingCommandsReceived = Interlocked.Read(ref _gatherReadingCommandsReceived),
             GatherReadingCommandsResponded = Interlocked.Read(ref _gatherReadingCommandsResponded),
             GatherReadingResponsesSent = Interlocked.Read(ref _gatherReadingResponsesSent),

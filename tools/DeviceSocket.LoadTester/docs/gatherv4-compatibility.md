@@ -10,8 +10,11 @@
 | 登录与心跳 | 已支持 | 发送 CON=1 的 AFN=02H/F1、F3，只有收到地址和 PSEQ 均匹配的 AFN=00H/F1 才记为成功 |
 | 流式接收 | 已支持 | 复用现有 376.1 流式拆包器，处理半包、粘包、多帧和尾部残帧 |
 | 命令关联响应 | 已支持 | 对地址匹配的主站下行命令生成 AFN=00H/F1 全部确认，保留请求 A3、复用 PSEQ 并重新计算校验和 |
-| 命令故障模式 | 已支持 | `normal`、`delayed`、`drop`、`duplicate`、`wrongA3`、`wrongPseq`；按设备稳定选样 |
-| HTTP 正式入口 | 已支持 | 调用 `/Handmould/IssueCmd` 或 `/Handmould/IssueCmdSync`，按 GatherV4 `HandmouldRequest` 和 `Status/Msg` 解析 |
+| 命令故障模式 | 已支持 | `normal`、`deny`、`delayed`、`drop`、`duplicate`、`wrongA3`、`wrongPseq`；错误/否认不计正确确认，延迟不阻塞心跳 |
+| HTTP 正式入口 | 已支持 | 调用 `/Handmould/IssueCmd` 或 `/Handmould/IssueCmdSync`；默认额外核对 Data 的 MeterId、ValidData 和采集项覆盖，配置预检拆分数以一对多关联 |
+| 页面人工下发观测 | 已支持 | `--role devicesOnly` 关闭 HTTP 发压，命令统计仍独立运行，最近 500 条应答样本可查看实际 HEX |
+| 确认后观察 | 已支持 | 统计疑似重发、F1 后再次到达与后续命令等待；没有业务 CommandId 时不声称精确重复执行 |
+| V4 服务端命令证据 | 已支持 | 显式导入 Collector 累计 OTLP JSON/JSONL，独立展示在途、匹配、拒绝、Processing 完成操作与资源指标；不读取 Redis |
 | 设备身份与分片 | 已支持 | 九位编号按前四位 AreaCode、后五位 Address；CSV 的 AmmeterId 与设备号在多节点间确定性切分 |
 | 主动上报模板 | 部分支持 | 可导入一条真实完整帧，动态改写设备地址、PSEQ、CON 和校验和；尚未单列上报 ACK RTT/超时 |
 | 阶段在线屏障 | 已支持 | 可要求协议在线数达到比例并连续稳定后才进入阶段计时；超时终止并保留部分报告 |
@@ -25,10 +28,10 @@
 2. 尚未实现 GatherV4 Redis 通讯隔离注入。Ready/Processing 的 Key、SchemaVersion、CommandId 和租约规则属于 GatherV4 契约，未建立共享 helper 前不在 LoadTester 内复制常量。
 3. 尚未覆盖人工/普通/补抄的优先级、FIFO/LIFO 自动断言，也未覆盖客户端 RST、半开连接、旧 Session 迟到报文和同步心跳洪峰。
 4. 主动上报确认目前只能被识别并避免重复应答，尚未输出独立的上报 ACK 成功、非法、重复、超时和 RTT 直方图。
-5. GatherV4 通过 OTLP/HTTP Protobuf 输出服务端指标；当前 `--server-metrics` 解析器仍只支持旧 Gather.TcpCenter 自定义 JSONL。Collector 指标必须按同一 RunId 独立归档，不能伪装为旧格式导入。
+5. GatherV4 服务端通过 OTLP/HTTP Protobuf 导出，报告接受 Collector file exporter 转出的标准 OTLP JSON/JSONL（累计 Sum/Gauge）；不直接解析二进制、Delta Sum 或 Prometheus 文本。Processing 完成操作是聚合证据，不代表每个租约已核实删除。
 6. 未在本次止血中新增 LoadTester 自身 OTLP exporter。现有 JSONL/JSON/CSV/Markdown 报告和资源采样仍是客户端事实来源。
 
-因此，当前版本可以形成 GatherV4 的连接、合法登录 ACK、心跳、真实重启恢复、HTTP 到 TCP 下行可达性以及命令关联窗口结论；在补齐真实业务响应模板和服务端 OTel 自动合并前，不能形成“采集数据正确入库”或“全部 P0 场景完成”的结论。
+因此，当前版本可形成连接、合法登录 ACK、心跳、真实重启恢复、人工 API 完整结果返回和设备确认的结论，并可导入 V4 命令指标；F1 不包含真实示值，不能形成“采集数据正确入库”或“全部 P0 场景完成”的结论。
 
 ## 交付场景
 

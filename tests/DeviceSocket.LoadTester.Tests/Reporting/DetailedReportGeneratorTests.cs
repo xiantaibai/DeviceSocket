@@ -12,6 +12,46 @@ namespace DeviceSocket.LoadTester.Tests.Reporting;
 /// </summary>
 public sealed class DetailedReportGeneratorTests
 {
+    /// <summary>纯设备 GatherV4 报告展示独立命令事实和 OTLP 证据，不能把缺少 API 结果写成已完成任务。</summary>
+    [Fact]
+    public async Task GatherV4PassiveReport_ShowsConfirmationWithoutClaimingBusinessCompletion()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"device-v4-detailed-{Guid.NewGuid():N}");
+        try
+        {
+            var start = DateTimeOffset.Parse("2026-08-21T02:30:00Z");
+            var report = CreateReport(start, start.AddMinutes(1));
+            report.Options.Target.CompatibilityProfile = ServerCompatibilityProfile.GatherV4;
+            report = report with
+            {
+                Metrics = report.Metrics with
+                {
+                    GatherV4Commands = new GatherV4CommandSummary
+                    { ReceivedFrames = 2, ObservedCommands = 1, CorrectConfirmationsSent = 2, RepeatedAfterConfirmation = 1 }
+                }
+            };
+            var shard = Path.Combine(root, "shard-000");
+            await NodeReportWriter.WriteAsync(report, shard, CancellationToken.None);
+            await WriteClientSeriesAsync(shard, start);
+            var file = Path.Combine(root, "otlp.json");
+            var time = (start.AddSeconds(10).ToUnixTimeMilliseconds() * 1_000_000).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            await File.WriteAllTextAsync(file, $$$$"""
+                {"resourceMetrics":[{"resource":{"attributes":[]},"scopeMetrics":[{"metrics":[{"name":"gather.tcp.response.matched","sum":{"aggregationTemporality":2,"dataPoints":[{"timeUnixNano":"{{{{time}}}}","asInt":"2"}]}}]}]}]}
+                """);
+            var output = Path.Combine(root, "analysis");
+            var analysis = await DetailedReportGenerator.GenerateAsync(new DetailedReportGenerationOptions
+            { InputDirectory = shard, OutputDirectory = output, ServerMetricsPath = file, Audience = DetailedReportAudience.Both }, CancellationToken.None);
+            Assert.Null(analysis.Server);
+            Assert.Single(analysis.GatherV4ServerMetrics);
+            Assert.Null(analysis.GatherV4ServerMetrics[0].Increase);
+            Assert.Contains(analysis.AcceptanceChecks, check => check.Name == "人工任务结果完整返回" && check.Status == DetailedAcceptanceStatus.Unavailable);
+            var html = await File.ReadAllTextAsync(Path.Combine(output, "acceptance-report.html"));
+            Assert.Contains("GatherV4 人工下发与自动确认", html, StringComparison.Ordinal);
+            Assert.Contains("GatherV4 服务端 OTLP 证据", html, StringComparison.Ordinal);
+            Assert.DoesNotContain("问题分析", html, StringComparison.Ordinal);
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+    }
     /// <summary>
     /// 验证服务物理连接先达到目标、业务在线稍后追平时能够计算差值，并生成 HTML、Markdown、JSON、CSV 和 SVG。
     /// </summary>

@@ -5,6 +5,8 @@ using DeviceSocket.LoadTester.Configuration;
 using DeviceSocket.LoadTester.Devices;
 using DeviceSocket.LoadTester.Metrics;
 using DeviceSocket.LoadTester.Protocols;
+using DeviceSocket.LoadTester.Protocols.QGdw3761;
+using DeviceSocket.LoadTester.Reporting;
 using DeviceSocket.LoadTester.Workloads.Gather;
 
 namespace DeviceSocket.LoadTester.Runtime;
@@ -37,6 +39,9 @@ internal sealed class VirtualDeviceSession(
     private CancellationTokenSource? _activeCycleCancellation;
     private int _forcedDisconnectRequested;
     private byte _sequence;
+    private PriorityQueue<PendingDownstreamResponse, long>? _pendingResponses;
+    private GatherV4SessionCommandObserver? _gatherV4Observer;
+    private long _sessionGeneration;
 
     internal VirtualDeviceState State { get; private set; } = VirtualDeviceState.Created;
 
@@ -88,6 +93,9 @@ internal sealed class VirtualDeviceSession(
         State = VirtualDeviceState.Stopped;
     }
 
+    /// <summary>执行一次连接、登录及在线周期，结束时取消延迟回复并清理当前会话观察状态。</summary>
+    /// <param name="cancellationToken">整轮设备任务取消令牌。</param>
+    /// <returns>本周期曾成功上线时为 true，供重连策略重置退避。</returns>
     private async Task<bool> RunConnectionCycleAsync(CancellationToken cancellationToken)
     {
         TcpClient? client = null;
@@ -121,7 +129,9 @@ internal sealed class VirtualDeviceSession(
             metrics.ConnectionOpened(stopwatch.Elapsed);
             connectionAttemptActive = false;
             tcpConnected = true;
+            _sessionGeneration++;
             stream = client.GetStream();
+            commandTraceRegistry?.ResetDeviceSession(descriptor.DeviceId);
             using var reader = new ProtocolSocketReader(protocol);
 
             State = VirtualDeviceState.LoggingIn;
@@ -205,6 +215,18 @@ internal sealed class VirtualDeviceSession(
         finally
         {
             cycleCancellation.Cancel();
+            // 延迟回复属于当前 Socket 会话，断线后必须全部取消，不能写入后续重连的新 Session。
+            if (_pendingResponses is not null)
+            {
+                while (_pendingResponses.TryDequeue(out var pending, out _))
+                    if (pending.IsGatherV4)
+                    {
+                        metrics.GatherV4Commands.Dequeued(cancelled: true);
+                        RecordGatherV4Sample(pending, "cancelled");
+                    }
+                _pendingResponses = null;
+            }
+            _gatherV4Observer = null;
             lock (_activeCycleLock)
             {
                 if (ReferenceEquals(_activeCycleCancellation, cycleCancellation))
@@ -242,6 +264,12 @@ internal sealed class VirtualDeviceSession(
         }
     }
 
+    /// <summary>发送登录并验证 ACK；同一批 TCP 数据中 ACK 后的命令仍需处理，避免粘包时静默丢弃首条任务。</summary>
+    /// <param name="stream">当前连接网络流。</param>
+    /// <param name="reader">当前连接流式拆包器。</param>
+    /// <param name="cancellationToken">连接生命周期取消令牌。</param>
+    /// <returns>合法登录确认完成的异步任务。</returns>
+    /// <exception cref="DeviceTimeoutException">超过登录等待上限时抛出。</exception>
     private async Task LoginAsync(
         NetworkStream stream,
         ProtocolSocketReader reader,
@@ -264,15 +292,19 @@ internal sealed class VirtualDeviceSession(
                 if (bytesRead == 0)
                     throw new RemoteClosedException();
                 metrics.BytesReceived(bytesRead);
+                var loginConfirmed = false;
                 foreach (var response in reader.CompleteRead(bytesRead))
                 {
                     metrics.FrameReceived(response.IsValid);
                     if (DropInboundFrame())
                         continue;
                     if (protocol.IsConfirmation(response, descriptor, ProtocolOperation.Login, sequence))
-                        return;
-                    await RespondToDownstreamAsync(stream, response, timeout.Token);
+                        loginConfirmed = true;
+                    else
+                        await RespondToDownstreamAsync(stream, response, timeout.Token);
                 }
+                if (loginConfirmed)
+                    return;
             }
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -281,6 +313,11 @@ internal sealed class VirtualDeviceSession(
         }
     }
 
+    /// <summary>在同一会话循环调度心跳、主动上报、接收和有界延迟应答，保持网络流写入串行。</summary>
+    /// <param name="stream">当前 Socket 的网络流。</param>
+    /// <param name="reader">当前连接拆包器。</param>
+    /// <param name="cancellationToken">当前连接生命周期令牌。</param>
+    /// <returns>断线或取消时结束的异步任务。</returns>
     private async Task RunOnlineAsync(
         NetworkStream stream,
         ProtocolSocketReader reader,
@@ -293,7 +330,7 @@ internal sealed class VirtualDeviceSession(
         DateTimeOffset heartbeatSentAt = default;
         byte heartbeatSequence = 0;
         Task<int>? pendingRead = null;
-        Task? pendingTimer = null;
+        using var wakeup = new SessionWakeupTimer(cancellationToken);
 
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -327,20 +364,24 @@ internal sealed class VirtualDeviceSession(
                 nextReport = NextReportAt(now);
             }
 
+            // 复用已有会话定时调度，最多连续发送 16 条到期回复后重新处理心跳及接收；不为每条应答创建 Timer 或阻塞任务。
+            for (var sent = 0; sent < 16 && _pendingResponses is not null &&
+                 _pendingResponses.TryPeek(out _, out var responseDue) && responseDue <= DateTimeOffset.UtcNow.UtcTicks; sent++)
+            {
+                var pending = _pendingResponses.Dequeue();
+                if (pending.IsGatherV4) metrics.GatherV4Commands.Dequeued(cancelled: false);
+                await SendDownstreamResponseAsync(stream, pending, cancellationToken);
+            }
+
             pendingRead ??= reader.StartReadAsync(stream, cancellationToken);
             var nextDue = Min(nextHeartbeat, nextReport, heartbeatDeadline ?? DateTimeOffset.MaxValue);
-            var delay = nextDue == DateTimeOffset.MaxValue
-                ? Timeout.InfiniteTimeSpan
-                : nextDue - DateTimeOffset.UtcNow;
-            if (delay < TimeSpan.Zero)
-                delay = TimeSpan.Zero;
-
-            pendingTimer ??= Task.Delay(delay, cancellationToken);
+            if (_pendingResponses is not null && _pendingResponses.TryPeek(out _, out var queuedDue))
+                nextDue = nextDue < new DateTimeOffset(queuedDue, TimeSpan.Zero) ? nextDue : new DateTimeOffset(queuedDue, TimeSpan.Zero);
+            var pendingTimer = wakeup.WaitUntil(nextDue);
             var completed = await Task.WhenAny(pendingRead, pendingTimer);
             if (completed != pendingRead)
             {
                 await pendingTimer;
-                pendingTimer = null;
                 continue;
             }
 
@@ -391,42 +432,128 @@ internal sealed class VirtualDeviceSession(
         if (plan is null)
             return;
         var isGatherReading = plan.Kind == DownstreamResponseKind.GatherReading;
-        var isTrackedCommand = plan.Kind is DownstreamResponseKind.GatherReading or DownstreamResponseKind.GatherV4Command;
+        var isGatherV4 = plan.Kind == DownstreamResponseKind.GatherV4Command;
+        var receivedAt = DateTimeOffset.UtcNow;
+        if (isGatherV4)
+        {
+            _gatherV4Observer ??= new GatherV4SessionCommandObserver(metrics.GatherV4Commands, options.Workload.GatherV4Response.RepeatObservationSeconds);
+            _gatherV4Observer.Received(classification!.Fingerprint, receivedAt);
+        }
         if (isGatherReading)
             metrics.GatherReadingCommandReceived();
         if (plan.Payload is null || plan.SendCount <= 0)
         {
             if (isGatherReading)
                 metrics.GatherReadingResponseDropped();
+            if (isGatherV4)
+            {
+                metrics.GatherV4Commands.Dropped();
+                RecordGatherV4Sample(new PendingDownstreamResponse(plan, traceMatch, classification?.Fingerprint, receivedAt, true, response.Summary), "intentionalDrop");
+            }
             return;
         }
 
-        var stopwatch = Stopwatch.StartNew();
+        var pending = new PendingDownstreamResponse(plan, traceMatch, classification?.Fingerprint, receivedAt, isGatherV4, response.Summary);
         if (plan.Delay > TimeSpan.Zero)
-            await Task.Delay(plan.Delay, cancellationToken);
+        {
+            _pendingResponses ??= new();
+            if (_pendingResponses.Count >= options.Workload.GatherV4Response.MaximumPendingResponsesPerDevice)
+            {
+                if (isGatherV4) metrics.GatherV4Commands.Rejected();
+                if (isGatherV4) RecordGatherV4Sample(pending, "queueRejected");
+                metrics.RecordError("RESPONSE_QUEUE_FULL");
+                return;
+            }
+            _pendingResponses.Enqueue(pending, receivedAt.Add(plan.Delay).UtcTicks);
+            if (isGatherV4) metrics.GatherV4Commands.Queued();
+            return;
+        }
+        await SendDownstreamResponseAsync(stream, pending, cancellationToken);
+    }
+
+    /// <summary>串行写出即时或到期的回复，区分正确确认、故障注入与写出失败；不等待业务延迟。</summary>
+    /// <param name="stream">所属连接网络流。</param>
+    /// <param name="pending">已识别的回复及接收上下文。</param>
+    /// <param name="cancellationToken">所属连接取消令牌。</param>
+    /// <returns>回复写入完成的异步任务，网络错误交由连接生命周期恢复。</returns>
+    private async Task SendDownstreamResponseAsync(NetworkStream stream, PendingDownstreamResponse pending, CancellationToken cancellationToken)
+    {
+        var plan = pending.Plan;
+        var isGatherReading = plan.Kind == DownstreamResponseKind.GatherReading;
+        var isTrackedCommand = plan.Kind is DownstreamResponseKind.GatherReading or DownstreamResponseKind.GatherV4Command;
 
         var responded = false;
-        for (var index = 0; index < plan.SendCount; index++)
+        try
         {
-            var bytesWritten = await WriteAsync(stream, plan.Payload, cancellationToken);
-            if (bytesWritten <= 0)
-                continue;
-            metrics.DownstreamResponseSent(bytesWritten);
-            if (isGatherReading)
-                metrics.GatherReadingResponseSent(plan.IsBusinessFailure, duplicate: index > 0);
-
-            if (isTrackedCommand && !responded)
+            for (var index = 0; index < plan.SendCount; index++)
             {
+                var bytesWritten = await WriteAsync(stream, plan.Payload!, cancellationToken);
+                if (bytesWritten <= 0)
+                {
+                    if (pending.IsGatherV4) { metrics.GatherV4Commands.WriteFailed(); RecordGatherV4Sample(pending, "writeFailed"); }
+                    continue;
+                }
+                metrics.DownstreamResponseSent(bytesWritten);
                 if (isGatherReading)
-                    metrics.GatherReadingCommandResponded(stopwatch.Elapsed);
-                commandTraceRegistry?.RecordResponse(traceMatch?.RequestId, DateTimeOffset.UtcNow);
-                responded = true;
+                    metrics.GatherReadingResponseSent(plan.IsBusinessFailure, duplicate: index > 0);
+
+                if (pending.IsGatherV4)
+                {
+                    if (plan.ResponseMatchesRequest && index == 0)
+                    {
+                        _gatherV4Observer!.Confirmed(pending.Fingerprint!, pending.ReceivedAt, DateTimeOffset.UtcNow);
+                        RecordGatherV4Sample(pending, "f1Sent", plan.Payload);
+                    }
+                    else
+                    {
+                        metrics.GatherV4Commands.FaultSent();
+                        RecordGatherV4Sample(pending, "faultSent", plan.Payload);
+                    }
+                }
+                if (isTrackedCommand && !responded && plan.ResponseMatchesRequest)
+                {
+                    if (isGatherReading)
+                        metrics.GatherReadingCommandResponded(DateTimeOffset.UtcNow - pending.ReceivedAt);
+                    commandTraceRegistry?.RecordResponse(pending.TraceMatch?.RequestId, DateTimeOffset.UtcNow, pending.TraceMatch?.Fingerprint);
+                    responded = true;
+                }
             }
+        }
+        catch
+        {
+            if (pending.IsGatherV4) { metrics.GatherV4Commands.WriteFailed(); RecordGatherV4Sample(pending, "writeFailed"); }
+            throw;
         }
 
         if (isGatherReading && !responded)
             metrics.GatherReadingResponseDropped();
     }
+
+    /// <summary>保存当前连接内一条待发送回复，不持有其他会话或新连接的流引用。</summary>
+    /// <param name="Plan">协议回复计划。</param>
+    /// <param name="TraceMatch">可空 HTTP 子命令关联。</param>
+    /// <param name="Fingerprint">下行完整帧指纹。</param>
+    /// <param name="ReceivedAt">本次命令收到时间。</param>
+    /// <param name="IsGatherV4">是否计入 GatherV4 独立统计。</param>
+    /// <param name="RequestInstruction">原始下行指令摘要。</param>
+    private sealed record PendingDownstreamResponse(DownstreamResponsePlan Plan, DownstreamTraceMatch? TraceMatch, string? Fingerprint, DateTimeOffset ReceivedAt, bool IsGatherV4, string RequestInstruction);
+
+    /// <summary>把当前应答事实写入节点有界样本队列，不写同步逐帧日志。</summary>
+    /// <param name="pending">当前会话回复上下文。</param>
+    /// <param name="outcome">固定结果分类。</param>
+    /// <param name="response">已成功写出的字节；没有写出时为空。</param>
+    private void RecordGatherV4Sample(PendingDownstreamResponse pending, string outcome, byte[]? response = null) =>
+        metrics.GatherV4Commands.RecordSample(new GatherV4CommandSample
+        {
+            DeviceId = descriptor.DeviceId,
+            SessionGeneration = _sessionGeneration,
+            ReceivedAtUtc = pending.ReceivedAt,
+            RecordedAtUtc = DateTimeOffset.UtcNow,
+            Fingerprint = pending.Fingerprint,
+            Outcome = outcome,
+            RequestInstruction = pending.RequestInstruction,
+            ResponseHex = response is null ? null : Convert.ToHexString(response)
+        });
 
     private async Task<int> WriteAsync(NetworkStream stream, byte[] frame, CancellationToken cancellationToken)
     {
