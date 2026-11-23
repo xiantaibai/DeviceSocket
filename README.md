@@ -1,6 +1,19 @@
 # DeviceSocket Demo
 
-基于 .NET 8、SuperSocket、Orleans 和 MagicOnion 的设备通信验证项目，当前支持 Q/GDW 376.1-2012 与 DL/T 645-2007。
+基于 .NET 8、SuperSocket、Orleans 和 MagicOnion 的设备通讯服务中心项目，当前支持 Q/GDW 376.1-2012 与 DL/T 645-2007，生产能力按阶段建设。
+
+## 项目背景与目标
+
+本服务作为设备与业务系统之间的通讯中心，主要负责设备消息上行转发、业务指令下行投递和指令结果回传。通讯中心维护连接、协议适配、路由、一问一答、调度、超时过期和通讯追踪；业务系统负责计费、分析、工单等业务规则及决定发送内容与时机。
+
+首期目标为系统总在线 8～10 万台设备，支持多 Gateway/Silo 扩展，容量以真实混合负载和故障恢复测试为准。以下为待完成的正式交付范围，不代表当前均已实现：
+
+- 独立监控看板：在线设备数、Socket 连接数、分类队列积压、指令受理/实际发送/应答完成速度、节点状态与告警。
+- 设备和指令追踪：查询每台设备当前所在 Gateway/实例/Session，跨节点检索单设备上下行日志、指令时间线及批次进度。
+- 统一发送接口：单条和批量均支持立即、延后、指定时间单次发送；批量覆盖同设备多指令及跨设备多指令，始终遵守单设备一问一答。
+- 双向消息转发：设备上报和指令结果按约定可靠转发给业务系统，具备有界暂存、重投、查询和故障恢复。
+
+完整职责、看板页面、指标口径、接口草案和时间/批次语义见 [项目背景](docs/architecture/project-background.md)；实施依赖与验收清单见 [生产化改造计划](docs/architecture/production-readiness-plan.md)。
 
 协议实现依据仓库根目录中的两份协议文档：
 
@@ -14,7 +27,7 @@
 - HTTP 5080：网关状态、在线设备、最近消息、最近错误、协议解码和本节点直接下发。
 - HTTP/2 7001：网关内部 MagicOnion Unary 下发服务。
 - Orleans：设备路由、SessionEpoch、网关节点租约，以及重要消息的持久化、重试、到期和确认状态。
-- 内存实现：当前 Demo 的在线表、近期消息和 Orleans 状态；后续可以替换 Redis 或数据库。
+- 内存实现：Gateway 本机在线表和近期消息；Orleans 应用状态已使用 SQL Server 四类独立表，集群成员和 Reminder 使用 ADO.NET。
 - 业务上报与下发分别记录 `Direction`、`MsgId`、设备、Session、协议和原始报文；高频心跳默认关闭日志并可按设备临时开启。
 - 协议指令通过统一泛型 Handler 接口和强类型指令键分发，新 Handler 由 Gateway 启动扫描自动注册。
 
@@ -30,6 +43,7 @@ src/
 ├─ Cluster/
 │  ├─ DeviceSocket.Cluster.Contracts/     Orleans Grain 接口和传输模型
 │  ├─ DeviceSocket.Cluster.Grains/        设备、可靠消息与网关 Grain 实现
+│  ├─ DeviceSocket.Cluster.Persistence/   SQL Server 状态存储与命令调度索引
 │  └─ DeviceSocket.Cluster.Silo/          独立 Orleans Silo 宿主
 └─ Infrastructure/
    └─ DeviceSocket.Infrastructure.Memory/ 内存连接表和近期消息存储
@@ -70,7 +84,7 @@ dotnet run --project src\Gateway\DeviceSocket.Host\DeviceSocket.Host.csproj
 网关 Swagger：http://127.0.0.1:5080/swagger
 ```
 
-如果只验证协议解析、不启动 Orleans，可以将网关 `appsettings.json` 中的 `Orleans:Enabled` 改为 `false`。
+当前 Gateway 配置默认 `Orleans:Enabled=false`，用于独立 TCP/协议验证。验证完整可靠指令链路前，需准备 SQL Server 应用表和 Membership/Reminder 表、配置 Silo，并接通 Gateway 客户端；当前客户端仍使用本机发现，生产集群发现及 ClusterId/ServiceId 对齐属于待办，不能只开启布尔开关便视为生产链路就绪。数据库和现有契约见 [集群与可靠命令架构](docs/architecture/cluster-and-rpc.md)。
 
 ## Docker 镜像与 Linux 部署
 
@@ -105,7 +119,7 @@ dotnet run --project tools\DeviceSocket.Simulator\DeviceSocket.Simulator.csproj 
 
 ## 并发与稳定性测试
 
-`DeviceSocket.LoadTester` 是独立的无界面负载测试项目，不改变单设备 Simulator。当前正式场景聚焦 Gather.TcpCenter 的一万台连接、服务重启风暴、HTTP 读表指令和六小时长稳，并支持后续 3～5 万台多机分片及报告合并：
+`DeviceSocket.LoadTester` 是独立的无界面负载测试项目，不改变单设备 Simulator。当前正式场景面向 Gather.TcpCenter，包含一万/五万台的连接、重连和读表场景，以及一万台六小时长稳；支持多机分片及报告合并。这些场景不等于 DeviceSocket 完整通讯链路的八万/十万验收：
 
 ```powershell
 dotnet run --project tools\DeviceSocket.LoadTester\DeviceSocket.LoadTester.csproj -- `
@@ -141,9 +155,12 @@ var importantResult = await deviceGrain.SendReliableMessageAsync(
 ```
 
 - `SendBestEffortMessageAsync`：普通消息，不持久化、不自动重试，离线或失败时允许丢弃。
-- `SendReliableMessageAsync`：重要消息，先持久化，再下发；默认五分钟到期，并根据确定失败、结果不确定和协议确认状态安排重试。
+- `SendReliableMessageAsync`：可靠业务消息，先持久化，默认从受理时起五分钟到期；按设备唯一通道等待协议应答，并根据确定失败、结果不确定和回复超时安排重试。
+- `SendReliableMessagesAsync`：已有同设备批量入口，逐条执行；跨设备持久化批次和统一 HTTP 模式接口属于规划能力。
 
-调用方重试重要消息时必须复用原 `MsgId`。同一 `MsgId` 如果更换设备、协议或报文会被拒绝。`Completed` 只表示已写入设备 Socket；只有要求并收到协议层确认时才会进入 `Confirmed`。
+调用方重试可靠消息时必须复用原 `MsgId`。同一 `MsgId` 如果更换设备、协议或报文会被拒绝。`WrittenToSocket` 只表示写入 Socket；可靠业务入口固定要求设备确认，进入 `Confirmed` 也需按协议区分确认与业务数据结果。普通消息在可靠指令占用设备通道时会被拒绝。
+
+现有 `NotBefore` 提供延迟执行基础；新 HTTP 接口计划将立即、延后和指定时间单次发送统一映射为持久化 NotBefore/ExpiresAt，批量共用首次受理时间基准。具体草案见 [项目背景中的发送接口](docs/architecture/project-background.md#41-统一接口草案)。
 
 ## 日志
 
@@ -157,12 +174,13 @@ Gateway 对 376.1 和 DL/T 645 使用同一个进程级连接配额，默认最�
 
 当前连接数继续通过原有 `GET /api/status/connections` 查询。拒绝洪峰只记录前十次和每一千次告警，避免恶意或异常重连产生过量磁盘日志。
 
-## 当前 Demo 边界
+## 当前实现边界
 
-- Orleans 使用本机单 Silo、内存 Grain Storage 和内存 Reminder，进程重启后状态会丢失，仅用于开发验证。
-- 生产部署需要把 Orleans 集群发现、`DeviceStore`、`GatewayStore`、`CommandStore` 和 Reminder 存储替换为 Redis、数据库或其他持久化实现。
+- Orleans 已具备 SQL Server 状态、成员和 Reminder 存储配置，仍需完成生产集群接入、多 Silo、数据库备份恢复和故障切换验收。
 - 真实 Socket 只存在 Gateway 本机内存中，Orleans 只保存可序列化的路由元数据。
-- 上报业务异步分发、Kafka/Outbox 和各协议的响应匹配规则属于下一阶段；当前已建立 `MsgId`、SessionEpoch、节点租约、Gateway 幂等、可靠消息状态机和自动重试基础。
-- 6 万连接需要在独立 8 核 16 GB 环境分阶段压测，本地开发阶段以业务链路通畅和异常隔离为目标。
+- 376.1 已接通 AFN=00H/F3 应答关联；业务数据应答、645 业务闭环、路由对账、排队过期收敛和回包恢复仍需完善。
+- 上报/结果可靠转发、跨设备批次、统一单条/批量模式接口、独立监控看板和完整 OTel 属于本期改造计划。
+- 当前 HTTP 本节点直接下发接口尚未统一进入可靠命令通道；近期消息和本地日志不能替代命令历史与结果查询模型。
+- 8～10 万总在线需要在目标部署环境完成连接、心跳、问答、转发、看板和日志/OTel 混合负载的长稳与故障验证。
 
 TCP 连接容量、僵尸回收、KeepAlive、重复登录关闭和发送背压参数参见 `docs/architecture/tcp-connection-layer.md`。生产化的其余分阶段改造内容、测试矩阵和上线门槛参见 `docs/architecture/production-readiness-plan.md`。
